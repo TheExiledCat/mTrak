@@ -1,0 +1,9 @@
+[package]
+name = "mini_tracker"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cpal = "0.16.0"
+hound = "3.5.1"
+ratatui = "0.29.0"
