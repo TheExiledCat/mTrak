@@ -8,7 +8,7 @@ use data::pattern::Pattern;
 use ratatui::{
     Terminal,
     crossterm::{
-        event::{Event, KeyCode},
+        event::{Event, KeyCode, read},
         execute,
         terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     },
@@ -27,8 +27,12 @@ fn main() -> Result<(), io::Error> {
     let mut terminal = Terminal::new(backend)?;
     let start_time = Instant::now();
     loop {
-        if Instant::now() > start_time + Duration::from_secs(5) {
-            break;
+        match read()? {
+            Event::Key(key_event) => match key_event.code {
+                KeyCode::Char('q') => break,
+                _ => (),
+            },
+            _ => (),
         }
         terminal.draw(|t| {
             let size = t.size();
