@@ -1,33 +1,52 @@
 use std::{
+    io,
     thread::sleep,
     time::{Duration, Instant},
 };
 
 use data::pattern::Pattern;
+use ratatui::{
+    Terminal,
+    crossterm::{
+        event::{Event, KeyCode},
+        execute,
+        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    },
+    layout::Alignment,
+    prelude::CrosstermBackend,
+    style::{Color, Style},
+    widgets::{Block, Borders, Paragraph},
+};
 
 pub mod data;
-fn main() {
-    let bpm: u32 = 160;
-    let row_count = 16;
-    let pattern = Pattern::new(row_count, 1, 4);
-    let expected_duration_row = Duration::from_millis(pattern.row_duration_ms(bpm) as u64);
-    println!(
-        "Expected row duration: {:.2} ms",
-        expected_duration_row.as_millis()
-    );
+fn main() -> Result<(), io::Error> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen);
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    let start_time = Instant::now();
+    loop {
+        if Instant::now() > start_time + Duration::from_secs(5) {
+            break;
+        }
+        terminal.draw(|t| {
+            let size = t.size();
 
-    let mut last_instant = Instant::now();
+            let block = Block::default()
+                .title("Mini Tracker")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL);
 
-    for i in 1..=row_count {
-        sleep(expected_duration_row);
+            let text = Paragraph::new("Pattern 01")
+                .block(block)
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::Yellow));
 
-        let now = Instant::now();
-        let elapsed = now.duration_since(last_instant);
-        last_instant = now;
-        println!(
-            "Tick: {:2}: elapsed: {:.2} ms \x07",
-            i,
-            elapsed.as_secs_f64() * 1000.0
-        )
+            t.render_widget(text, size);
+        });
     }
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    return Ok(());
 }
