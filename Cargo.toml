@@ -1,8 +1,10 @@
 [package]
-name = "mini_tracker"
+name = "m_track"
 version = "0.1.0"
 edition = "2024"
-
+[[bin]]
+name = "mtrack"
+path = "src/main.rs"
 [dependencies]
 cpal = "0.16.0"
 crossterm = "0.29.0"
