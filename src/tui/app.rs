@@ -6,7 +6,7 @@ use std::{
 use ratatui::{
     DefaultTerminal, Terminal,
     crossterm::event::{Event, KeyCode, KeyEvent},
-    layout::Alignment,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Style, Stylize},
     widgets::{Block, Borders, Paragraph, Widget},
 };
@@ -17,16 +17,44 @@ pub struct App {
     pub terminal: DefaultTerminal,
     pub input_handler: InputHandler,
     pub fps: u16,
-
-    last_key: char,
 }
+pub enum AppLayout {
+    RIGHT_BAR,
+    LEFT_BAR,
+}
+impl AppLayout {
+    pub fn build(&self, area: Rect) -> Vec<Rect> {
+        match self {
+            AppLayout::RIGHT_BAR => {
+                let root = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(75), Constraint::Percentage(25)])
+                    .split(area);
+                let mut left_area = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
+                    .split(root[0])
+                    .to_vec();
+                let rightbar = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Percentage(100)])
+                    .split(root[1])
+                    .to_vec();
+                left_area.extend(rightbar);
+
+                left_area
+            }
+            AppLayout::LEFT_BAR => todo!(),
+        }
+    }
+}
+
 impl App {
     pub fn new(terminal: DefaultTerminal, fps: u16) -> Self {
         return Self {
             terminal,
             input_handler: InputHandler::new(),
             fps,
-            last_key: '0',
         };
     }
     pub fn draw(&mut self) -> bool {
@@ -36,28 +64,7 @@ impl App {
         self.terminal
             .draw(|f| {
                 let area = f.area();
-                let window = Block::new()
-                    .title("Key test")
-                    .title_alignment(Alignment::Center)
-                    .borders(Borders::all())
-                    .border_style(Style::new().yellow());
-                f.render_widget(&window, area);
-                if let Some(event) = self.input_handler.read_event() {
-                    if let Event::Key(key_event) = event {
-                        if let KeyCode::Char(char) = key_event.code {
-                            let char = char.to_ascii_lowercase();
-                            self.last_key = char;
-                        }
-                    }
-                }
-                let key_press = Paragraph::new(self.last_key.to_string())
-                    .block(window)
-                    .centered();
-                f.render_widget(key_press, area);
-                if KeyCode::Char(self.last_key) == constants::EXIT_KEY {
-                    render_next = false;
-                    return;
-                }
+                let layout = AppLayout::RIGHT_BAR.build(area.clone());
             })
             .unwrap();
         let elapsed = start.elapsed();
