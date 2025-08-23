@@ -4,29 +4,28 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crossterm::event::KeyEvent;
-use ratatui::crossterm::event::{self, Event, KeyCode};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent};
 
 use super::constants;
 
 pub struct InputHandler {
     handle: Option<JoinHandle<()>>,
-    reciever: mpsc::Receiver<event::Event>,
+    reciever: mpsc::Receiver<event::KeyEvent>,
 }
 impl InputHandler {
     pub fn new() -> Self {
-        let (transmitter, reciever) = mpsc::channel();
+        let (transmitter, reciever) = mpsc::channel::<KeyEvent>();
         let handle = thread::spawn(move || {
             loop {
                 if let Ok(event) = event::read() {
-                    if transmitter.send(event.clone()).is_err() {
-                        break;
-                    }
                     if let Event::Key(key_event) = event {
                         if let KeyCode::Char(char) = key_event.code {
                             if KeyCode::Char(char.to_ascii_lowercase()) == constants::EXIT_KEY {
                                 break;
                             }
+                        }
+                        if transmitter.send(key_event.clone()).is_err() {
+                            break;
                         }
                     }
                 }
@@ -37,7 +36,7 @@ impl InputHandler {
             reciever,
         };
     }
-    pub fn read_event(&self) -> Option<Event> {
+    pub fn read_event(&self) -> Option<KeyEvent> {
         return self.reciever.try_recv().ok();
     }
 }

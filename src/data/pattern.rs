@@ -60,3 +60,7 @@ impl Pattern {
         }
     }
 }
+
+pub struct PatternStore {
+    patterns: &[Pattern],
+}

@@ -11,12 +11,34 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
-use super::{constants, keymap::InputHandler};
+use crate::data::project::Project;
+
+use super::{
+    constants,
+    keymap::InputHandler,
+    views::{
+        header::Header,
+        sidebar::{self, SideBar},
+    },
+};
 
 pub struct App {
+    pub state: AppState,
     pub terminal: DefaultTerminal,
     pub input_handler: InputHandler,
     pub fps: u16,
+    pub main_view: MainView,
+}
+pub struct AppState {
+    project: Project,
+}
+impl AppState{
+    pub fn new(project: Project)->Self{
+        return Self{project}
+    }
+}
+enum MainView {
+    Timeline,
 }
 pub enum AppLayout {
     RIGHT_BAR,
@@ -52,9 +74,11 @@ impl AppLayout {
 impl App {
     pub fn new(terminal: DefaultTerminal, fps: u16) -> Self {
         return Self {
+
             terminal,
             input_handler: InputHandler::new(),
             fps,
+            main_view: MainView::Timeline,
         };
     }
     pub fn draw(&mut self) -> bool {
@@ -63,8 +87,21 @@ impl App {
         let start = Instant::now();
         self.terminal
             .draw(|f| {
+                if let Some(event) = self.input_handler.read_event() {
+                    if let KeyCode::Char('q') = event.code {
+                        render_next = false;
+                        return;
+                    }
+                }
                 let area = f.area();
                 let layout = AppLayout::RIGHT_BAR.build(area.clone());
+                let header = Header::new(&self.);
+                let sidebar = SideBar::new();
+                f.render_widget(header, layout[0]);
+                f.render_widget(match self.main_view {
+                    MainView::Timeline => todo!(),
+                });
+                f.render_widget(sidebar, layout[2]);
             })
             .unwrap();
         let elapsed = start.elapsed();
