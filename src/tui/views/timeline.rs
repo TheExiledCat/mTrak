@@ -11,10 +11,35 @@ use crate::tui::app::AppState;
 
 pub struct TimeLineView {
     state: Rc<RefCell<AppState>>,
+    channel_caches: Vec<ChannelCache>,
 }
 impl TimeLineView {
     pub fn new(state: Rc<RefCell<AppState>>) -> Self {
-        return Self { state };
+        let selected_pattern_index = state.borrow().selected_pattern_index;
+        let row_count = state
+            .borrow_mut()
+            .project
+            .pattern_store()
+            .get_pattern_by_id(selected_pattern_index)
+            .map(|p| p.row_count)
+            .unwrap_or(0);
+
+        let channel_count = state
+            .borrow_mut()
+            .project
+            .pattern_store()
+            .get_pattern_by_id(selected_pattern_index)
+            .map(|p| p.channel_count)
+            .unwrap_or(0);
+
+        let channel_caches = (0..channel_count)
+            .map(|_| ChannelCache::new(row_count))
+            .collect();
+
+        Self {
+            state,
+            channel_caches,
+        }
     }
 }
 struct CachedRow {
