@@ -24,7 +24,7 @@ pub struct App {
     pub main_view: MainView,
 }
 pub struct AppState {
-    project: Project,
+    pub project: Project,
 }
 impl AppState {
     pub fn new(project: Project) -> Self {
