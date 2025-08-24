@@ -4,14 +4,18 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph, Widget},
 };
 
-pub struct Header {}
-impl Header {
-    pub fn new() -> Self {
-        return Header {};
+use crate::tui::app::AppState;
+
+pub struct Header<'a> {
+    state: &'a AppState,
+}
+impl<'a> Header<'a> {
+    pub fn new(state: &'a AppState) -> Self {
+        return Header { state };
     }
 }
 
-impl Widget for Header {
+impl<'a> Widget for Header<'a> {
     fn render(self, area: ratatui::prelude::Rect, buf: &mut ratatui::prelude::Buffer)
     where
         Self: Sized,

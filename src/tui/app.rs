@@ -4,22 +4,16 @@ use std::{
 };
 
 use ratatui::{
-    DefaultTerminal, Terminal,
-    crossterm::event::{Event, KeyCode, KeyEvent},
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Style, Stylize},
-    widgets::{Block, Borders, Paragraph, Widget},
+    DefaultTerminal,
+    crossterm::event::KeyCode,
+    layout::{Constraint, Direction, Layout, Rect},
 };
 
 use crate::data::project::Project;
 
 use super::{
-    constants,
     keymap::InputHandler,
-    views::{
-        header::Header,
-        sidebar::{self, SideBar},
-    },
+    views::{header::Header, sidebar::SideBar, timeline::TimeLineView},
 };
 
 pub struct App {
@@ -32,9 +26,9 @@ pub struct App {
 pub struct AppState {
     project: Project,
 }
-impl AppState{
-    pub fn new(project: Project)->Self{
-        return Self{project}
+impl AppState {
+    pub fn new(project: Project) -> Self {
+        return Self { project };
     }
 }
 enum MainView {
@@ -72,13 +66,13 @@ impl AppLayout {
 }
 
 impl App {
-    pub fn new(terminal: DefaultTerminal, fps: u16) -> Self {
+    pub fn new(terminal: DefaultTerminal, fps: u16, project: Project) -> Self {
         return Self {
-
             terminal,
             input_handler: InputHandler::new(),
             fps,
             main_view: MainView::Timeline,
+            state: AppState::new(project),
         };
     }
     pub fn draw(&mut self) -> bool {
@@ -95,12 +89,15 @@ impl App {
                 }
                 let area = f.area();
                 let layout = AppLayout::RIGHT_BAR.build(area.clone());
-                let header = Header::new(&self.);
+                let header = Header::new(&self.state);
                 let sidebar = SideBar::new();
                 f.render_widget(header, layout[0]);
-                f.render_widget(match self.main_view {
-                    MainView::Timeline => todo!(),
-                });
+                f.render_widget(
+                    match self.main_view {
+                        MainView::Timeline => TimeLineView::new(&self.state),
+                    },
+                    layout[1],
+                );
                 f.render_widget(sidebar, layout[2]);
             })
             .unwrap();

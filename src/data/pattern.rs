@@ -1,14 +1,18 @@
 use std::iter::repeat;
 
-use super::note::NoteEvent;
+use serde::{Deserialize, Serialize};
 
+use super::note::NoteEvent;
+#[derive(Serialize, Deserialize)]
 pub struct Pattern {
     row_count: usize,
     channel_count: usize,
     ///defines how long each row of a pattern lasts in a note division, e.g. 64 means every row lasts a 64th note long.
     note_length: u32,
     rows: Vec<PatternRow>,
+    name: Option<String>,
 }
+#[derive(Serialize, Deserialize)]
 pub struct PatternRow {
     pub channels: Vec<NoteEvent>,
 }
@@ -26,6 +30,7 @@ impl Pattern {
             channel_count,
             note_length,
             rows: Vec::new(),
+            name: None,
         };
         pattern.initialize_rows();
         return pattern;
@@ -61,6 +66,30 @@ impl Pattern {
     }
 }
 
-pub struct PatternStore {
-    patterns: &[Pattern],
+pub struct PatternStore<'a> {
+    patterns: &'a mut Vec<Pattern>,
+}
+impl<'a> PatternStore<'a> {
+    pub fn new(patterns: &'a mut Vec<Pattern>) -> Self {
+        return PatternStore { patterns };
+    }
+    pub fn get_pattern_by_id(&'a self, id: usize) -> Option<&'a Pattern> {
+        return self.patterns.get(id);
+    }
+    pub fn get_pattern_by_name(&'a self, name: &str) -> Option<&'a Pattern> {
+        for pattern in self.patterns.iter() {
+            let pattern_name = match &pattern.name {
+                Some(n) => n,
+                None => continue,
+            };
+            if pattern_name == name {
+                return Some(&pattern);
+            }
+        }
+        return None;
+    }
+    pub fn new_pattern(&'a mut self, row_count: usize, channel_count: usize, note_length: u32) {
+        self.patterns
+            .push(Pattern::new(row_count, channel_count, note_length));
+    }
 }

@@ -1,6 +1,5 @@
 use std::{
-    process::exit,
-    sync::mpsc::{self, Sender},
+    sync::mpsc::{self},
     thread::{self, JoinHandle},
 };
 
@@ -19,13 +18,13 @@ impl InputHandler {
             loop {
                 if let Ok(event) = event::read() {
                     if let Event::Key(key_event) = event {
+                        if transmitter.send(key_event.clone()).is_err() {
+                            break;
+                        }
                         if let KeyCode::Char(char) = key_event.code {
                             if KeyCode::Char(char.to_ascii_lowercase()) == constants::EXIT_KEY {
                                 break;
                             }
-                        }
-                        if transmitter.send(key_event.clone()).is_err() {
-                            break;
                         }
                     }
                 }
@@ -43,7 +42,7 @@ impl InputHandler {
 impl Drop for InputHandler {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
-            handle.join();
+            let _ = handle.join();
         }
     }
 }

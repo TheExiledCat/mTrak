@@ -1,5 +1,7 @@
-use super::pattern::Pattern;
+use serde::{Deserialize, Serialize};
 
+use super::pattern::Pattern;
+#[derive(Serialize, Deserialize)]
 pub struct Timeline {
     pub patterns: Vec<Pattern>,
 }

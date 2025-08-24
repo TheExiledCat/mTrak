@@ -11,3 +11,4 @@ cpal = "0.16.0"
 crossterm = "0.29.0"
 hound = "3.5.1"
 ratatui = "0.29.0"
+serde = { version = "1.0.219", features = ["derive"] }
