@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Style, Stylize},
@@ -6,16 +8,18 @@ use ratatui::{
 
 use crate::tui::app::AppState;
 
-pub struct Header<'a> {
-    state: &'a AppState,
+pub struct Header {
+    state: Rc<RefCell<AppState>>,
 }
-impl<'a> Header<'a> {
-    pub fn new(state: &'a AppState) -> Self {
+
+impl Header {}
+impl Header {
+    pub fn new(state: Rc<RefCell<AppState>>) -> Self {
         return Header { state };
     }
 }
 
-impl<'a> Widget for Header<'a> {
+impl Widget for Header {
     fn render(self, area: ratatui::prelude::Rect, buf: &mut ratatui::prelude::Buffer)
     where
         Self: Sized,
@@ -27,7 +31,13 @@ impl<'a> Widget for Header<'a> {
         let border = Block::new()
             .borders(Borders::BOTTOM)
             .border_style(Style::new().blue());
-        let title = Paragraph::new("Mini Tracker")
+        let project_name;
+        if let Some(name) = &self.state.borrow().project.name {
+            project_name = name.clone();
+        } else {
+            project_name = "Unsaved".into();
+        }
+        let title = Paragraph::new(format!("Mini Tracker: {}", project_name))
             .style(Style::new().bold().red())
             .centered()
             .block(Block::new().padding(Padding::vertical(1)));

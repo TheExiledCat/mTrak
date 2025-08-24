@@ -1,4 +1,5 @@
 use std::{
+    arch::naked_asm,
     fs::File,
     io::{Error, Read, Write},
     path::PathBuf,
@@ -15,7 +16,7 @@ const PROJECT_VERSION: u16 = 1;
 #[derive(Serialize, Deserialize)]
 pub struct Project {
     pub version: u16,
-
+    pub name: Option<String>,
     pub timeline: Timeline,
     pub patterns: Vec<Pattern>,
     #[serde(skip)]
@@ -50,20 +51,26 @@ impl Project {
             project.project_file = project_file;
             return project;
         }
-        return Self {
+        let mut project = Self {
             version: PROJECT_VERSION,
             timeline: Timeline::new(),
             patterns: vec![],
             project_file,
+            name: None,
         };
+        project.pattern_store().new_pattern(32, 4, 4);
+        return project;
     }
     pub fn pattern_store(&mut self) -> PatternStore {
         return PatternStore::new(&mut self.patterns);
     }
-    pub fn save(&self) -> Result<(), Error> {
+    pub fn save(&mut self, name: Option<String>) -> Result<(), Error> {
+        if let Some(name) = name {
+            self.name = Some(name);
+        }
         let mut file = File::create(&self.project_file)?;
         file.write_all(&PROJECT_HEADER)?;
-        let bin =
+        let _bin =
             bincode::serde::encode_into_std_write(self, &mut file, bincode::config::standard())
                 .unwrap();
 

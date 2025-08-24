@@ -11,9 +11,7 @@ pub mod tui;
 fn main() -> Result<(), io::Error> {
     let args = Cli::parse();
     let terminal = ratatui::init();
-    let mut app = App::new(terminal, 30, Project::new(args.project_file));
-    app.state.project.save()?;
-
+    let mut app = App::new(terminal, 50, Project::new(args.project_file));
     while app.draw() {}
     ratatui::restore();
 

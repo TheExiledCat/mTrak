@@ -5,21 +5,23 @@ use serde::{Deserialize, Serialize};
 use super::note::NoteEvent;
 #[derive(Serialize, Deserialize)]
 pub struct Pattern {
-    row_count: usize,
-    channel_count: usize,
+    pub row_count: usize,
+    pub channel_count: usize,
     ///defines how long each row of a pattern lasts in a note division, e.g. 64 means every row lasts a 64th note long.
-    note_length: u32,
-    rows: Vec<PatternRow>,
-    name: Option<String>,
+    pub note_length: u32,
+    pub rows: Vec<PatternRow>,
+    pub name: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct PatternRow {
     pub channels: Vec<NoteEvent>,
+    pub dirty: bool,
 }
 impl PatternRow {
     pub fn new(channel_count: usize) -> Self {
         return Self {
             channels: repeat(NoteEvent::Empty).take(channel_count).collect(),
+            dirty: true,
         };
     }
 }
@@ -88,8 +90,17 @@ impl<'a> PatternStore<'a> {
         }
         return None;
     }
-    pub fn new_pattern(&'a mut self, row_count: usize, channel_count: usize, note_length: u32) {
+    pub fn get_patterns(&'a self) -> &'a [Pattern] {
+        return &self.patterns;
+    }
+    pub fn new_pattern(
+        &'a mut self,
+        row_count: usize,
+        channel_count: usize,
+        note_length: u32,
+    ) -> &'a Pattern {
         self.patterns
             .push(Pattern::new(row_count, channel_count, note_length));
+        return self.patterns.last().unwrap();
     }
 }

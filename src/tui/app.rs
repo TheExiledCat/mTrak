@@ -1,4 +1,6 @@
 use std::{
+    cell::RefCell,
+    rc::Rc,
     thread,
     time::{Duration, Instant},
 };
@@ -9,7 +11,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
 };
 
-use crate::data::project::Project;
+use crate::data::{pattern::Pattern, project::Project};
 
 use super::{
     keymap::InputHandler,
@@ -17,7 +19,7 @@ use super::{
 };
 
 pub struct App {
-    pub state: AppState,
+    pub state: Rc<RefCell<AppState>>,
     pub terminal: DefaultTerminal,
     pub input_handler: InputHandler,
     pub fps: u16,
@@ -25,23 +27,27 @@ pub struct App {
 }
 pub struct AppState {
     pub project: Project,
+    pub selected_pattern_index: usize,
 }
 impl AppState {
     pub fn new(project: Project) -> Self {
-        return Self { project };
+        return Self {
+            project,
+            selected_pattern_index: 0,
+        };
     }
 }
-enum MainView {
+pub enum MainView {
     Timeline,
 }
 pub enum AppLayout {
-    RIGHT_BAR,
-    LEFT_BAR,
+    RightBar,
+    LeftBar,
 }
 impl AppLayout {
     pub fn build(&self, area: Rect) -> Vec<Rect> {
         match self {
-            AppLayout::RIGHT_BAR => {
+            AppLayout::RightBar => {
                 let root = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(75), Constraint::Percentage(25)])
@@ -60,7 +66,7 @@ impl AppLayout {
 
                 left_area
             }
-            AppLayout::LEFT_BAR => todo!(),
+            AppLayout::LeftBar => todo!(),
         }
     }
 }
@@ -72,13 +78,16 @@ impl App {
             input_handler: InputHandler::new(),
             fps,
             main_view: MainView::Timeline,
-            state: AppState::new(project),
+            state: Rc::new(RefCell::new(AppState::new(project))),
         };
     }
     pub fn draw(&mut self) -> bool {
         let mut render_next = true;
         let frame_time = Duration::from_secs_f64(1.0 / self.fps as f64);
         let start = Instant::now();
+        let header = Header::new(self.state.clone());
+        let sidebar = SideBar::new(self.state.clone());
+        let timeline = TimeLineView::new(self.state.clone());
         self.terminal
             .draw(|f| {
                 if let Some(event) = self.input_handler.read_event() {
@@ -88,13 +97,11 @@ impl App {
                     }
                 }
                 let area = f.area();
-                let layout = AppLayout::RIGHT_BAR.build(area.clone());
-                let header = Header::new(&self.state);
-                let sidebar = SideBar::new();
+                let layout = AppLayout::RightBar.build(area.clone());
                 f.render_widget(header, layout[0]);
                 f.render_widget(
                     match self.main_view {
-                        MainView::Timeline => TimeLineView::new(&self.state),
+                        MainView::Timeline => timeline,
                     },
                     layout[1],
                 );
