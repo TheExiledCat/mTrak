@@ -1,5 +1,4 @@
 use std::{
-    arch::naked_asm,
     fs::File,
     io::{Error, Read, Write},
     path::PathBuf,
@@ -8,7 +7,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    pattern::{Pattern, PatternStore},
+    pattern::{Pattern, PatternStore, PatternStoreMut},
     timeline::Timeline,
 };
 const PROJECT_HEADER: [u8; 4] = *b"MTRK";
@@ -58,11 +57,14 @@ impl Project {
             project_file,
             name: None,
         };
-        project.pattern_store().new_pattern(32, 4, 4);
+        project.pattern_store_mut().new_pattern(32, 4);
         return project;
     }
-    pub fn pattern_store(&mut self) -> PatternStore {
-        return PatternStore::new(&mut self.patterns);
+    pub fn pattern_store(&self) -> PatternStore {
+        return PatternStore::new(&self.patterns);
+    }
+    pub fn pattern_store_mut(&mut self) -> PatternStoreMut {
+        return PatternStoreMut::new(&mut self.patterns);
     }
     pub fn save(&mut self, name: Option<String>) -> Result<(), Error> {
         if let Some(name) = name {

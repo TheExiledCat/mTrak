@@ -2,6 +2,8 @@ use std::iter::repeat;
 
 use serde::{Deserialize, Serialize};
 
+use crate::tui::constants;
+
 use super::note::NoteEvent;
 #[derive(Serialize, Deserialize)]
 pub struct Pattern {
@@ -12,24 +14,26 @@ pub struct Pattern {
     pub rows: Vec<PatternRow>,
     pub name: Option<String>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PatternRow {
     pub channels: Vec<NoteEvent>,
     pub dirty: bool,
 }
 impl PatternRow {
-    pub fn new(channel_count: usize) -> Self {
+    pub fn new() -> Self {
         return Self {
-            channels: repeat(NoteEvent::Empty).take(channel_count).collect(),
+            channels: repeat(NoteEvent::Empty)
+                .take(constants::CHANNEL_COUNT)
+                .collect(),
             dirty: true,
         };
     }
 }
 impl Pattern {
-    pub fn new(row_count: usize, channel_count: usize, note_length: u32) -> Self {
+    pub fn new(row_count: usize, note_length: u32) -> Self {
         let mut pattern = Pattern {
             row_count,
-            channel_count,
+            channel_count: constants::CHANNEL_COUNT,
             note_length,
             rows: Vec::new(),
             name: None,
@@ -40,7 +44,7 @@ impl Pattern {
 
     fn initialize_rows(&mut self) {
         for _r in 0..self.row_count {
-            self.rows.push(PatternRow::new(self.channel_count));
+            self.rows.push(PatternRow::new());
         }
     }
     /// Calculate the duration of a row in milliseconds for a given BPM
@@ -69,10 +73,13 @@ impl Pattern {
 }
 
 pub struct PatternStore<'a> {
+    patterns: &'a Vec<Pattern>,
+}
+pub struct PatternStoreMut<'a> {
     patterns: &'a mut Vec<Pattern>,
 }
 impl<'a> PatternStore<'a> {
-    pub fn new(patterns: &'a mut Vec<Pattern>) -> Self {
+    pub fn new(patterns: &'a Vec<Pattern>) -> Self {
         return PatternStore { patterns };
     }
     pub fn get_pattern_by_id(&'a self, id: usize) -> Option<&'a Pattern> {
@@ -93,14 +100,31 @@ impl<'a> PatternStore<'a> {
     pub fn get_patterns(&'a self) -> &'a [Pattern] {
         return &self.patterns;
     }
-    pub fn new_pattern(
-        &'a mut self,
-        row_count: usize,
-        channel_count: usize,
-        note_length: u32,
-    ) -> &'a Pattern {
-        self.patterns
-            .push(Pattern::new(row_count, channel_count, note_length));
+}
+impl<'a> PatternStoreMut<'a> {
+    pub fn new(patterns: &'a mut Vec<Pattern>) -> Self {
+        return PatternStoreMut { patterns };
+    }
+    pub fn get_pattern_by_id(&'a mut self, id: usize) -> Option<&'a mut Pattern> {
+        return self.patterns.get_mut(id);
+    }
+    pub fn get_pattern_by_name(&'a mut self, name: &str) -> Option<&'a mut Pattern> {
+        for pattern in self.patterns.iter_mut() {
+            let pattern_name = match &pattern.name {
+                Some(n) => n,
+                None => continue,
+            };
+            if pattern_name == name {
+                return Some(pattern);
+            }
+        }
+        return None;
+    }
+    pub fn get_patterns(&'a mut self) -> &'a mut [Pattern] {
+        return self.patterns;
+    }
+    pub fn new_pattern(&'a mut self, row_count: usize, note_length: u32) -> &'a Pattern {
+        self.patterns.push(Pattern::new(row_count, note_length));
         return self.patterns.last().unwrap();
     }
 }

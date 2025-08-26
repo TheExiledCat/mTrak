@@ -4,73 +4,27 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Style, Stylize},
     text::Line,
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Block, Borders, Widget},
 };
 
 use crate::tui::app::AppState;
 
 pub struct TimeLineView {
     state: Rc<RefCell<AppState>>,
-    channel_caches: Vec<ChannelCache>,
 }
 impl TimeLineView {
     pub fn new(state: Rc<RefCell<AppState>>) -> Self {
-        let selected_pattern_index = state.borrow().selected_pattern_index;
-        let row_count = state
-            .borrow_mut()
-            .project
-            .pattern_store()
-            .get_pattern_by_id(selected_pattern_index)
-            .map(|p| p.row_count)
-            .unwrap_or(0);
-
-        let channel_count = state
-            .borrow_mut()
-            .project
-            .pattern_store()
-            .get_pattern_by_id(selected_pattern_index)
-            .map(|p| p.channel_count)
-            .unwrap_or(0);
-
-        let channel_caches = (0..channel_count)
-            .map(|_| ChannelCache::new(row_count))
-            .collect();
-
-        Self {
-            state,
-            channel_caches,
-        }
+        Self { state }
     }
 }
-struct CachedRow {
-    text: Line<'static>,
-}
 
-struct ChannelCache {
-    rows: Vec<CachedRow>,
-}
-
-impl ChannelCache {
-    fn new(row_count: usize) -> Self {
-        let rows = (0..row_count)
-            .map(|_| CachedRow {
-                text: Line::from("A-1|00|00|00"),
-            })
-            .collect();
-        Self { rows }
-    }
-
-    fn update_row(&mut self, index: usize, value: &str) {
-        self.rows[index].text = Line::from(value.to_string());
-    }
-}
 impl Widget for TimeLineView {
     fn render(self, area: ratatui::prelude::Rect, buf: &mut ratatui::prelude::Buffer)
     where
         Self: Sized,
     {
         let selected_pattern_index = self.state.borrow().selected_pattern_index;
-        let mut state = self.state.borrow_mut();
+        let state = self.state.borrow();
         let pattern_store = state.project.pattern_store();
         let pattern = pattern_store
             .get_pattern_by_id(selected_pattern_index)
@@ -96,8 +50,12 @@ impl Widget for TimeLineView {
                     .split(track_layout[1]);
 
             for row in 0..pattern.row_count - 1 {
-                let text = Line::raw(format!("A-1|00|00|00")).centered();
-                text.render(rows_layout[row], buf);
+                let text = &state
+                    .channel_cache
+                    .get_row(selected_pattern_index, row)
+                    .channels[i];
+
+                text.clone().centered().render(rows_layout[row], buf);
             }
 
             Block::bordered()

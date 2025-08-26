@@ -1,5 +1,6 @@
 use std::{
     cell::RefCell,
+    collections::HashMap,
     rc::Rc,
     thread,
     time::{Duration, Instant},
@@ -9,11 +10,13 @@ use ratatui::{
     DefaultTerminal,
     crossterm::event::KeyCode,
     layout::{Constraint, Direction, Layout, Rect},
+    text::Line,
 };
 
 use crate::data::{pattern::Pattern, project::Project};
 
 use super::{
+    constants,
     keymap::InputHandler,
     views::{header::Header, sidebar::SideBar, timeline::TimeLineView},
 };
@@ -28,13 +31,84 @@ pub struct App {
 pub struct AppState {
     pub project: Project,
     pub selected_pattern_index: usize,
+    /// render cache for storing pattern channels efficiently, maps pattern IDs to Channels
+    pub channel_cache: ChannelCache,
 }
+
 impl AppState {
     pub fn new(project: Project) -> Self {
+        let patterns = &project.patterns;
+        let channel_cache = ChannelCache::new(&patterns);
         return Self {
             project,
             selected_pattern_index: 0,
+            channel_cache,
         };
+    }
+}
+pub struct ChannelCache {
+    patterns: HashMap<usize, Vec<ChannelCacheRow>>,
+}
+
+pub struct ChannelCacheRow {
+    pub channels: [Line<'static>; constants::CHANNEL_COUNT],
+}
+impl<'a> ChannelCache {
+    pub fn new(patterns: &[Pattern]) -> Self {
+        let mut map = HashMap::<usize, Vec<ChannelCacheRow>>::new();
+
+        for (i, pattern) in patterns.iter().enumerate() {
+            let mut rows = Vec::new();
+            for row in &pattern.rows {
+                let channels: [Line<'static>; constants::CHANNEL_COUNT] = row
+                    .channels
+                    .iter()
+                    .map(|c| Line::from(c.to_string()))
+                    .collect::<Vec<Line<'static>>>()
+                    .try_into()
+                    .unwrap();
+                rows.push(ChannelCacheRow { channels })
+            }
+            map.insert(i, rows);
+        }
+        let cache = ChannelCache { patterns: map };
+
+        return cache;
+    }
+    pub fn update_all_dirty(&mut self, patterns: &[Pattern]) {
+        for (i, pattern) in patterns.iter().enumerate() {
+            for row_index in 0..pattern.row_count {
+                let row = &pattern.rows[row_index];
+                if !row.dirty {
+                    continue;
+                }
+                self.patterns.get_mut(&i).unwrap()[row_index].channels = row
+                    .channels
+                    .iter()
+                    .map(|c| Line::from(c.to_string()))
+                    .collect::<Vec<Line<'static>>>()
+                    .try_into()
+                    .unwrap();
+            }
+        }
+    }
+    pub fn update_dirty(&mut self, pattern: &mut Pattern, pattern_index: usize, row_index: usize) {
+        let row = pattern.rows.get_mut(row_index).unwrap();
+
+        if !row.dirty {
+            return;
+        }
+        row.dirty = false;
+        self.patterns.get_mut(&pattern_index).unwrap()[row_index].channels = row
+            .channels
+            .iter()
+            .map(|c| Line::from(c.to_string()))
+            .collect::<Vec<Line<'static>>>()
+            .try_into()
+            .unwrap();
+    }
+    pub fn get_row(&'a self, pattern_index: usize, row_index: usize) -> &'a ChannelCacheRow {
+        return &self.patterns.get(&pattern_index).unwrap()[row_index];
     }
 }
 pub enum MainView {
