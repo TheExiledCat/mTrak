@@ -1,4 +1,4 @@
-# Mini Tracker
+# mTrak, The mini terminal tracker DAW
 
 _The lightweight terminal tracker_
 
