@@ -26,12 +26,15 @@ impl Widget for TimeLineView {
         let selected_pattern_index = self.state.borrow().selected_pattern_index;
         let selected_row_index = self.state.borrow().row_index;
         let selected_channel_index = self.state.borrow().channel_index;
+        let editing = self.state.borrow().is_editing;
         let mut state = self.state.borrow();
         let pattern_store = state.project.pattern_store();
         let pattern = pattern_store
             .get_pattern_by_id(selected_pattern_index)
             .unwrap();
-
+        let top_bottom = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
+        let editing_text = Line::raw(if editing { "-- EDIT MODE --" } else { "" }).centered();
+        editing_text.render(top_bottom[0], buf);
         let layout = Layout::horizontal(
             [Constraint::Fill(1)]
                 .iter()
@@ -39,7 +42,7 @@ impl Widget for TimeLineView {
                 .chain([Constraint::Fill(1)].iter()),
         )
         .margin(1)
-        .split(area);
+        .split(top_bottom[1]);
 
         Block::new()
             .borders(Borders::BOTTOM)

@@ -1,8 +1,13 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    iter::{repeat, repeat_n},
+    rc::Rc,
+};
 
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Style, Stylize},
+    text::Line,
     widgets::{Block, Borders, Padding, Paragraph, Widget},
 };
 
@@ -26,7 +31,7 @@ impl Widget for Header {
     {
         let layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Ratio(1, 4)])
+            .constraints(repeat_n(Constraint::Fill(1), 4))
             .split(area.clone());
         let border = Block::new()
             .borders(Borders::BOTTOM)
@@ -42,6 +47,7 @@ impl Widget for Header {
             .centered()
             .block(Block::new().padding(Padding::vertical(1)));
         title.render(layout[0], buf);
+
         border.render(area, buf);
     }
 }

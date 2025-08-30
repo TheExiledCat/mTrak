@@ -203,6 +203,10 @@ impl App {
                                 self.state.borrow_mut().row_index += 1
                             }
                         }
+                        KeyCode::Char(' ') => {
+                            let editing = !self.state.borrow().is_editing;
+                            self.state.borrow_mut().is_editing = editing;
+                        }
                         _ => (),
                     }
                 }
