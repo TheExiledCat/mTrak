@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Style, Stylize},
     text::Line,
-    widgets::{Block, Borders, Widget},
+    widgets::{Block, Borders, Padding, Paragraph, Widget},
 };
 
 use crate::tui::app::AppState;
@@ -48,7 +48,26 @@ impl Widget for TimeLineView {
             .borders(Borders::BOTTOM)
             .border_style(Style::new().yellow())
             .render(area, buf);
-
+        let line_numbers = Paragraph::new(
+            (0..pattern.row_count)
+                .map(|i| {
+                    let line = Line::raw(format!("{:02X}", i));
+                    let mut style = Style::new().black().on_light_green();
+                    if i % 4 == 0 {
+                        style = style.on_red();
+                    }
+                    if i == selected_row_index {
+                        style = style.on_light_blue();
+                    }
+                    line.style(style)
+                })
+                .collect::<Vec<Line>>(),
+        )
+        .block(Block::new().padding(Padding::new(0, 1, 4, 0)))
+        .right_aligned()
+        .scroll((selected_row_index.saturating_sub(16) as u16, 0));
+        line_numbers.render(layout[0], buf);
+        Line::raw("No.").right_aligned().render(layout[0], buf);
         for i in 0..pattern.channel_count {
             let text = Line::raw(format!("Track {:02}", i)).centered();
 
@@ -56,31 +75,20 @@ impl Widget for TimeLineView {
                 .margin(1)
                 .split(layout[i + 1]);
             text.render(track_layout[0], buf);
-            let rows_layout =
-                Layout::vertical((0..pattern.row_count - 1).map(|_| Constraint::Fill(1)))
-                    .split(track_layout[1]);
-
-            for row in 0..pattern.row_count - 1 {
-                let text = &state
-                    .channel_cache
-                    .get_row(selected_pattern_index, row)
-                    .channels[i];
-                if row == selected_row_index {
-                    if i == selected_channel_index {
-                        text.clone()
-                            .centered()
-                            .style(Style::new().black().on_white())
-                            .render(rows_layout[row], buf);
-                    } else {
-                        text.clone()
-                            .centered()
-                            .style(Style::new().on_light_blue())
-                            .render(rows_layout[row], buf);
-                    }
-                } else {
-                    text.clone().centered().render(rows_layout[row], buf);
-                }
+            let mut rows = state
+                .channel_cache
+                .get_all_rows_for_channel(selected_pattern_index, i);
+            let row = rows[selected_row_index].clone();
+            if i == selected_channel_index {
+                let new_row = row.centered().style(Style::new().black().on_white());
+                rows[selected_row_index] = new_row;
+            } else {
+                let new_row = row.centered().style(Style::new().on_light_blue());
+                rows[selected_row_index] = new_row;
             }
+            let mut row_paragraph =
+                Paragraph::new(rows).scroll((selected_row_index.saturating_sub(16) as u16, 0));
+            row_paragraph.render(track_layout[1], buf);
 
             Block::bordered()
                 .border_style(Style::new().green())

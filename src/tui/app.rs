@@ -118,6 +118,19 @@ impl<'a> ChannelCache {
     pub fn get_row(&'a self, pattern_index: usize, row_index: usize) -> &'a ChannelCacheRow {
         return &self.patterns.get(&pattern_index).unwrap()[row_index];
     }
+    pub fn get_all_rows_for_channel(
+        &'a self,
+        pattern_index: usize,
+        channel_index: usize,
+    ) -> Vec<Line> {
+        return self
+            .patterns
+            .get(&pattern_index)
+            .unwrap()
+            .iter()
+            .map(|r| r.channels[channel_index].clone())
+            .collect();
+    }
     pub fn get_row_mut(
         &'a mut self,
         pattern_index: usize,
@@ -195,12 +208,22 @@ impl App {
                     match event.code {
                         KeyCode::Up => {
                             if self.state.borrow().row_index > 0 {
-                                self.state.borrow_mut().row_index -= 1
+                                let _ = self.state.borrow_mut().row_index -= 1;
                             }
                         }
                         KeyCode::Down => {
-                            if self.state.borrow().row_index < row_count {
-                                self.state.borrow_mut().row_index += 1
+                            if self.state.borrow().row_index < row_count - 1 {
+                                let _ = self.state.borrow_mut().row_index += 1;
+                            }
+                        }
+                        KeyCode::Left => {
+                            let new_index = self.state.borrow().channel_index.saturating_sub(1);
+                            self.state.borrow_mut().channel_index = new_index;
+                        }
+                        KeyCode::Right => {
+                            let new_index = self.state.borrow().channel_index + 1;
+                            if new_index < constants::CHANNEL_COUNT {
+                                self.state.borrow_mut().channel_index = new_index;
                             }
                         }
                         KeyCode::Char(' ') => {
