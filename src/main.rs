@@ -21,7 +21,7 @@ use util::timers::{self, set_timeout};
 fn main() -> Result<(), io::Error> {
     let args = Cli::parse();
     let terminal = ratatui::init();
-    let mut app = App::new(terminal, 60, Project::new(args.project_file));
+    let mut app = App::new(terminal, 120, Project::new(args.project_file));
     while app.draw() {}
 
     ratatui::restore();

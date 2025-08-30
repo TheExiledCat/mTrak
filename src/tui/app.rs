@@ -217,13 +217,25 @@ impl App {
                             }
                         }
                         KeyCode::Left => {
-                            let new_index = self.state.borrow().channel_index.saturating_sub(1);
-                            self.state.borrow_mut().channel_index = new_index;
+                            if !self.state.borrow().is_editing {
+                                let new_index = self.state.borrow().channel_index.saturating_sub(1);
+                                self.state.borrow_mut().channel_index = new_index;
+                            } else {
+                                let new_index = self.state.borrow().column_index.saturating_sub(1);
+                                self.state.borrow_mut().column_index = new_index;
+                            }
                         }
                         KeyCode::Right => {
-                            let new_index = self.state.borrow().channel_index + 1;
-                            if new_index < constants::CHANNEL_COUNT {
-                                self.state.borrow_mut().channel_index = new_index;
+                            if !(self.state.borrow().is_editing) {
+                                let new_index = self.state.borrow().channel_index + 1;
+                                if new_index < constants::CHANNEL_COUNT {
+                                    self.state.borrow_mut().channel_index = new_index;
+                                }
+                            } else {
+                                let new_index = self.state.borrow().column_index + 1;
+                                if new_index < constants::CHANNEL_COUNT {
+                                    self.state.borrow_mut().column_index = new_index;
+                                }
                             }
                         }
                         KeyCode::Char(' ') => {
