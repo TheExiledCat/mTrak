@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::tui::constants;
 
 use super::note::NoteEvent;
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Pattern {
     pub row_count: usize,
     pub channel_count: usize,
@@ -14,7 +14,7 @@ pub struct Pattern {
     pub rows: Vec<PatternRow>,
     pub name: Option<String>,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PatternRow {
     pub channels: Vec<NoteEvent>,
     pub dirty: bool,

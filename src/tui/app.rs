@@ -33,6 +33,10 @@ pub struct AppState {
     pub selected_pattern_index: usize,
     /// render cache for storing pattern channels efficiently, maps pattern IDs to Channels
     pub channel_cache: ChannelCache,
+    pub row_index: usize,
+    pub column_index: usize,
+    pub channel_index: usize,
+    pub is_editing: bool,
 }
 
 impl AppState {
@@ -43,6 +47,10 @@ impl AppState {
             project,
             selected_pattern_index: 0,
             channel_cache,
+            row_index: 0,
+            channel_index: 0,
+            column_index: 0,
+            is_editing: false,
         };
     }
 }
@@ -110,6 +118,18 @@ impl<'a> ChannelCache {
     pub fn get_row(&'a self, pattern_index: usize, row_index: usize) -> &'a ChannelCacheRow {
         return &self.patterns.get(&pattern_index).unwrap()[row_index];
     }
+    pub fn get_row_mut(
+        &'a mut self,
+        pattern_index: usize,
+        row_index: usize,
+    ) -> &'a mut ChannelCacheRow {
+        return self
+            .patterns
+            .get_mut(&pattern_index)
+            .unwrap()
+            .get_mut(row_index)
+            .unwrap();
+    }
 }
 pub enum MainView {
     Timeline,
@@ -162,12 +182,28 @@ impl App {
         let header = Header::new(self.state.clone());
         let sidebar = SideBar::new(self.state.clone());
         let timeline = TimeLineView::new(self.state.clone());
+        let row_count = self.state.borrow().project.patterns
+            [self.state.borrow().selected_pattern_index]
+            .row_count;
         self.terminal
             .draw(|f| {
                 if let Some(event) = self.input_handler.read_event() {
                     if let KeyCode::Char('q') = event.code {
                         render_next = false;
                         return;
+                    }
+                    match event.code {
+                        KeyCode::Up => {
+                            if self.state.borrow().row_index > 0 {
+                                self.state.borrow_mut().row_index -= 1
+                            }
+                        }
+                        KeyCode::Down => {
+                            if self.state.borrow().row_index < row_count {
+                                self.state.borrow_mut().row_index += 1
+                            }
+                        }
+                        _ => (),
                     }
                 }
                 let area = f.area();
@@ -180,6 +216,10 @@ impl App {
                     layout[1],
                 );
                 f.render_widget(sidebar, layout[2]);
+                f.render_widget(
+                    Line::raw(self.state.borrow().row_index.to_string()),
+                    layout[2],
+                );
             })
             .unwrap();
         let elapsed = start.elapsed();
