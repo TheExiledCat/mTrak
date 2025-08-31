@@ -19,9 +19,18 @@ pub struct Project {
     pub timeline: Timeline,
     pub patterns: Vec<Pattern>,
     #[serde(skip)]
-    project_file: PathBuf,
+    project_file: Option<PathBuf>,
 }
 impl Project {
+    pub fn empty() -> Self {
+        return Project {
+            version: PROJECT_VERSION,
+            name: Some("Untitled".into()),
+            timeline: Timeline::new(),
+            patterns: vec![Pattern::new(64, 4)],
+            project_file: None,
+        };
+    }
     pub fn new(project_file: PathBuf) -> Self {
         if project_file.is_file() {
             // load file and create project like that
@@ -47,18 +56,11 @@ impl Project {
                     project.version, PROJECT_VERSION
                 )
             }
-            project.project_file = project_file;
+            project.project_file = Some(project_file);
             return project;
         }
-        let mut project = Self {
-            version: PROJECT_VERSION,
-            timeline: Timeline::new(),
-            patterns: vec![],
-            project_file,
-            name: None,
-        };
-        project.pattern_store_mut().new_pattern(32, 4);
-        return project;
+
+        panic!("File not found");
     }
     pub fn pattern_store(&self) -> PatternStore {
         return PatternStore::new(&self.patterns);
@@ -70,7 +72,7 @@ impl Project {
         if let Some(name) = name {
             self.name = Some(name);
         }
-        let mut file = File::create(&self.project_file)?;
+        let mut file = File::create(self.project_file.clone().unwrap())?;
         file.write_all(&PROJECT_HEADER)?;
         let _bin =
             bincode::serde::encode_into_std_write(self, &mut file, bincode::config::standard())

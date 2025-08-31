@@ -23,10 +23,12 @@ impl Widget for TimeLineView {
     where
         Self: Sized,
     {
-        let selected_pattern_index = self.state.borrow().selected_pattern_index;
-        let selected_row_index = self.state.borrow().row_index;
-        let selected_channel_index = self.state.borrow().channel_index;
-        let editing = self.state.borrow().is_editing;
+        let borrowed_state = self.state.borrow();
+        let selected_pattern_index = borrowed_state.selected_pattern_index;
+        let selected_row_index = borrowed_state.row_index;
+        let selected_channel_index = borrowed_state.channel_index;
+        let row_number_string = borrowed_state.row_number_lookup.clone();
+        let editing = borrowed_state.is_editing;
         let mut state = self.state.borrow();
         let pattern_store = state.project.pattern_store();
         let pattern = pattern_store
@@ -67,9 +69,25 @@ impl Widget for TimeLineView {
         .right_aligned()
         .scroll((selected_row_index.saturating_sub(16) as u16, 0));
         line_numbers.render(layout[0], buf);
-        Line::raw("No.").right_aligned().render(layout[0], buf);
+        let no_lines = [
+            Line::raw("No."),
+            Line::raw(format!(
+                "{}{}",
+                if row_number_string.chars().count() == 0 {
+                    ""
+                } else {
+                    "SEARCH: "
+                },
+                row_number_string
+            ))
+            .style(Style::new().black().on_yellow()),
+        ];
+        Paragraph::new(Vec::from(no_lines))
+            .right_aligned()
+            .block(Block::new().padding(Padding::new(0, 1, 1, 0)))
+            .render(layout[0], buf);
         for i in 0..pattern.channel_count {
-            let text = Line::raw(format!("Track {:02}", i)).centered();
+            let text = Line::raw(format!("Track {:02}", i + 1)).centered();
 
             let track_layout = Layout::vertical([Constraint::Length(3), Constraint::Fill(1)])
                 .margin(1)

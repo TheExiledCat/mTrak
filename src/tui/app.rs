@@ -37,6 +37,7 @@ pub struct AppState {
     pub column_index: usize,
     pub channel_index: usize,
     pub is_editing: bool,
+    pub row_number_lookup: String,
 }
 
 impl AppState {
@@ -51,6 +52,7 @@ impl AppState {
             channel_index: 0,
             column_index: 0,
             is_editing: false,
+            row_number_lookup: String::new(),
         };
     }
 }
@@ -205,15 +207,16 @@ impl App {
                         render_next = false;
                         return;
                     }
+                    let mut was_row_number = false;
                     match event.code {
                         KeyCode::Up => {
                             if self.state.borrow().row_index > 0 {
-                                let _ = self.state.borrow_mut().row_index -= 1;
+                                self.state.borrow_mut().row_index -= 1;
                             }
                         }
                         KeyCode::Down => {
                             if self.state.borrow().row_index < row_count - 1 {
-                                let _ = self.state.borrow_mut().row_index += 1;
+                                self.state.borrow_mut().row_index += 1;
                             }
                         }
                         KeyCode::Left => {
@@ -242,7 +245,28 @@ impl App {
                             let editing = !self.state.borrow().is_editing;
                             self.state.borrow_mut().is_editing = editing;
                         }
+                        KeyCode::Char(num) if num.is_ascii_hexdigit() => {
+                            let num_char = num.to_ascii_uppercase();
+                            self.state.borrow_mut().row_number_lookup.push(num_char);
+                            let row_number = self.state.borrow().row_number_lookup.clone();
+                            if row_number.chars().count() > 4 {
+                                self.state.borrow_mut().row_number_lookup = String::new();
+                            }
+                            was_row_number = true;
+                        }
+                        KeyCode::Enter => {
+                            let row_number = self.state.borrow().row_number_lookup.clone();
+
+                            let num = u16::from_str_radix(&row_number, 16).unwrap();
+                            if num < row_count as u16 {
+                                self.state.borrow_mut().row_index = num as usize;
+                            }
+                        }
                         _ => (),
+                    }
+                    if !was_row_number && self.state.borrow().row_number_lookup.chars().count() > 0
+                    {
+                        self.state.borrow_mut().row_number_lookup = String::new();
                     }
                 }
                 let area = f.area();
