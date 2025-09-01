@@ -14,3 +14,5 @@ hound = "3.5.1"
 ratatui = "0.29.0"
 serde = { version = "1.0.219", features = ["derive"] }
 clap = "4.5.45"
+ratatui-explorer = "0.2.1"
+regex = "1.11.2"

@@ -1,13 +1,13 @@
-use std::{cell::RefCell, rc::Rc};
-
 use ratatui::{
     layout::{Constraint, Layout},
     style::{Style, Stylize},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph, Widget},
 };
+use regex::Regex;
+use std::{cell::RefCell, rc::Rc};
 
-use crate::tui::app::AppState;
+use crate::{tui::app::AppState, util::strings::split_keep_delim};
 
 pub struct TimeLineView {
     state: Rc<RefCell<AppState>>,
@@ -27,9 +27,10 @@ impl Widget for TimeLineView {
         let selected_pattern_index = borrowed_state.selected_pattern_index;
         let selected_row_index = borrowed_state.row_index;
         let selected_channel_index = borrowed_state.channel_index;
+        let selected_column_index = borrowed_state.column_index;
         let row_number_string = borrowed_state.row_number_lookup.clone();
         let editing = borrowed_state.is_editing;
-        let mut state = self.state.borrow();
+        let state = self.state.borrow();
         let pattern_store = state.project.pattern_store();
         let pattern = pattern_store
             .get_pattern_by_id(selected_pattern_index)
@@ -98,13 +99,36 @@ impl Widget for TimeLineView {
                 .get_all_rows_for_channel(selected_pattern_index, i);
             let row = rows[selected_row_index].clone();
             if i == selected_channel_index {
-                let new_row = row.centered().style(Style::new().black().on_white());
-                rows[selected_row_index] = new_row;
+                let new_row = row
+                    .clone()
+                    .centered()
+                    .style(Style::new().black().on_white());
+                if editing {
+                    let new_span_string = String::from(row.spans[0].clone().content.clone());
+                    let new_span_split = split_keep_delim(&new_span_string, "|");
+
+                    let new_row = new_row.spans(
+                        new_span_split
+                            .iter()
+                            .enumerate()
+                            .map(|(i, s)| {
+                                let content = String::from(*s);
+                                if i % 2 == 0 && i / 2 == selected_column_index {
+                                    return content.clone().on_black();
+                                }
+                                return Span::from(content);
+                            })
+                            .collect::<Vec<Span>>(),
+                    );
+                    rows[selected_row_index] = new_row;
+                } else {
+                    rows[selected_row_index] = new_row;
+                }
             } else {
                 let new_row = row.centered().style(Style::new().on_light_blue());
                 rows[selected_row_index] = new_row;
             }
-            let mut row_paragraph =
+            let row_paragraph =
                 Paragraph::new(rows).scroll((selected_row_index.saturating_sub(16) as u16, 0));
             row_paragraph.render(track_layout[1], buf);
 

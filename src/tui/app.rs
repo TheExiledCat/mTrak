@@ -8,7 +8,7 @@ use std::{
 
 use ratatui::{
     DefaultTerminal,
-    crossterm::event::KeyCode,
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::{Constraint, Direction, Layout, Rect},
     text::Line,
 };
@@ -124,7 +124,7 @@ impl<'a> ChannelCache {
         &'a self,
         pattern_index: usize,
         channel_index: usize,
-    ) -> Vec<Line> {
+    ) -> Vec<Line<'a>> {
         return self
             .patterns
             .get(&pattern_index)
@@ -179,12 +179,69 @@ impl AppLayout {
         }
     }
 }
+fn all_map(state: Rc<RefCell<AppState>>, event: &KeyEvent) -> bool {
+    let row_count =
+        state.borrow().project.patterns[state.borrow().selected_pattern_index].row_count;
 
+    match event.code {
+        KeyCode::Char('s') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+            let project_name = state.borrow().project.name.clone();
+            let mut state = state.borrow_mut();
+            let saved = state.project.is_saved();
+            if saved {
+                state.project.save(project_name).unwrap();
+            } else {
+                //TODO SAVING LOGIC
+            }
+        }
+        KeyCode::Up => {
+            if state.borrow().row_index > 0 {
+                state.borrow_mut().row_index -= 1;
+            }
+        }
+        KeyCode::Down => {
+            if state.borrow().row_index < row_count - 1 {
+                state.borrow_mut().row_index += 1;
+            }
+        }
+        KeyCode::Left => {
+            if !state.borrow().is_editing {
+                let new_index = state.borrow().channel_index.saturating_sub(1);
+                state.borrow_mut().channel_index = new_index;
+            } else {
+                let new_index = state.borrow().column_index.saturating_sub(1);
+                state.borrow_mut().column_index = new_index;
+            }
+        }
+        KeyCode::Right => {
+            if !(state.borrow().is_editing) {
+                let new_index = state.borrow().channel_index + 1;
+                if new_index < constants::CHANNEL_COUNT {
+                    state.borrow_mut().channel_index = new_index;
+                }
+            } else {
+                let new_index = state.borrow().column_index + 1;
+                if new_index < constants::CHANNEL_COLUMN_COUNT {
+                    state.borrow_mut().column_index = new_index;
+                }
+            }
+        }
+        KeyCode::Char(' ') => {
+            let editing = !state.borrow().is_editing;
+            state.borrow_mut().is_editing = editing;
+        }
+        _ => return false,
+    }
+
+    return true;
+}
 impl App {
     pub fn new(terminal: DefaultTerminal, fps: u16, project: Project) -> Self {
+        let mut input_handler = InputHandler::new();
+        input_handler.register_handler(all_map);
         return Self {
             terminal,
-            input_handler: InputHandler::new(),
+            input_handler,
             fps,
             main_view: MainView::Timeline,
             state: Rc::new(RefCell::new(AppState::new(project))),
@@ -203,49 +260,20 @@ impl App {
         self.terminal
             .draw(|f| {
                 if let Some(event) = self.input_handler.read_event() {
-                    if let KeyCode::Char('q') = event.code {
+                    // GLOBAL MAPPINGS
+                    if let KeyCode::Char('q') = event.code
+                        && event.modifiers.contains(KeyModifiers::CONTROL)
+                    {
                         render_next = false;
                         return;
                     }
                     let mut was_row_number = false;
+                    self.input_handler.handle_event(self.state.clone(), event);
+
                     match event.code {
-                        KeyCode::Up => {
-                            if self.state.borrow().row_index > 0 {
-                                self.state.borrow_mut().row_index -= 1;
-                            }
-                        }
-                        KeyCode::Down => {
-                            if self.state.borrow().row_index < row_count - 1 {
-                                self.state.borrow_mut().row_index += 1;
-                            }
-                        }
-                        KeyCode::Left => {
-                            if !self.state.borrow().is_editing {
-                                let new_index = self.state.borrow().channel_index.saturating_sub(1);
-                                self.state.borrow_mut().channel_index = new_index;
-                            } else {
-                                let new_index = self.state.borrow().column_index.saturating_sub(1);
-                                self.state.borrow_mut().column_index = new_index;
-                            }
-                        }
-                        KeyCode::Right => {
-                            if !(self.state.borrow().is_editing) {
-                                let new_index = self.state.borrow().channel_index + 1;
-                                if new_index < constants::CHANNEL_COUNT {
-                                    self.state.borrow_mut().channel_index = new_index;
-                                }
-                            } else {
-                                let new_index = self.state.borrow().column_index + 1;
-                                if new_index < constants::CHANNEL_COUNT {
-                                    self.state.borrow_mut().column_index = new_index;
-                                }
-                            }
-                        }
-                        KeyCode::Char(' ') => {
-                            let editing = !self.state.borrow().is_editing;
-                            self.state.borrow_mut().is_editing = editing;
-                        }
-                        KeyCode::Char(num) if num.is_ascii_hexdigit() => {
+                        KeyCode::Char(num)
+                            if num.is_ascii_hexdigit() && !self.state.borrow().is_editing =>
+                        {
                             let num_char = num.to_ascii_uppercase();
                             self.state.borrow_mut().row_number_lookup.push(num_char);
                             let row_number = self.state.borrow().row_number_lookup.clone();
@@ -256,10 +284,11 @@ impl App {
                         }
                         KeyCode::Enter => {
                             let row_number = self.state.borrow().row_number_lookup.clone();
-
-                            let num = u16::from_str_radix(&row_number, 16).unwrap();
-                            if num < row_count as u16 {
-                                self.state.borrow_mut().row_index = num as usize;
+                            if row_number.chars().count() > 0 {
+                                let num = u16::from_str_radix(&row_number, 16).unwrap();
+                                if num < row_count as u16 {
+                                    self.state.borrow_mut().row_index = num as usize;
+                                }
                             }
                         }
                         _ => (),
@@ -270,6 +299,7 @@ impl App {
                     }
                 }
                 let area = f.area();
+
                 let layout = AppLayout::RightBar.build(area.clone());
                 f.render_widget(header, layout[0]);
                 f.render_widget(

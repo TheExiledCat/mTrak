@@ -1,13 +1,8 @@
-use std::{
-    cell::RefCell,
-    iter::{repeat, repeat_n},
-    rc::Rc,
-};
+use std::{cell::RefCell, iter::repeat_n, rc::Rc};
 
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Style, Stylize},
-    text::Line,
     widgets::{Block, Borders, Padding, Paragraph, Widget},
 };
 
@@ -45,7 +40,14 @@ impl Widget for Header {
         let title = Paragraph::new(format!("Mini Tracker: {}", project_name))
             .style(Style::new().bold().red())
             .centered()
-            .block(Block::new().padding(Padding::vertical(1)));
+            .block(
+                Block::new()
+                    .padding(Padding::vertical(1))
+                    .borders(Borders::TOP)
+                    .border_style(Style::new().red())
+                    .title("Ctrl+Q to exit")
+                    .title_alignment(ratatui::layout::Alignment::Left),
+            );
         title.render(layout[0], buf);
 
         border.render(area, buf);

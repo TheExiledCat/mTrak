@@ -80,4 +80,7 @@ impl Project {
 
         return Ok(());
     }
+    pub fn is_saved(&self) -> bool {
+        return self.project_file.is_some();
+    }
 }

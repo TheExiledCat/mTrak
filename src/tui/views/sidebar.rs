@@ -35,7 +35,7 @@ impl Widget for SideBar {
             let state = self.state.borrow();
             state.selected_pattern_index
         };
-        let mut state = self.state.borrow_mut();
+        let state = self.state.borrow_mut();
         let pattern_store = state.project.pattern_store();
         let patterns = pattern_store.get_patterns();
         let list =
