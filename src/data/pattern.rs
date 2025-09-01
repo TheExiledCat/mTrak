@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::tui::constants;
 
-use super::note::NoteEvent;
+use super::note::{NoteError, NoteEvent};
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Pattern {
     pub row_count: usize,
@@ -126,5 +126,17 @@ impl<'a> PatternStoreMut<'a> {
     pub fn new_pattern(&'a mut self, row_count: usize, note_length: u32) -> &'a Pattern {
         self.patterns.push(Pattern::new(row_count, note_length));
         return self.patterns.last().unwrap();
+    }
+    pub fn update_row(
+        &'a mut self,
+        pattern_index: usize,
+        row_index: usize,
+        channel_index: usize,
+        note_string: &str,
+    ) -> Result<(), NoteError> {
+        self.patterns[pattern_index].rows[row_index].channels[channel_index] =
+            NoteEvent::from_string(note_string)?;
+        self.patterns[pattern_index].rows[row_index].dirty = true;
+        return Ok(());
     }
 }

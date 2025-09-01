@@ -21,6 +21,32 @@ use super::{
     views::{header::Header, sidebar::SideBar, timeline::TimeLineView},
 };
 
+pub fn column_index_to_note_string_index(column_index: usize) -> Option<usize> {
+    let s = constants::EMPTY_NOTE;
+    let mut amount_of_zeroes = 0;
+    for (i, c) in s.chars().enumerate() {
+        if c == '0' {
+            amount_of_zeroes += 1;
+        }
+
+        if amount_of_zeroes == column_index {
+            return Some(i);
+        }
+    }
+    None
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_column_to_note_string_index() {
+        let test_cases = [(0, 0), (1, 4), (2, 5), (3, 7), (4, 8), (5, 10), (6, 11)];
+
+        for (col, expected) in test_cases {
+            assert_eq!(column_index_to_note_string_index(col).unwrap(), expected);
+        }
+    }
+}
 pub struct App {
     pub state: Rc<RefCell<AppState>>,
     pub terminal: DefaultTerminal,
@@ -32,7 +58,7 @@ pub struct AppState {
     pub project: Project,
     pub selected_pattern_index: usize,
     /// render cache for storing pattern channels efficiently, maps pattern IDs to Channels
-    pub channel_cache: ChannelCache,
+    pub channel_cache: RefCell<ChannelCache>,
     pub row_index: usize,
     pub column_index: usize,
     pub channel_index: usize,
@@ -47,13 +73,33 @@ impl AppState {
         return Self {
             project,
             selected_pattern_index: 0,
-            channel_cache,
+            channel_cache: RefCell::new(channel_cache),
             row_index: 0,
             channel_index: 0,
             column_index: 0,
             is_editing: false,
             row_number_lookup: String::new(),
         };
+    }
+
+    fn update_row(
+        &mut self,
+        pattern_index: usize,
+        row_index: usize,
+        channel_index: usize,
+        note_string: &str,
+    ) {
+        {
+            let mut pattern_store = self.project.pattern_store_mut();
+            pattern_store
+                .update_row(pattern_index, row_index, channel_index, note_string)
+                .unwrap();
+        }
+        let cache = &self.channel_cache;
+        let project = &mut self.project;
+        cache
+            .borrow_mut()
+            .update_dirty(project, pattern_index, row_index);
     }
 }
 pub struct ChannelCache {
@@ -102,7 +148,8 @@ impl<'a> ChannelCache {
             }
         }
     }
-    pub fn update_dirty(&mut self, pattern: &mut Pattern, pattern_index: usize, row_index: usize) {
+    pub fn update_dirty(&mut self, project: &mut Project, pattern_index: usize, row_index: usize) {
+        let pattern = project.patterns.get_mut(pattern_index).unwrap();
         let row = pattern.rows.get_mut(row_index).unwrap();
 
         if !row.dirty {
@@ -281,6 +328,33 @@ impl App {
                                 self.state.borrow_mut().row_number_lookup = String::new();
                             }
                             was_row_number = true;
+                        }
+                        KeyCode::Char(num) if num.is_ascii_hexdigit() => {
+                            let selected_pattern_index = self.state.borrow().selected_pattern_index;
+                            let row_index = self.state.borrow().row_index;
+                            let channel_index = self.state.borrow().channel_index;
+                            let column_index = self.state.borrow().column_index;
+                            let line = &self
+                                .state
+                                .borrow()
+                                .channel_cache
+                                .borrow()
+                                .get_row(selected_pattern_index, row_index)
+                                .channels[channel_index]
+                                .spans[0]
+                                .content
+                                .as_ref()
+                                .to_owned();
+                            let char_index = column_index_to_note_string_index(column_index);
+                            let mut chars: Vec<char> = line.chars().collect();
+                            chars[char_index.unwrap()] = num;
+                            let chars = chars.iter().collect::<String>();
+                            self.state.borrow_mut().update_row(
+                                selected_pattern_index,
+                                row_index,
+                                channel_index,
+                                &chars,
+                            );
                         }
                         KeyCode::Enter => {
                             let row_number = self.state.borrow().row_number_lookup.clone();

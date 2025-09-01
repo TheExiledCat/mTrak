@@ -2,12 +2,18 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Widget},
+    widgets::{Block, Borders, Padding, Paragraph, Widget, Wrap},
 };
 use regex::Regex;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, ops::Deref, rc::Rc};
 
-use crate::{tui::app::AppState, util::strings::split_keep_delim};
+use crate::{
+    tui::{
+        app::{AppState, column_index_to_note_string_index},
+        constants,
+    },
+    util::strings::split_keep_delim,
+};
 
 pub struct TimeLineView {
     state: Rc<RefCell<AppState>>,
@@ -41,7 +47,10 @@ impl Widget for TimeLineView {
         let layout = Layout::horizontal(
             [Constraint::Fill(1)]
                 .iter()
-                .chain((0..pattern.channel_count).map(|_| &Constraint::Length(14)))
+                .chain(
+                    (0..pattern.channel_count)
+                        .map(|_| &Constraint::Length(constants::NOTE_STRING_LENGTH as u16)),
+                )
                 .chain([Constraint::Fill(1)].iter()),
         )
         .margin(1)
@@ -85,6 +94,7 @@ impl Widget for TimeLineView {
         ];
         Paragraph::new(Vec::from(no_lines))
             .right_aligned()
+            .wrap(Wrap { trim: false })
             .block(Block::new().padding(Padding::new(0, 1, 1, 0)))
             .render(layout[0], buf);
         for i in 0..pattern.channel_count {
@@ -94,9 +104,8 @@ impl Widget for TimeLineView {
                 .margin(1)
                 .split(layout[i + 1]);
             text.render(track_layout[0], buf);
-            let mut rows = state
-                .channel_cache
-                .get_all_rows_for_channel(selected_pattern_index, i);
+            let cache = state.channel_cache.borrow();
+            let mut rows = cache.get_all_rows_for_channel(selected_pattern_index, i);
             let row = rows[selected_row_index].clone();
             if i == selected_channel_index {
                 let new_row = row
@@ -106,17 +115,29 @@ impl Widget for TimeLineView {
                 if editing {
                     let new_span_string = String::from(row.spans[0].clone().content.clone());
                     let new_span_split = split_keep_delim(&new_span_string, "|");
-
+                    let mut divided_span_split: Vec<String> = Vec::new();
+                    for (i, span) in new_span_split.iter().enumerate() {
+                        if i == 0 {
+                            divided_span_split.push(span.deref().to_owned());
+                            continue;
+                        }
+                        for char in span.chars() {
+                            divided_span_split.push(char.to_string());
+                        }
+                    }
+                    let mut zero_index = 0;
                     let new_row = new_row.spans(
-                        new_span_split
+                        divided_span_split
                             .iter()
                             .enumerate()
                             .map(|(i, s)| {
-                                let content = String::from(*s);
-                                if i % 2 == 0 && i / 2 == selected_column_index {
-                                    return content.clone().on_black();
+                                if s != "|" {
+                                    zero_index += 1;
                                 }
-                                return Span::from(content);
+                                if zero_index - 1 == selected_column_index && s != "|" {
+                                    return s.clone().white().on_black();
+                                }
+                                return Span::from(s.clone());
                             })
                             .collect::<Vec<Span>>(),
                     );
