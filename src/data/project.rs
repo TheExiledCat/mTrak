@@ -7,6 +7,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use super::{
+    config::Config,
     pattern::{Pattern, PatternStore, PatternStoreMut},
     timeline::Timeline,
 };
@@ -18,17 +19,14 @@ pub struct Project {
     pub name: Option<String>,
     pub timeline: Timeline,
     pub patterns: Vec<Pattern>,
-    #[serde(skip)]
-    project_file: Option<PathBuf>,
 }
 impl Project {
     pub fn empty() -> Self {
         return Project {
             version: PROJECT_VERSION,
-            name: Some("Untitled".into()),
+            name: None,
             timeline: Timeline::new(),
             patterns: vec![Pattern::new(64, 4)],
-            project_file: None,
         };
     }
     pub fn new(project_file: PathBuf) -> Self {
@@ -56,7 +54,6 @@ impl Project {
                     project.version, PROJECT_VERSION
                 )
             }
-            project.project_file = Some(project_file);
             return project;
         }
 
@@ -68,19 +65,24 @@ impl Project {
     pub fn pattern_store_mut(&mut self) -> PatternStoreMut {
         return PatternStoreMut::new(&mut self.patterns);
     }
-    pub fn save(&mut self, name: Option<String>) -> Result<(), Error> {
-        if let Some(name) = name {
+    pub fn save(&mut self, config: &Config, name: Option<String>) -> Result<(), Error> {
+        if let Some(name) = name.clone() {
             self.name = Some(name);
+        } else {
+            if let Some(name) = self.name.clone() {
+                // all is good
+            } else {
+                // there is no name
+                panic!("No name set for project");
+            }
         }
-        let mut file = File::create(self.project_file.clone().unwrap())?;
+        let file_path = config.project_dir.join(self.name.clone().unwrap());
+        let mut file = File::create(file_path)?;
         file.write_all(&PROJECT_HEADER)?;
         let _bin =
             bincode::serde::encode_into_std_write(self, &mut file, bincode::config::standard())
                 .unwrap();
 
         return Ok(());
-    }
-    pub fn is_saved(&self) -> bool {
-        return self.project_file.is_some();
     }
 }

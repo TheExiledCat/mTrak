@@ -13,7 +13,7 @@ use ratatui::{
     text::Line,
 };
 
-use crate::data::{pattern::Pattern, project::Project};
+use crate::data::{config::Config, pattern::Pattern, project::Project};
 
 use super::{
     constants,
@@ -55,6 +55,7 @@ pub struct App {
     pub main_view: MainView,
 }
 pub struct AppState {
+    pub config: Config,
     pub project: Project,
     pub selected_pattern_index: usize,
     /// render cache for storing pattern channels efficiently, maps pattern IDs to Channels
@@ -71,6 +72,7 @@ impl AppState {
         let patterns = &project.patterns;
         let channel_cache = ChannelCache::new(&patterns);
         return Self {
+            config: Config::default(),
             project,
             selected_pattern_index: 0,
             channel_cache: RefCell::new(channel_cache),
@@ -233,12 +235,13 @@ fn all_map(state: Rc<RefCell<AppState>>, event: &KeyEvent) -> bool {
     match event.code {
         KeyCode::Char('s') if event.modifiers.contains(KeyModifiers::CONTROL) => {
             let project_name = state.borrow().project.name.clone();
+            let config = state.borrow().config.clone();
             let mut state = state.borrow_mut();
-            let saved = state.project.is_saved();
-            if saved {
-                state.project.save(project_name).unwrap();
+
+            if let Some(name) = &project_name {
+                state.project.save(&config, project_name).unwrap();
             } else {
-                //TODO SAVING LOGIC
+                // ask for project name
             }
         }
         KeyCode::Up => {
