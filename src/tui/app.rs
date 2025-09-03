@@ -16,6 +16,7 @@ use ratatui::{
 use crate::data::{config::Config, pattern::Pattern, project::Project};
 
 use super::{
+    binding_fields::BindingField,
     constants,
     keymap::InputHandler,
     views::{header::Header, sidebar::SideBar, timeline::TimeLineView},
@@ -65,6 +66,7 @@ pub struct AppState {
     pub channel_index: usize,
     pub is_editing: bool,
     pub row_number_lookup: String,
+    pub fields: HashMap<String, BindingField>,
 }
 
 impl AppState {
@@ -81,6 +83,7 @@ impl AppState {
             column_index: 0,
             is_editing: false,
             row_number_lookup: String::new(),
+            fields: HashMap::new(),
         };
     }
 
@@ -231,7 +234,12 @@ impl AppLayout {
 fn all_map(state: Rc<RefCell<AppState>>, event: &KeyEvent) -> bool {
     let row_count =
         state.borrow().project.patterns[state.borrow().selected_pattern_index].row_count;
-
+    for field in &mut state.borrow_mut().fields {
+        if field.1.active {
+            field.1.read_input(event);
+            return true;
+        }
+    }
     match event.code {
         KeyCode::Char('s') if event.modifiers.contains(KeyModifiers::CONTROL) => {
             let project_name = state.borrow().project.name.clone();
