@@ -5,17 +5,17 @@ use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModif
 use crate::tui::{app::AppState, glyphs};
 
 #[cfg(target_os = "macos")]
-pub const CONTROL_SYMBOL: &'static str = "⌃";
+pub const CONTROL_SYMBOL: &str = "⌃";
 #[cfg(not(target_os = "macos"))]
-pub const CONTROL_SYMBOL: &'static str = "^";
-pub const ASCII_CONTROL_SYMBOL: &'static str = "^";
+pub const CONTROL_SYMBOL: &str = "^";
+pub const ASCII_CONTROL_SYMBOL: &str = "^";
 #[cfg(target_os = "macos")]
-pub const ALT_SYMBOL: &'static str = "⌥";
+pub const ALT_SYMBOL: &str = "⌥";
 #[cfg(not(target_os = "macos"))]
-pub const ALT_SYMBOL: &'static str = "A-";
-pub const ASCII_ALT_SYMBOL: &'static str = "A-";
-pub const SHIFT_SYMBOL: &'static str = "⇧";
-pub const ASCII_SHIFT_SYMBOL: &'static str = "S-";
+pub const ALT_SYMBOL: &str = "A-";
+pub const ASCII_ALT_SYMBOL: &str = "A-";
+pub const SHIFT_SYMBOL: &str = "⇧";
+pub const ASCII_SHIFT_SYMBOL: &str = "S-";
 /// A key plus its modifiers, e.g. Ctrl+S.
 ///
 /// Terminals disagree on how they report Shift: some send `Char('S')`, others `Char('s')` with
@@ -130,6 +130,12 @@ pub struct Binding<A> {
 /// what gets displayed (`hints`, `key_for`), so the two can never drift apart.
 pub struct Keymap<A> {
     bindings: Vec<Binding<A>>,
+}
+
+impl<A: Copy + PartialEq> Default for Keymap<A> {
+    fn default() -> Self {
+        return Self::new();
+    }
 }
 
 impl<A: Copy + PartialEq> Keymap<A> {

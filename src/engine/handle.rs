@@ -9,14 +9,13 @@ use std::{
 
 use midir::MidiOutputPort;
 
+use super::engine::{MtrakEngine, PlayMode};
 use crate::data::{
     midi::MidiEvent,
     note::NotePitch,
     pattern::{Pattern, PatternId},
     project::SequenceRow,
 };
-
-use super::engine::{MtrakEngine, PlayMode};
 
 pub enum EngineCommand {
     SetOutputPort(Option<MidiOutputPort>),

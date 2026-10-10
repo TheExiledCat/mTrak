@@ -14,6 +14,7 @@ use ratatui::{
     widgets::Padding,
 };
 
+use super::constants;
 use crate::{
     data::{
         config::{Config, TITLE},
@@ -37,8 +38,6 @@ use crate::{
         },
     },
 };
-
-use super::constants;
 
 pub type Result<T> = io::Result<T>;
 pub fn column_index_to_note_string_index(column_index: usize) -> Option<usize> {
@@ -273,17 +272,19 @@ impl AppState {
     }
 
     pub fn active_pattern(&self) -> &Pattern {
-        self.project
+        return self
+            .project
             .patterns
             .get_pattern_by_id(self.active_pattern)
-            .unwrap()
+            .unwrap();
     }
     pub fn active_pattern_mut(&mut self) -> &mut Pattern {
         self.changed_patterns.insert(self.active_pattern);
-        self.project
+        return self
+            .project
             .patterns
             .get_pattern_by_id_mut(self.active_pattern)
-            .unwrap()
+            .unwrap();
     }
     pub fn open_dialog(&mut self, dialog: Dialog) {
         self.pending_dialogs.push(dialog);
@@ -413,9 +414,7 @@ impl AppState {
         let pitch = self.play_key(track, key)?;
         let instrument = self.active_instrument;
         let pattern = self.active_pattern_mut();
-        let Some(mut note) = pattern.get_event(row, track).copied() else {
-            return None;
-        };
+        let mut note = pattern.get_event(row, track).copied()?;
         note.kind = NoteKind::On(pitch);
         note.instrument_id = note.instrument_id.or(Some(instrument));
         pattern.set_event(row, track, note);
@@ -428,13 +427,10 @@ impl AppState {
         let Char(c) = key.code else {
             return None;
         };
-        let Some(note) = self.key_to_note_pitch(c) else {
-            return None;
-        };
+        let note = self.key_to_note_pitch(c)?;
 
         if key.kind != KeyEventKind::Repeat {
-            self.engine
-                .play_note(track, self.active_instrument, note.clone());
+            self.engine.play_note(track, self.active_instrument, note);
         }
         return Some(note);
     }
@@ -550,7 +546,7 @@ impl<'a> TrackCache {
         let stale = self
             .patterns
             .get(&pattern_index)
-            .map_or(true, |rows| rows.len() != pattern.rows.len());
+            .is_none_or(|rows| rows.len() != pattern.rows.len());
         if stale {
             self.patterns
                 .insert(pattern_index, Self::build_rows(pattern));

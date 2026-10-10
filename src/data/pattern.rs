@@ -1,10 +1,7 @@
-use std::iter::repeat;
-
 use serde::{Deserialize, Serialize};
 
-use crate::{data::midi::MIDI_CHANNEL_MAX, tui::constants};
-
 use super::note::Note;
+use crate::{data::midi::MIDI_CHANNEL_MAX, tui::constants};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PatternId(pub u8);
 #[derive(Serialize, Deserialize, Clone)]
@@ -21,12 +18,16 @@ pub struct PatternRow {
     pub tracks: Vec<Note>,
     pub dirty: bool,
 }
+impl Default for PatternRow {
+    fn default() -> Self {
+        return Self::new();
+    }
+}
+
 impl PatternRow {
     pub fn new() -> Self {
         return Self {
-            tracks: repeat(Note::empty())
-                .take(constants::TRACK_COUNT as usize)
-                .collect(),
+            tracks: std::iter::repeat_n(Note::empty(), constants::TRACK_COUNT as usize).collect(),
             dirty: true,
         };
     }
@@ -53,7 +54,7 @@ impl Pattern {
         }
     }
     pub fn get_event(&self, row: usize, track: usize) -> Option<&Note> {
-        self.rows.get(row)?.tracks.get(track)
+        return self.rows.get(row)?.tracks.get(track);
     }
 
     pub fn set_event(&mut self, row: usize, track: usize, event: Note) {
@@ -160,7 +161,7 @@ impl PatternStore {
                 None => continue,
             };
             if pattern_name == name {
-                return Some(&pattern);
+                return Some(pattern);
             }
         }
         return None;
@@ -202,9 +203,8 @@ impl PatternStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::data::note::{NoteKind, NotePitch};
-
     use super::*;
+    use crate::data::note::{NoteKind, NotePitch};
 
     fn note() -> Note {
         let mut note = Note::empty();

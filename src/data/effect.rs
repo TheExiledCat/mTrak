@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +31,7 @@ impl CommandKind {
                 return MidiCommand::from_char(char)
                     .map(|c| c.as_command_kind())
                     .or_else(|_| EffectCommand::from_char(char).map(|c| c.as_command_kind()))
-                    .map_err(|_| NoteError::PARSE_FAILURE("Command type invalid".into()));
+                    .map_err(|_| NoteError::ParseFailure("Command type invalid".into()));
             }
         });
     }
@@ -67,15 +67,15 @@ impl MidiCommand {
             .iter()
             .position(|c| c.0 == char)
             .map(|p| MIDI_COMMAND_LOOKUP[p].1)
-            .ok_or(NoteError::PARSE_FAILURE("Not a midi command".into()));
+            .ok_or(NoteError::ParseFailure("Not a midi command".into()));
     }
     fn as_command_kind(&self) -> CommandKind {
-        return CommandKind::MidiCommand(self.clone());
+        return CommandKind::MidiCommand(*self);
     }
 }
 impl Display for MidiCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
+        return write!(
             f,
             "{}",
             MIDI_COMMAND_LOOKUP
@@ -83,7 +83,7 @@ impl Display for MidiCommand {
                 .position(|c| c.1 == *self)
                 .map(|p| MIDI_COMMAND_LOOKUP[p].0)
                 .unwrap()
-        )
+        );
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
@@ -96,10 +96,10 @@ impl EffectCommand {
             .iter()
             .position(|c| c.0 == char)
             .map(|p| EFFECT_COMMAND_LOOKUP[p].1)
-            .ok_or(NoteError::PARSE_FAILURE("Not an effect command".into()));
+            .ok_or(NoteError::ParseFailure("Not an effect command".into()));
     }
     fn as_command_kind(&self) -> CommandKind {
-        return CommandKind::Effect(self.clone());
+        return CommandKind::Effect(*self);
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
@@ -113,17 +113,22 @@ impl Command {
     pub fn new(kind: CommandKind, value: u8) -> Self {
         return Self { kind, value };
     }
-    pub fn from_str(text: &str) -> Result<Self, NoteError> {
+}
+
+impl FromStr for Command {
+    type Err = NoteError;
+
+    fn from_str(text: &str) -> Result<Self, NoteError> {
         let chars = text.chars();
         let chars: Vec<char> = chars.collect();
-        let err = NoteError::PARSE_FAILURE("Command should be 3 digits".into());
+        let err = NoteError::ParseFailure("Command should be 3 digits".into());
         if chars.len() != 3 {
             return Err(err);
         }
 
         let kind = CommandKind::from_char(chars[0])?;
-        let value = u8::from_str_radix(&String::from(chars[1..=2].iter().collect::<String>()), 16)
-            .map_err(|_| NoteError::PARSE_FAILURE("Invalid value".into()))?;
+        let value = u8::from_str_radix(&chars[1..=2].iter().collect::<String>(), 16)
+            .map_err(|_| NoteError::ParseFailure("Invalid value".into()))?;
 
         return Ok(Command::new(kind, value));
     }
@@ -149,7 +154,7 @@ impl Default for Command {
 }
 impl Display for EffectCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
+        return write!(
             f,
             "{}",
             EFFECT_COMMAND_LOOKUP
@@ -157,7 +162,7 @@ impl Display for EffectCommand {
                 .position(|c| c.1 == *self)
                 .map(|p| EFFECT_COMMAND_LOOKUP[p].0)
                 .unwrap()
-        )
+        );
     }
 }
 

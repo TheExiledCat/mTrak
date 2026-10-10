@@ -20,6 +20,12 @@ pub struct Voices {
     velocity: u8,
 }
 
+impl Default for Voices {
+    fn default() -> Self {
+        return Self::new();
+    }
+}
+
 impl Voices {
     pub fn new() -> Self {
         return Self {

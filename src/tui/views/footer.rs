@@ -22,6 +22,12 @@ pub struct Footer {
     /// When the current hints were first shown, which the scroll position is derived from.
     shown_since: Instant,
 }
+impl Default for Footer {
+    fn default() -> Self {
+        return Self::new();
+    }
+}
+
 impl Footer {
     pub fn new() -> Self {
         return Self {
@@ -50,7 +56,7 @@ impl Footer {
                 Span::styled(format!(" {}  ", hint.label), state.theme.key_hint_label),
             ]
         });
-        Line::from_iter(spans)
+        return Line::from_iter(spans);
     }
 }
 
