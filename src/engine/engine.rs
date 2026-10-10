@@ -3,7 +3,7 @@ use std::{
         Arc,
         mpsc::{Receiver, RecvTimeoutError, Sender},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use chrono::Utc;
@@ -14,7 +14,10 @@ use crate::{
     data::{
         config::TITLE,
         effect::{CommandKind, MidiCommand},
-        midi::{MIDI_CHANNEL_MAX, MidiEvent, PULSES_PER_LINE, VELOCITY_MAX, raw_message_to_bytes},
+        midi::{
+            DEFAULT_BPM, MIDI_CHANNEL_MAX, MidiEvent, PULSES_PER_LINE, VELOCITY_MAX,
+            pulse_duration, raw_message_to_bytes, tick_duration,
+        },
         note::{Note, NoteKind},
         pattern::{Pattern, PatternId},
         project::SequenceRow,
@@ -73,6 +76,7 @@ pub struct MtrakEngine {
 
     patterns: Vec<Pattern>,
     sequence: Vec<SequenceRow>,
+    bpm: u8,
     output_connection: Option<MidiOutputConnection>,
     pending_events: Vec<MidiEvent>,
     mode: PlayMode,
@@ -96,6 +100,7 @@ impl MtrakEngine {
             status,
             patterns: Vec::new(),
             sequence: Vec::new(),
+            bpm: DEFAULT_BPM,
             output_connection: None,
             mode: PlayMode::Paused,
             position: Position {
@@ -145,6 +150,7 @@ impl MtrakEngine {
             EngineCommand::Stop => self.stop(),
             EngineCommand::SetPattern(id, pattern) => self.set_pattern(id, pattern),
             EngineCommand::SetSequence(sequence) => self.sequence = sequence,
+            EngineCommand::SetBpm(bpm) => self.bpm = bpm,
             EngineCommand::Event(message) => self.pending_events.push(message),
             EngineCommand::PlayNote {
                 track,
@@ -164,6 +170,7 @@ impl MtrakEngine {
             EngineCommand::SetGlobalVolume { channel, volume } => {
                 self.voices.set_global_volume(channel as usize, volume)
             }
+            EngineCommand::SetGlobalVelocity(velocity) => self.voices.set_global_velocity(velocity),
         }
     }
 
@@ -182,6 +189,24 @@ impl MtrakEngine {
     /// The pattern at the current play position.
     fn current_pattern(&self) -> Option<&Pattern> {
         return self.patterns.get(self.position.pattern.0 as usize);
+    }
+
+    /// The song's BPM, unless a tempo command has changed it.
+    fn bpm(&self) -> u8 {
+        return self.effect_command_handler.bpm().unwrap_or(self.bpm);
+    }
+
+    /// The pattern's ticks per line, unless a tempo command has changed the speed.
+    fn ticks_per_line(&self, pattern: &Pattern) -> u8 {
+        return self
+            .effect_command_handler
+            .speed()
+            .unwrap_or(pattern.ticks_per_line)
+            .max(1);
+    }
+
+    fn pulse_duration(&self) -> Duration {
+        return pulse_duration(self.bpm());
     }
 
     /// Plays a single pattern from row 0, once or on repeat.
@@ -219,17 +244,17 @@ impl MtrakEngine {
 
     /// Resets voices and the clock, then plays the first row.
     fn start(&mut self, mode: PlayMode) {
-        let Some(pulse_duration) = self.current_pattern().map(Pattern::pulse_duration) else {
+        if self.current_pattern().is_none() {
             self.stop();
             return;
-        };
+        }
         let mut out = vec![];
         self.voices.release_all(&mut out);
         out.extend(self.reset_commands());
         self.dispatch_messages(out);
         let now = Instant::now();
         self.clock = Some(Clock {
-            next_pulse: now + pulse_duration,
+            next_pulse: now,
             pulse_in_row: 0,
             row_start: now,
             tick: 0,
@@ -239,6 +264,16 @@ impl MtrakEngine {
         self.publish_position();
         self.dispatch(MidiEvent::Message(Message::Start));
         self.play_row();
+        self.time_next_pulse(now);
+    }
+
+    /// Schedules the first pulse after a row starts, so a tempo command on the row applies
+    /// straight away.
+    fn time_next_pulse(&mut self, row_start: Instant) {
+        let pulse_duration = self.pulse_duration();
+        if let Some(clock) = &mut self.clock {
+            clock.next_pulse = row_start + pulse_duration;
+        }
     }
 
     /// Stops playback and releases every sounding note.
@@ -267,11 +302,12 @@ impl MtrakEngine {
     fn next_effect_tick(&self) -> Option<Instant> {
         let clock = self.clock.as_ref()?;
         let pattern = self.current_pattern()?;
+        let ticks_per_line = self.ticks_per_line(pattern);
         let next = clock.tick + 1;
-        if next >= pattern.ticks_per_line.max(1) as u32 {
+        if next >= ticks_per_line as u32 {
             return None;
         }
-        return Some(clock.row_start + pattern.tick_duration() * next);
+        return Some(clock.row_start + tick_duration(self.bpm(), ticks_per_line) * next);
     }
 
     /// Catches up on every pulse and effect tick that is due by now.
@@ -297,10 +333,11 @@ impl MtrakEngine {
 
     /// One MIDI clock pulse; moves to the next row every PULSES_PER_LINE pulses.
     fn pulse(&mut self) {
-        let Some(pulse_duration) = self.current_pattern().map(Pattern::pulse_duration) else {
+        if self.current_pattern().is_none() {
             self.stop();
             return;
-        };
+        }
+        let pulse_duration = self.pulse_duration();
         let Some(clock) = &mut self.clock else {
             return;
         };
@@ -317,6 +354,7 @@ impl MtrakEngine {
         self.advance_row();
         if self.clock.is_some() {
             self.play_row();
+            self.time_next_pulse(pulse_time);
         }
     }
 
@@ -394,7 +432,7 @@ impl MtrakEngine {
         let mut ticks = 0;
         for _ in 0..self.rows_per_pass() {
             let pattern = self.patterns.get(position.pattern.0 as usize)?;
-            ticks += pattern.ticks_per_line.max(1) as u32;
+            ticks += self.ticks_per_line(pattern) as u32;
             position = self.next_position(&position)?;
             let note = self
                 .patterns
@@ -645,7 +683,7 @@ mod tests {
     use midi::Channel;
 
     use crate::data::{
-        effect::{Command, MidiCommand},
+        effect::{Command, EffectCommand, MidiCommand},
         note::NotePitch,
     };
 
@@ -685,7 +723,9 @@ mod tests {
 
         /// Runs the rest of the row's effect ticks, then pulses the clock until the next row has played.
         fn next_row(&mut self) {
-            let ticks = self.engine.current_pattern().unwrap().ticks_per_line.max(1);
+            let ticks = self
+                .engine
+                .ticks_per_line(self.engine.current_pattern().unwrap());
             for _ in 1..ticks {
                 self.engine.effect_tick();
             }
@@ -1564,6 +1604,60 @@ mod tests {
             .apply(EngineCommand::PlayPattern(PatternId(3), true));
         assert_eq!(harness.messages()[0], Message::Stop);
         assert!(harness.engine.clock.is_none());
+    }
+
+    fn tempo(value: u8) -> Note {
+        let mut note = Note::empty();
+        note.command = Command::new(CommandKind::Effect(EffectCommand::SetTempo), value);
+        return note;
+    }
+
+    #[test]
+    fn tempo_carries_over_into_the_next_pattern() {
+        let mut harness = Harness::new(vec![
+            pattern(1, &[(0, 0, tempo(0x90)), (0, 1, tempo(0x03))]),
+            pattern(2, &[(1, 0, tempo(0x00))]),
+        ]);
+        harness.engine.apply(EngineCommand::SetBpm(0x60));
+        harness.engine.apply(EngineCommand::SetSequence(vec![
+            SequenceRow {
+                pattern_id: PatternId(0),
+                repeats: 1,
+            },
+            SequenceRow {
+                pattern_id: PatternId(1),
+                repeats: 1,
+            },
+        ]));
+        harness.engine.apply(EngineCommand::PlaySong(0, true));
+        assert_eq!(harness.engine.bpm(), 0x90);
+        harness.next_row();
+        assert_eq!(harness.engine.position.pattern.0, 1);
+        assert_eq!(harness.engine.bpm(), 0x90);
+        assert_eq!(harness.engine.ticks_per_line(&Pattern::new(1)), 3);
+        harness.next_row();
+        assert_eq!(harness.engine.bpm(), 0x60);
+        assert_eq!(harness.engine.ticks_per_line(&Pattern::new(1)), 6);
+    }
+
+    #[test]
+    fn tempo_applies_from_its_own_row() {
+        let mut harness = Harness::new(vec![pattern(4, &[(0, 0, tempo(0xFA))])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        let clock = harness.engine.clock.as_ref().unwrap();
+        assert_eq!(clock.next_pulse - clock.row_start, pulse_duration(0xFA));
+    }
+
+    #[test]
+    fn stopping_goes_back_to_the_song_tempo() {
+        let mut harness = Harness::new(vec![pattern(4, &[(0, 0, tempo(0x90))])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.engine.apply(EngineCommand::Stop);
+        assert_eq!(harness.engine.bpm(), DEFAULT_BPM);
     }
 
     #[test]

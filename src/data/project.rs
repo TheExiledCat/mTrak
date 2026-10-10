@@ -6,10 +6,14 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::{midi::MIDI_CHANNEL_MAX, pattern::PatternId};
+use crate::data::{
+    midi::{DEFAULT_BPM, MIDI_CHANNEL_MAX},
+    pattern::PatternId,
+};
 
 use super::{
     config::Config,
+    instrument::Instrument,
     pattern::{Pattern, PatternStore},
 };
 const PROJECT_HEADER: [u8; 4] = *b"MTRK";
@@ -41,23 +45,25 @@ impl SequenceRow {
 pub struct Project {
     pub version: u16,
     pub name: Option<String>,
+    pub bpm: u8,
+    pub global_velocity: u8,
     pub sequence: Vec<SequenceRow>,
     pub patterns: PatternStore,
-    pub instruments: [String; MIDI_CHANNEL_MAX as usize + 1],
-    pub global_instrument_volumes: [u8; MIDI_CHANNEL_MAX as usize + 1],
+    pub instruments: [Instrument; MIDI_CHANNEL_MAX as usize + 1],
 }
 impl Project {
     pub fn empty() -> Self {
         return Project {
             version: PROJECT_VERSION,
             name: None,
+            bpm: DEFAULT_BPM,
+            global_velocity: 0xFF,
             sequence: vec![SequenceRow {
                 pattern_id: PatternId(0),
                 repeats: 1,
             }],
-            instruments: std::array::from_fn(|_| String::new()),
+            instruments: std::array::from_fn(|_| Instrument::default()),
             patterns: PatternStore::new(vec![Pattern::default()]),
-            global_instrument_volumes: [0xFF; _],
         };
     }
     pub fn new(project_file_path: PathBuf) -> Self {

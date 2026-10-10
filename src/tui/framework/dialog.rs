@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Clear, Padding, Widget},
+    widgets::{Block, Borders, Clear, Padding, Widget},
 };
 
 use crate::tui::{
@@ -383,6 +383,7 @@ impl DialogComponent for TextPrompt {
 /// A vertical list to pick one option from. Contributes no value when it has no options.
 pub struct Select {
     id: &'static str,
+    label: Option<String>,
     options: Vec<String>,
     selected: usize,
     offset: usize,
@@ -401,6 +402,7 @@ impl Select {
     pub fn new(id: &'static str, options: Vec<String>) -> Self {
         return Self {
             id,
+            label: None,
             options,
             selected: 0,
             offset: 0,
@@ -410,6 +412,11 @@ impl Select {
                 .bind(Key::plain(KeyCode::Up), SelectAction::Up, "Choose")
                 .bind(Key::plain(KeyCode::Down), SelectAction::Down, "Choose"),
         };
+    }
+
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        return self;
     }
 
     pub fn selected(mut self, index: usize) -> Self {
@@ -449,8 +456,23 @@ impl MtrakWidget for Select {
     }
 
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
+        let area = match &self.label {
+            Some(label) => {
+                let [label_area, rest] =
+                    Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
+                Line::from(format!("{label}:")).render(label_area, buf);
+                rest
+            }
+            None => area,
+        };
+        let block = Block::new()
+            .borders(Borders::LEFT)
+            .border_style(state.theme.dialog_border);
+        let list_area = block.inner(area);
+        block.render(area, buf);
+        let area = list_area;
         if self.options.is_empty() {
-            Line::from("(none)").render(area, buf);
+            Line::from(" (none)").render(area, buf);
             return;
         }
         // scroll just enough to keep the selection in view
@@ -471,14 +493,16 @@ impl MtrakWidget for Select {
                 height: 1,
                 ..area
             };
-            Line::styled(self.options[index].as_str(), style).render(line_area, buf);
+            let marker = if index == self.selected { "▶" } else { " " };
+            Line::styled(format!("{marker} {}", self.options[index]), style).render(line_area, buf);
         }
     }
 }
 
 impl DialogComponent for Select {
     fn get_height(&self) -> u8 {
-        return self.options.len().clamp(1, self.max_visible as usize) as u8;
+        let label = self.label.is_some() as u8;
+        return self.options.len().clamp(1, self.max_visible as usize) as u8 + label;
     }
     fn focusable(&self) -> bool {
         return !self.options.is_empty();

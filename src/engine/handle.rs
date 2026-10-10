@@ -25,6 +25,7 @@ pub enum EngineCommand {
     Stop,
     SetPattern(PatternId, Pattern),
     SetSequence(Vec<SequenceRow>),
+    SetBpm(u8),
     Event(MidiEvent),
     PlayNote {
         track: usize,
@@ -37,6 +38,7 @@ pub enum EngineCommand {
         channel: u8,
         volume: u8,
     },
+    SetGlobalVelocity(u8),
 }
 
 #[derive(Default)]
@@ -123,6 +125,9 @@ impl EngineHandle {
     pub fn set_sequence(&self, sequence: Vec<SequenceRow>) {
         self.send(EngineCommand::SetSequence(sequence));
     }
+    pub fn set_bpm(&self, bpm: u8) {
+        self.send(EngineCommand::SetBpm(bpm));
+    }
     pub fn send_event(&self, message: MidiEvent) {
         self.send(EngineCommand::Event(message));
     }
@@ -149,6 +154,9 @@ impl EngineHandle {
 
     pub fn set_global_volume(&self, channel: u8, volume: u8) {
         self.send(EngineCommand::SetGlobalVolume { channel, volume });
+    }
+    pub fn set_global_velocity(&self, velocity: u8) {
+        self.send(EngineCommand::SetGlobalVelocity(velocity));
     }
 }
 
