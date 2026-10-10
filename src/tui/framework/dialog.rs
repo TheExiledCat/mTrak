@@ -84,11 +84,20 @@ pub enum DialogAction {
     PrevField,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PopupLevel {
+    Info,
+    Warning,
+    Error,
+}
+
 /// A modal popup made of components. Open one with `AppState::open_dialog`; once the user
 /// submits or cancels, the matching callback runs with the app state and the dialog closes.
 pub struct Dialog {
     title: String,
     width: u16,
+    level: PopupLevel,
+    is_cancellable: bool,
     components: Vec<Box<dyn DialogComponent>>,
     focus: Option<usize>,
     on_submit: Option<OnSubmit>,
@@ -102,6 +111,8 @@ impl Dialog {
         let mut dialog = Self {
             title: title.into(),
             width: 50,
+            level: PopupLevel::Info,
+            is_cancellable: true,
             components,
             focus: None,
             on_submit: None,
@@ -130,8 +141,18 @@ impl Dialog {
             vec![TextPrompt::new(id, "").initial(placeholder).boxed()],
         );
     }
+    pub fn popup(level: PopupLevel, title: impl Into<String>, text: impl Into<String>) -> Self {
+        let mut dialog = Dialog::new(title, vec![Label::new(text).boxed()]).is_cancellable(false);
+        dialog.level = level;
+        return dialog;
+    }
     pub fn width(mut self, width: u16) -> Self {
         self.width = width;
+        return self;
+    }
+
+    pub fn is_cancellable(mut self, is_cancellable: bool) -> Self {
+        self.is_cancellable = is_cancellable;
         return self;
     }
 
@@ -205,7 +226,8 @@ impl KeyActions for Dialog {
     fn perform(&mut self, action: DialogAction, state: &mut AppState) {
         match action {
             DialogAction::Submit => self.submit(state),
-            DialogAction::Cancel => self.cancel(state),
+            DialogAction::Cancel if self.is_cancellable => self.cancel(state),
+            DialogAction::Cancel => {}
             DialogAction::NextField => self.move_focus(true),
             DialogAction::PrevField => self.move_focus(false),
         }
@@ -234,6 +256,9 @@ impl MtrakWidget for Dialog {
             self.components[index].key_hints(state, hints);
         }
         self.keys.hints(hints);
+        if !self.is_cancellable {
+            hints.retain(|h| h.label != "Cancel");
+        }
         // switching fields is pointless with fewer than two of them
         if self.components.iter().filter(|c| c.focusable()).count() < 2 {
             hints.retain(|h| h.label != "Field");
@@ -243,7 +268,11 @@ impl MtrakWidget for Dialog {
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
         let block = Block::bordered()
             .title(format!(" {} ", self.title))
-            .border_style(state.theme.dialog_border)
+            .border_style(match self.level {
+                PopupLevel::Info => state.theme.dialog_border,
+                PopupLevel::Warning => state.theme.dialog_warning_border,
+                PopupLevel::Error => state.theme.dialog_error_border,
+            })
             .padding(Padding::horizontal(1));
 
         // borders + content + spacer + hint line

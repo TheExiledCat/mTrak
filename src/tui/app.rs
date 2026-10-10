@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     io,
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -30,7 +31,10 @@ use crate::{
         },
         glyphs,
         theme::Theme,
-        views::main_view::MainView,
+        views::{
+            file_browser::{FileBrowser, Submit},
+            main_view::MainView,
+        },
     },
 };
 
@@ -56,6 +60,7 @@ pub struct App {
     pub fps: u16,
     pub root: Container,
     pub dialogs: Vec<Dialog>,
+    pub file_browser: FileBrowser,
     held_keys: HashSet<KeyCode>,
     reports_releases: bool,
 }
@@ -68,6 +73,7 @@ impl App {
             fps,
             root: Container::new(MainView::new(&state).boxed(), Padding::ZERO),
             dialogs: Vec::new(),
+            file_browser: FileBrowser::new(),
             held_keys: HashSet::new(),
             reports_releases: false,
             state,
@@ -88,12 +94,19 @@ impl App {
             }
             match self.dialogs.last_mut() {
                 Some(dialog) => dialog.handle_event(&mut self.state, &event),
-                None => self.root.handle_event(&mut self.state, &event),
+                None => {
+                    self.file_browser.handle_event(&mut self.state, &event)
+                        || self.root.handle_event(&mut self.state, &event)
+                }
             };
             self.sync_dialogs();
         }
         self.state.update();
-        self.root.update(&mut self.state);
+        if self.file_browser.is_open() {
+            self.file_browser.update(&mut self.state);
+        } else {
+            self.root.update(&mut self.state);
+        }
         for dialog in &mut self.dialogs {
             dialog.update(&mut self.state);
         }
@@ -101,10 +114,16 @@ impl App {
         self.state.send_changes_to_engine();
         self.terminal.draw(|f| {
             let area = f.area();
-            f.buffer_mut().set_style(area, self.state.theme.desktop);
-            self.root.render(&self.state, f.area(), f.buffer_mut());
+            let buf = f.buffer_mut();
+            buf.set_style(area, self.state.theme.desktop);
+            let file_browser = &mut self.file_browser;
+            if file_browser.is_open() {
+                file_browser.render(&self.state, area, buf);
+            } else {
+                self.root.render(&self.state, area, buf);
+            }
             for dialog in &mut self.dialogs {
-                dialog.render(&self.state, f.area(), f.buffer_mut());
+                dialog.render(&self.state, area, buf);
             }
             if glyphs::ascii_mode() {
                 glyphs::asciify(f.buffer_mut());
@@ -132,6 +151,9 @@ impl App {
     fn sync_dialogs(&mut self) {
         self.dialogs.retain(|d| !d.is_closed());
         self.dialogs.append(&mut self.state.pending_dialogs);
+        if let Some(on_submit) = self.state.save_file_request.take() {
+            self.file_browser.save_file(on_submit);
+        }
     }
 }
 const EVENT_HISTORY_MAX: usize = 256;
@@ -161,6 +183,7 @@ pub struct AppState {
     pub current_octave: u8,
     pub recording: bool,
     pending_dialogs: Vec<Dialog>,
+    save_file_request: Option<Box<Submit>>,
     changed_patterns: HashSet<PatternId>,
     sequence_changed: bool,
 }
@@ -188,6 +211,7 @@ impl AppState {
             event_history: VecDeque::new(),
             channel_hits: [None; _],
             sequence_changed: true,
+            save_file_request: None,
         };
         for (channel, instrument) in state.project.instruments.iter().enumerate() {
             state
@@ -262,6 +286,10 @@ impl AppState {
     }
     pub fn open_dialog(&mut self, dialog: Dialog) {
         self.pending_dialogs.push(dialog);
+    }
+
+    pub fn request_save_file(&mut self, on_submit: impl FnOnce(&mut AppState, PathBuf) + 'static) {
+        self.save_file_request = Some(Box::new(on_submit));
     }
     pub fn request_exit(&mut self) {
         self.exit_requested = true;

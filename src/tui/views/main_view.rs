@@ -20,6 +20,7 @@ use crate::tui::{
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MainAction {
     Quit,
+    Save,
     PlayPattern,
     PlaySong,
 }
@@ -43,6 +44,7 @@ impl MainView {
                     MainAction::PlayPattern,
                     "Play PTN",
                 )
+                .bind(Key::ctrl('s'), MainAction::Save, "Save")
                 .bind(
                     Key::new(constants::EXIT_KEY, KeyModifiers::CONTROL),
                     MainAction::Quit,
@@ -61,6 +63,7 @@ impl KeyActions for MainView {
     fn perform(&mut self, action: MainAction, state: &mut AppState) {
         match action {
             MainAction::Quit => state.request_exit(),
+            MainAction::Save => state.request_save_file(|_, _| {}),
             MainAction::PlayPattern => state.play_pattern(state.active_pattern),
             MainAction::PlaySong => state.play_song(state.active_sequence_index),
         }
@@ -87,6 +90,7 @@ impl MtrakWidget for MainView {
         hints.extend(self.keys.hint_for(MainAction::PlayPattern));
         self.content.key_hints(state, hints);
         self.header.key_hints(state, hints);
+        hints.extend(self.keys.hint_for(MainAction::Save));
         hints.extend(self.keys.hint_for(MainAction::Quit));
     }
 

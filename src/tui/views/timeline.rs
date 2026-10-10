@@ -37,7 +37,6 @@ const ROWS_TOP_OFFSET: u16 = 1 + TRACK_PADDING_TOP;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TimelineAction {
-    Save,
     RowUp,
     RowDown,
     PrevTrack,
@@ -111,8 +110,7 @@ fn normal_keymap() -> Keymap<TimelineAction> {
         Keymap::new()
             .bind(Key::char(' '), ToggleEdit, "Edit")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
-            .bind(Key::char(NOTE_OFF_KEY), NoteOff, "Off")
-            .bind(Key::ctrl('s'), Save, "Save"),
+            .bind(Key::char(NOTE_OFF_KEY), NoteOff, "Off"),
     );
 }
 
@@ -150,8 +148,7 @@ fn edit_keymap() -> Keymap<TimelineAction> {
                 Key::new(KeyCode::Insert, KeyModifiers::ALT),
                 InsertLine,
                 "Ins",
-            )
-            .bind(Key::ctrl('s'), Save, "Save"),
+            ),
     );
 }
 
@@ -254,16 +251,6 @@ impl KeyActions for TimeLineView {
 
     fn perform(&mut self, action: TimelineAction, state: &mut AppState) {
         match action {
-            TimelineAction::Save => {
-                let project_name = state.project.name.clone();
-                let config = state.config.clone();
-
-                if let Some(_) = &project_name {
-                    state.project.save(&config, project_name).unwrap();
-                } else {
-                    // ask for project name
-                }
-            }
             TimelineAction::RowUp => {
                 let row_count = state.active_pattern().row_count;
                 self.row_index = wrap_step(self.row_index, -1, row_count);
