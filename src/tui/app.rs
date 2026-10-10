@@ -28,6 +28,7 @@ use crate::{
             core_extensions::Boxed, dialog::Dialog, widget::MtrakWidget,
             widgets::container::Container,
         },
+        glyphs,
         theme::Theme,
         views::main_view::MainView,
     },
@@ -104,6 +105,9 @@ impl App {
             self.root.render(&self.state, f.area(), f.buffer_mut());
             for dialog in &mut self.dialogs {
                 dialog.render(&self.state, f.area(), f.buffer_mut());
+            }
+            if glyphs::ascii_mode() {
+                glyphs::asciify(f.buffer_mut());
             }
         })?;
         return Ok(!self.state.exit_requested);

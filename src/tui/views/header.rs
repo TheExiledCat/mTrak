@@ -128,13 +128,14 @@ impl MtrakWidget for HeaderTopLeft {
         buf: &mut ratatui::prelude::Buffer,
     ) {
         let block = Block::bordered().borders(Borders::LEFT | Borders::RIGHT);
-        let layout =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Fill(2)]).split(block.inner(area));
-        block.render(area, buf);
         let sequence_block = Block::bordered()
             .title_top("Sequence")
             .title_style(Style::new().reversed())
             .borders(Borders::RIGHT);
+        let sequence_width = self.sequence_list.width(state) + 1;
+        let layout = Layout::horizontal([Constraint::Length(sequence_width), Constraint::Fill(1)])
+            .split(block.inner(area));
+        block.render(area, buf);
         self.sequence_list
             .render(state, sequence_block.inner(layout[0]), buf);
         sequence_block.render(layout[0], buf);
@@ -280,6 +281,7 @@ enum SequenceAction {
     IncRepeats,
     DecRepeats,
 }
+const SEQUENCE_LIST_WIDTH: u16 = 9;
 struct SequenceList {
     keymap: Keymap<SequenceAction>,
 }
@@ -311,6 +313,41 @@ impl SequenceList {
             .bind(Key::char('>'), IncRepeats, "+REP")
             .bind(Key::char('<'), DecRepeats, "-REP");
         return Self { keymap };
+    }
+
+    fn keybind_rows(&self, state: &AppState) -> [(String, String); 6] {
+        let key = |action| self.keymap.key_for(action).unwrap();
+        return [
+            (
+                format!("{}/{}", key(NextPattern), key(PrevPattern)),
+                "DN/UP".to_string(),
+            ),
+            (key(Insert).to_string(), "ADD".to_string()),
+            (key(Delete).to_string(), "DEL".to_string()),
+            (
+                format!("{}/{}", key(DecPattern), key(IncPattern)),
+                "PTN".to_string(),
+            ),
+            (
+                format!("{}/{}", key(DecRepeats), key(IncRepeats)),
+                "REP".to_string(),
+            ),
+            ("LEN".to_string(), state.project.song_length().to_string()),
+        ];
+    }
+
+    fn keybind_widths(rows: &[(String, String)]) -> (u16, u16) {
+        return rows.iter().fold((0, 0), |(keys, labels), (key, label)| {
+            (
+                keys.max(Line::raw(key.as_str()).width() as u16),
+                labels.max(Line::raw(label.as_str()).width() as u16 + 1),
+            )
+        });
+    }
+
+    fn width(&self, state: &AppState) -> u16 {
+        let (key_width, label_width) = Self::keybind_widths(&self.keybind_rows(state));
+        return SEQUENCE_LIST_WIDTH + key_width + 1 + label_width;
     }
 }
 impl KeyActions for SequenceList {
@@ -366,7 +403,9 @@ impl MtrakWidget for SequenceList {
         area: ratatui::prelude::Rect,
         buf: &mut ratatui::prelude::Buffer,
     ) {
-        let layout = Layout::horizontal([Constraint::Length(9), Constraint::Fill(1)]).split(area);
+        let layout =
+            Layout::horizontal([Constraint::Length(SEQUENCE_LIST_WIDTH), Constraint::Fill(1)])
+                .split(area);
         let lines = (0..state.project.sequence.len())
             .map(|i| {
                 let row = &state.project.sequence[i];
@@ -388,30 +427,22 @@ impl MtrakWidget for SequenceList {
             .scroll((state.active_sequence_index as u16, 0))
             .centered();
         list.render(list_area, buf);
-        let bindings = self.keymap.bindings();
-        let (up, down, ins, del, pat_up, pat_down, rep_up, rep_down) = (
-            self.keymap.key_for(PrevPattern).unwrap(),
-            self.keymap.key_for(NextPattern).unwrap(),
-            self.keymap.key_for(Insert).unwrap(),
-            self.keymap.key_for(Delete).unwrap(),
-            self.keymap.key_for(IncPattern).unwrap(),
-            self.keymap.key_for(DecPattern).unwrap(),
-            self.keymap.key_for(IncRepeats).unwrap(),
-            self.keymap.key_for(DecRepeats).unwrap(),
-        );
-        let lines = [
-            format!("{}/{}: {:>4}", down, up, "DN/UP"),
-            format!("{}: {:>4}", ins, "ADD"),
-            format!("{}: {:>4}", del, "DEL"),
-            format!("{}/{}: {:>4}", pat_down, pat_up, "PTN"),
-            format!("{}/{}: {:>4}", rep_down, rep_up, "REP"),
-        ]
-        .into_iter()
-        .map(Line::raw)
-        .chain([Line::raw(format!("LEN: {}", state.project.song_length()))])
-        .collect::<Vec<Line>>();
-
-        Paragraph::new(lines).centered().render(layout[1], buf);
+        let rows = self.keybind_rows(state);
+        let (key_width, label_width) = Self::keybind_widths(&rows);
+        let [keys_area, colon_area, labels_area] = Layout::horizontal([
+            Constraint::Length(key_width),
+            Constraint::Length(1),
+            Constraint::Length(label_width),
+        ])
+        .areas(layout[1]);
+        let (keys, labels): (Vec<Line>, Vec<Line>) = rows
+            .into_iter()
+            .map(|(key, label)| (Line::raw(key), Line::raw(format!(" {label}"))))
+            .unzip();
+        let colons = repeat_n(Line::raw(":"), keys.len()).collect::<Vec<Line>>();
+        Paragraph::new(keys).right_aligned().render(keys_area, buf);
+        Paragraph::new(colons).render(colon_area, buf);
+        Paragraph::new(labels).render(labels_area, buf);
     }
 }
 struct PatternInfo {

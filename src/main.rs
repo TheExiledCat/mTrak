@@ -7,7 +7,7 @@ use ratatui::crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
 };
-use tui::app::App;
+use tui::{app::App, glyphs};
 
 pub mod cli;
 pub mod data;
@@ -17,6 +17,7 @@ pub mod util;
 
 fn main() -> Result<(), io::Error> {
     let args = Cli::parse();
+    glyphs::set_ascii_mode(args.ascii_mode);
     let terminal = ratatui::init();
     execute!(io::stdout(), EnableMouseCapture)?;
     let mut app = App::new(
