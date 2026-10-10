@@ -189,9 +189,15 @@ impl AppState {
             channel_hits: [None; _],
             sequence_changed: true,
         };
-        for (channel, volume) in state.project.global_instrument_volumes.iter().enumerate() {
-            state.engine.set_global_volume(channel as u8, *volume);
+        for (channel, instrument) in state.project.instruments.iter().enumerate() {
+            state
+                .engine
+                .set_global_volume(channel as u8, instrument.volume);
         }
+        state.engine.set_bpm(state.project.bpm);
+        state
+            .engine
+            .set_global_velocity(state.project.global_velocity);
         return state;
     }
     pub fn update(&mut self) {
@@ -453,8 +459,23 @@ impl AppState {
             .set_event(row_index, track_index, current_event);
     }
 
+    pub fn increase_bpm(&mut self) {
+        self.project.bpm = self.project.bpm.saturating_add(1);
+        self.engine.set_bpm(self.project.bpm);
+    }
+
+    pub fn decrease_bpm(&mut self) {
+        self.project.bpm = self.project.bpm.saturating_sub(1).max(1);
+        self.engine.set_bpm(self.project.bpm);
+    }
+
+    pub fn set_global_velocity(&mut self, velocity: u8) {
+        self.project.global_velocity = velocity;
+        self.engine.set_global_velocity(velocity);
+    }
+
     pub fn set_global_volume(&mut self, channel: u8, vol: u8) {
-        self.project.global_instrument_volumes[channel as usize] = vol;
+        self.project.instruments[channel as usize].volume = vol;
         self.engine.set_global_volume(channel, vol);
     }
 }

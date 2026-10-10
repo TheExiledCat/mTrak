@@ -1,18 +1,14 @@
-use std::{iter::repeat, time::Duration};
+use std::iter::repeat;
 
 use serde::{Deserialize, Serialize};
 
 use crate::tui::constants;
 
-use super::{
-    midi::{PULSES_PER_LINE, PULSES_PER_QUARTER},
-    note::Note,
-};
+use super::note::Note;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PatternId(pub u8);
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Pattern {
-    pub bpm: u8,
     pub ticks_per_line: u8,
     pub row_count: u8,
     pub track_count: u8,
@@ -44,7 +40,6 @@ impl Pattern {
             rows: Vec::new(),
             name: None,
 
-            bpm: 125,
             ticks_per_line: 6,
             channel_mutes: [false; _],
         };
@@ -56,14 +51,6 @@ impl Pattern {
         for _r in 0..self.row_count {
             self.rows.push(PatternRow::new());
         }
-    }
-    pub fn pulse_duration(&self) -> Duration {
-        return Duration::from_secs_f64(
-            60.0 / (self.bpm.max(1) as f64 * PULSES_PER_QUARTER as f64),
-        );
-    }
-    pub fn tick_duration(&self) -> Duration {
-        return self.pulse_duration() * PULSES_PER_LINE / self.ticks_per_line.max(1) as u32;
     }
     pub fn get_event(&self, row: usize, track: usize) -> Option<&Note> {
         self.rows.get(row)?.tracks.get(track)
@@ -128,14 +115,6 @@ impl Pattern {
         for r in &mut self.rows[row..] {
             r.dirty = true;
         }
-    }
-
-    pub fn increase_bpm(&mut self) {
-        self.bpm = self.bpm.saturating_add(1);
-    }
-
-    pub fn decrease_bpm(&mut self) {
-        self.bpm = self.bpm.saturating_sub(1);
     }
 
     pub fn increase_ticks_per_line(&mut self) {
@@ -334,24 +313,6 @@ mod tests {
         pattern.decrease_length();
         assert_eq!(pattern.row_count, 1);
         assert_eq!(pattern.rows.len(), 1);
-    }
-
-    #[test]
-    fn durations_follow_bpm() {
-        let mut pattern = Pattern::new(1);
-        pattern.bpm = 125;
-        pattern.ticks_per_line = 6;
-        assert_eq!(pattern.pulse_duration(), Duration::from_millis(20));
-        assert_eq!(pattern.tick_duration(), Duration::from_millis(20));
-    }
-
-    #[test]
-    fn zero_bpm_and_ticks_do_not_divide_by_zero() {
-        let mut pattern = Pattern::new(1);
-        pattern.bpm = 0;
-        pattern.ticks_per_line = 0;
-        assert!(pattern.pulse_duration() > Duration::ZERO);
-        assert!(pattern.tick_duration() > Duration::ZERO);
     }
 
     #[test]
