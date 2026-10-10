@@ -61,8 +61,8 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(terminal: DefaultTerminal, fps: u16, project: Project) -> Self {
-        let state = AppState::new(project);
+    pub fn new(terminal: DefaultTerminal, fps: u16, theme: Theme, project: Project) -> Self {
+        let state = AppState::new(project, theme);
         return Self {
             terminal,
             fps,
@@ -165,7 +165,7 @@ pub struct AppState {
     sequence_changed: bool,
 }
 impl AppState {
-    pub fn new(project: Project) -> Self {
+    pub fn new(project: Project, theme: Theme) -> Self {
         let changed_patterns = (0..project.patterns.get_patterns().len() as u8)
             .map(PatternId)
             .collect();
@@ -173,7 +173,7 @@ impl AppState {
             config: Config::default(),
             project,
             engine: EngineHandle::spawn(),
-            theme: Theme::detect(),
+            theme,
             exit_requested: false,
             active_sequence_index: 0,
             active_port: None,
