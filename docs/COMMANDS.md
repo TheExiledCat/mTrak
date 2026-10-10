@@ -131,10 +131,36 @@ C-4|1|--|WFF   note starts fully bent up
   the same instrument.
 - `W` has 256 steps, so on large bend ranges you may hear the steps between values.
 
+## Effect commands
+
+Effect commands change playback instead of sending MIDI. They work on any track and on muted
+channels, and the cell's instrument doesn't matter.
+
+### `F` Set tempo
+
+Changes the BPM or the speed, starting on its own row:
+
+| Value     | Does                                                        |
+|-----------|-------------------------------------------------------------|
+| `00`      | Back to the song's BPM and the pattern's speed              |
+| `01`-`1F` | Sets the speed (ticks per row) to that value                |
+| `20`-`FF` | Sets the BPM to that value in hex, e.g. `F7D` is 125 BPM    |
+
+```
+---|1|--|F8C   140 BPM from here on
+---|1|--|F03   speed 3, still at 140 BPM
+---|1|--|F00   back to the song's BPM and the pattern's speed
+```
+
+- The change keeps going into the next patterns until an `F00` or until playback stops.
+- BPM and speed are separate: setting one leaves the other as it is.
+- The speed only sets how many ticks a row has for slides; rows last the same time at any
+  speed, so only the BPM changes how fast the song plays.
+
 ## Slides
 
-A slide moves from its own value to a target, updating once per tick. With a speed (`SPD`) of
-6 that is 6 updates per row, so a higher speed gives a smoother slide.
+A slide moves from its own value to a target, updating once per tick. With a speed (`SPD`, or
+an `F` below `20`) of 6 that is 6 updates per row, so a higher speed gives a smoother slide.
 
 - **Target:** the track's next `C`, `E`, or command that starts a slide. The slide reaches
   that value on that row.
@@ -158,6 +184,6 @@ Commands on rows with volume `00` still run, even though the note doesn't play.
 
 ## Playback
 
-Starting or stopping playback resets all command state: selected CCs go back to 0 and running
-slides end. Channels that were sent a pitch bend or aftertouch get them reset to no bend and
+Starting or stopping playback resets all command state: selected CCs go back to 0, running
+slides end, and the tempo goes back to the song's BPM and the pattern's speed. Channels that were sent a pitch bend or aftertouch get them reset to no bend and
 no pressure, even when muted, so your synth is never left out of tune.

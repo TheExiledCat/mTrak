@@ -11,7 +11,7 @@ use ratatui::{
         terminal,
     },
     layout::{Constraint, Layout, Rect},
-    style::{Style, Stylize},
+    style::{Style, Styled, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph, Widget},
 };
@@ -25,7 +25,7 @@ use crate::{
         app::AppState,
         framework::{
             core_extensions::Boxed,
-            dialog::{Dialog, Select},
+            dialog::{Dialog, Select, TextPrompt},
             keymap::{ALT_SYMBOL, Key, KeyActions, KeyHint, Keymap},
             widget::{MtrakWidget, clicked_in},
         },
@@ -37,6 +37,7 @@ pub struct Header {
     top_left: HeaderTopLeft,
     bottom_left: HeaderBottomLeft,
     midi_events: MidiEventList,
+    util: UtilList,
     instruments: InstrumentList,
 }
 
@@ -46,6 +47,7 @@ impl Header {
             top_left: HeaderTopLeft::new(),
             bottom_left: HeaderBottomLeft::new(),
             midi_events: MidiEventList::new(),
+            util: UtilList::new(),
             instruments: InstrumentList::new(),
         };
     }
@@ -55,13 +57,15 @@ impl MtrakWidget for Header {
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
         return self.top_left.handle_event(state, event)
             || self.bottom_left.handle_event(state, event)
-            || self.instruments.handle_event(state, event);
+            || self.instruments.handle_event(state, event)
+            || self.util.handle_event(state, event);
     }
     fn update(&mut self, _state: &mut AppState) {
         self.top_left.update(_state);
         self.bottom_left.update(_state);
         self.instruments.update(_state);
         self.midi_events.update(_state);
+        self.util.update(_state);
     }
     fn render(
         &mut self,
@@ -85,11 +89,16 @@ impl MtrakWidget for Header {
 
         let left_layout = Layout::vertical([Constraint::Max(8), Constraint::Fill(1)])
             .split(*layout.first().unwrap());
-        Block::bordered()
+        let util_block = Block::bordered()
             .borders(Borders::BOTTOM | Borders::RIGHT)
-            .render(layout[1], buf);
+            .title_bottom("Util")
+            .title_style(state.theme.header_border.reversed());
+        let util_inner = util_block.inner(layout[1]);
+        util_block.render(layout[1], buf);
         self.top_left.render(state, left_layout[0], buf);
         self.bottom_left.render(state, left_layout[1], buf);
+
+        self.util.render(state, util_inner, buf);
         self.midi_events
             .render(state, layout[layout.len() - 2], buf);
         self.instruments.render(state, *layout.last().unwrap(), buf)
@@ -520,7 +529,7 @@ impl MtrakWidget for PatternInfo {
             [
                 format!(
                     "BPM {:03} {}/{}: DN/UP",
-                    active_pattern.bpm,
+                    state.project.bpm,
                     bindings.key_for(BpmDown).unwrap(),
                     bindings.key_for(BpmUp).unwrap()
                 ),
@@ -593,12 +602,11 @@ impl KeyActions for PatternInfo {
     }
 
     fn perform(&mut self, action: Self::Action, state: &mut AppState) {
-        let pattern = state.active_pattern_mut();
         match action {
-            PatternInfoActions::BpmUp => pattern.increase_bpm(),
-            PatternInfoActions::BpmDown => pattern.decrease_bpm(),
-            PatternInfoActions::SpeedUp => pattern.increase_ticks_per_line(),
-            PatternInfoActions::SpeedDown => pattern.decrease_ticks_per_line(),
+            PatternInfoActions::BpmUp => state.increase_bpm(),
+            PatternInfoActions::BpmDown => state.decrease_bpm(),
+            PatternInfoActions::SpeedUp => state.active_pattern_mut().increase_ticks_per_line(),
+            PatternInfoActions::SpeedDown => state.active_pattern_mut().decrease_ticks_per_line(),
             PatternInfoActions::LineAddUp => state.increase_line_add(),
             PatternInfoActions::LineAddDown => state.decrease_line_add(),
             PatternInfoActions::PatternUp => state.next_pattern(),
@@ -611,9 +619,6 @@ impl KeyActions for PatternInfo {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum InstrumentListAction {
-    SelectMidiPort,
-    RenameInstrument,
-    SetVolume,
     PrevInstrument,
     NextInstrument,
 }
@@ -637,14 +642,7 @@ impl InstrumentList {
                     Key::new(KeyCode::Down, KeyModifiers::SHIFT),
                     InstrumentListAction::NextInstrument,
                     "INST",
-                )
-                .bind(Key::ctrl('l'), InstrumentListAction::SetVolume, "INST VOL")
-                .bind(
-                    Key::ctrl('r'),
-                    InstrumentListAction::RenameInstrument,
-                    "RNM INST",
-                )
-                .bind(Key::ctrl('o'), InstrumentListAction::SelectMidiPort, "MIDI"),
+                ),
         };
     }
 }
@@ -657,23 +655,16 @@ impl KeyActions for InstrumentList {
 
     fn perform(&mut self, action: InstrumentListAction, state: &mut AppState) {
         match action {
-            InstrumentListAction::SelectMidiPort => {
-                open_midi_port_dialog(state);
-            }
-            InstrumentListAction::RenameInstrument => {
-                open_rename_dialog(state);
-            }
             InstrumentListAction::PrevInstrument => {
                 state.prev_instrument();
             }
             InstrumentListAction::NextInstrument => {
                 state.next_instrument();
             }
-            InstrumentListAction::SetVolume => open_volume_dialog(state),
         };
     }
 }
-fn open_midi_port_dialog(state: &mut AppState) {
+fn open_config_dialog(state: &mut AppState) {
     let names = state.get_midi_port_names();
     let current = state
         .active_port
@@ -681,8 +672,13 @@ fn open_midi_port_dialog(state: &mut AppState) {
         .and_then(|p| names.iter().position(|n| *n == p.id()))
         .unwrap_or(0);
     let dialog = Dialog::new(
-        "MIDI output",
-        vec![Select::new("port", names).selected(current).boxed()],
+        "Config",
+        vec![
+            Select::new("port", names)
+                .label("MIDI output")
+                .selected(current)
+                .boxed(),
+        ],
     )
     .on_submit(|state, result| {
         let Some(index) = result.choice("port") else {
@@ -697,35 +693,53 @@ fn open_midi_port_dialog(state: &mut AppState) {
     });
     state.open_dialog(dialog);
 }
-fn open_rename_dialog(state: &mut AppState) {
-    let current = &state.project.instruments[state.active_instrument as usize];
-    let dialog = Dialog::text_field(
-        format!("Instrument {:1X} name", state.active_instrument),
-        current,
-        "name",
+fn open_instrument_dialog(state: &mut AppState) {
+    let instrument = state.active_instrument;
+    let name = &state.project.instruments[instrument as usize].name;
+    let volume = state.project.instruments[instrument as usize].volume;
+    let pitch_wheel_range = state.project.instruments[instrument as usize].pitch_wheel_range;
+    let dialog = Dialog::new(
+        format!("Instrument {:1X}", instrument),
+        vec![
+            TextPrompt::new("name", "Name").initial(name).boxed(),
+            TextPrompt::new("volume", "Volume")
+                .initial(format!("{:02X}", volume))
+                .boxed(),
+            TextPrompt::new("pitch_wheel_range", "Bend range (semitones)")
+                .initial(pitch_wheel_range.to_string())
+                .boxed(),
+        ],
     )
-    .on_submit(|state, result| {
-        let Some(name) = result.text("name") else {
-            return;
-        };
-
-        state.project.instruments[state.active_instrument as usize] = name.into();
+    .on_submit(move |state, result| {
+        if let Some(name) = result.text("name") {
+            state.project.instruments[instrument as usize].name = name.into();
+        }
+        if let Some(vol) = result.text("volume") {
+            let vol = u8::from_str_radix(vol, 16).unwrap_or(volume);
+            state.set_global_volume(instrument, vol);
+        }
+        if let Some(range) = result.text("pitch_wheel_range") {
+            state.project.instruments[instrument as usize].pitch_wheel_range =
+                range.parse().unwrap_or(pitch_wheel_range);
+        }
     });
     state.open_dialog(dialog);
 }
-fn open_volume_dialog(state: &mut AppState) {
-    let current = state.project.global_instrument_volumes[state.active_instrument as usize];
-    let dialog = Dialog::text_field(
-        format!("Instrument {:1X} volume", state.active_instrument),
-        format!("{:02X}", current),
-        "volume",
+fn open_velocity_dialog(state: &mut AppState) {
+    let velocity = state.project.global_velocity;
+    let dialog = Dialog::new(
+        "Velocity",
+        vec![
+            TextPrompt::new("velocity", "Velocity")
+                .initial(format!("{:02X}", velocity))
+                .boxed(),
+        ],
     )
     .on_submit(move |state, result| {
-        let Some(vol) = result.text("volume") else {
-            return;
-        };
-        let vol = u8::from_str_radix(vol, 16).unwrap_or(current);
-        state.set_global_volume(state.active_instrument, vol);
+        if let Some(text) = result.text("velocity") {
+            let velocity = u8::from_str_radix(text, 16).unwrap_or(velocity);
+            state.set_global_velocity(velocity);
+        }
     });
     state.open_dialog(dialog);
 }
@@ -778,29 +792,33 @@ impl MtrakWidget for InstrumentList {
                     .title_style(Style::new().reversed()),
             )
             .render(layout[0], buf);
-        let channel_names = &state.project.instruments;
-        let channel_volumes = &state.project.global_instrument_volumes;
         let selected_instrument = state.active_instrument;
-        let lines = channel_names
+        let lines = state
+            .project
+            .instruments
             .iter()
             .enumerate()
             .map(|e| {
                 Line::from(vec![
-                    Span::raw(format!("{:1X} {:02X}", e.0, channel_volumes[e.0])).style(
+                    Span::raw(format!("{:1X} {:02X}", e.0, e.1.volume)).style(
                         if selected_instrument == e.0 as u8 {
                             Style::reset()
                         } else {
                             Style::new().reversed()
                         },
                     ),
-                    Span::raw(format!("| {}", e.1.as_str())),
+                    Span::raw(format!("| {}", e.1.name.as_str())),
                 ])
             })
             .collect::<Vec<Line>>();
         self.rows_area = layout[1];
         Paragraph::new(lines).render(layout[1], buf);
 
-        Paragraph::new(format!("OCT: {}", state.current_octave)).render(layout[2], buf);
+        Paragraph::new(format!(
+            "OCT: {}, GLB VEL: {:02X}",
+            state.current_octave, state.project.global_velocity
+        ))
+        .render(layout[2], buf);
     }
 }
 
@@ -847,6 +865,10 @@ impl MtrakWidget for MidiEventList {
         }
     }
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        Block::new()
+            .title_bottom("MIDI")
+            .title_style(state.theme.header_border.reversed())
+            .render(area, buf);
         let area = Block::new().padding(Padding::bottom(1)).inner(area);
         self.max_lines_to_show = area.height;
         let height = self.pending_lines.len().min(area.height as usize);
@@ -864,5 +886,59 @@ impl MtrakWidget for MidiEventList {
         )
         .scroll((overflow, 0))
         .render(layout[1], buf);
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UtilListAction {
+    Instruments,
+    Velocity,
+    Config,
+}
+struct UtilList {
+    keymap: Keymap<UtilListAction>,
+}
+impl UtilList {
+    fn new() -> Self {
+        use UtilListAction::*;
+        let keymap = Keymap::new()
+            .bind(Key::ctrl('r'), Instruments, "Instrument")
+            .bind(Key::ctrl('e'), Velocity, "GLB Velcity")
+            .bind(Key::ctrl('o'), Config, "Config");
+        return Self { keymap };
+    }
+}
+impl MtrakWidget for UtilList {
+    fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
+        return self.dispatch(state, event);
+    }
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        let bindings = &self.keymap.bindings();
+        let layout = Layout::vertical([Constraint::Length(bindings.len() as u16)]).split(area);
+        let lines: Vec<Line> = bindings
+            .iter()
+            .map(|b| {
+                Line::raw(format!("{}: {}", b.key, b.label))
+                    .style(state.theme.header_title)
+                    .reversed()
+            })
+            .collect();
+        Paragraph::new(lines)
+            .block(Block::new().style(state.theme.header_title).reversed())
+            .render(layout[0], buf);
+    }
+}
+impl KeyActions for UtilList {
+    type Action = UtilListAction;
+
+    fn keymap(&self) -> &Keymap<Self::Action> {
+        &self.keymap
+    }
+
+    fn perform(&mut self, action: Self::Action, state: &mut AppState) {
+        match action {
+            UtilListAction::Instruments => open_instrument_dialog(state),
+            UtilListAction::Velocity => open_velocity_dialog(state),
+            UtilListAction::Config => open_config_dialog(state),
+        }
     }
 }
