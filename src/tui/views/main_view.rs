@@ -13,7 +13,7 @@ use crate::tui::{
         widget::MtrakWidget,
         widgets::container::Container,
     },
-    views::{footer::Footer, header::Header, timeline::TimeLineView},
+    views::{file_browser, footer::Footer, header::Header, timeline::TimeLineView},
 };
 
 /// Actions available everywhere in the main view, regardless of which child has focus.
@@ -63,7 +63,11 @@ impl KeyActions for MainView {
     fn perform(&mut self, action: MainAction, state: &mut AppState) {
         match action {
             MainAction::Quit => state.request_exit(),
-            MainAction::Save => state.request_save_file(|_, _| {}),
+            MainAction::Save => state.request_save_file(
+                |_, _| {},
+                "Save project",
+                "*".to_owned() + file_browser::MTRAK_FILE_EXTENSION,
+            ),
             MainAction::PlayPattern => state.play_pattern(state.active_pattern),
             MainAction::PlaySong => state.play_song(state.active_sequence_index),
         }

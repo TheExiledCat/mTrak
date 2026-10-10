@@ -152,7 +152,8 @@ impl App {
         self.dialogs.retain(|d| !d.is_closed());
         self.dialogs.append(&mut self.state.pending_dialogs);
         if let Some(on_submit) = self.state.save_file_request.take() {
-            self.file_browser.save_file(on_submit);
+            self.file_browser
+                .save_file(on_submit.0, on_submit.1, on_submit.2);
         }
     }
 }
@@ -183,7 +184,7 @@ pub struct AppState {
     pub current_octave: u8,
     pub recording: bool,
     pending_dialogs: Vec<Dialog>,
-    save_file_request: Option<Box<Submit>>,
+    save_file_request: Option<(Box<Submit>, String, String)>,
     changed_patterns: HashSet<PatternId>,
     sequence_changed: bool,
 }
@@ -209,7 +210,7 @@ impl AppState {
             pending_dialogs: Vec::new(),
             changed_patterns,
             event_history: VecDeque::new(),
-            channel_hits: [None; _],
+            channel_hits: [None; MIDI_CHANNEL_MAX as usize + 1],
             sequence_changed: true,
             save_file_request: None,
         };
@@ -288,8 +289,13 @@ impl AppState {
         self.pending_dialogs.push(dialog);
     }
 
-    pub fn request_save_file(&mut self, on_submit: impl FnOnce(&mut AppState, PathBuf) + 'static) {
-        self.save_file_request = Some(Box::new(on_submit));
+    pub fn request_save_file(
+        &mut self,
+        on_submit: impl FnOnce(&mut AppState, PathBuf) + 'static,
+        title: impl Into<String>,
+        file_filter: impl Into<String>,
+    ) {
+        self.save_file_request = Some((Box::new(on_submit), title.into(), file_filter.into()));
     }
     pub fn request_exit(&mut self) {
         self.exit_requested = true;

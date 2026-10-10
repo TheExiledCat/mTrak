@@ -74,7 +74,7 @@ pub fn midi_to_string(event: &MidiEvent) -> String {
                 format!("{:?} Note On ({}, {})", channel, note, vel)
             }
             Message::PitchBend(channel, bend) => {
-                format!("{:?} Bend ({})", channel, bend.cast_signed())
+                format!("{:?} Bend ({})", channel, *bend as i16)
             }
             Message::PolyphonicPressure(channel, _, _) => todo!(),
             Message::ChannelPressure(channel, pressure) => {

@@ -41,7 +41,7 @@ impl Pattern {
             name: None,
 
             ticks_per_line: 6,
-            channel_mutes: [false; _],
+            channel_mutes: [false; 16],
         };
         pattern.initialize_rows();
         return pattern;

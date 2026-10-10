@@ -25,7 +25,7 @@ impl Voices {
         return Self {
             tracks: [None; TRACK_COUNT as usize],
             held: [[0; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
-            channel_volumes: [0xFF; _],
+            channel_volumes: [0xFF; MIDI_CHANNEL_COUNT],
             velocity: 0xFF,
         };
     }
