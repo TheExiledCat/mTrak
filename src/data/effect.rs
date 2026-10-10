@@ -15,6 +15,7 @@ pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 8] = [
     ('A', AfterTouch),
     ('W', PitchBend),
 ];
+pub const EFFECT_COMMAND_LOOKUP: [(char, EffectCommand); 1] = [('F', EffectCommand::SetTempo)];
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
 pub enum CommandKind {
     None,
@@ -86,10 +87,16 @@ impl Display for MidiCommand {
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
-pub enum EffectCommand {}
+pub enum EffectCommand {
+    SetTempo, // Sets the BPM from 20 up, the speed below that, and 00 goes back to the song's own
+}
 impl EffectCommand {
     fn from_char(char: char) -> Result<Self, NoteError> {
-        return Err(NoteError::PARSE_FAILURE("not implemented".into()));
+        return EFFECT_COMMAND_LOOKUP
+            .iter()
+            .position(|c| c.0 == char)
+            .map(|p| EFFECT_COMMAND_LOOKUP[p].1)
+            .ok_or(NoteError::PARSE_FAILURE("Not an effect command".into()));
     }
     fn as_command_kind(&self) -> CommandKind {
         return CommandKind::Effect(self.clone());
@@ -129,7 +136,7 @@ impl Display for Command {
             match self.kind {
                 CommandKind::None => "0".into(),
                 CommandKind::MidiCommand(midi_command) => midi_command.to_string(),
-                CommandKind::Effect(effect_command) => todo!(),
+                CommandKind::Effect(effect_command) => effect_command.to_string(),
             },
             self.value
         );
@@ -138,6 +145,19 @@ impl Display for Command {
 impl Default for Command {
     fn default() -> Self {
         return Self::new(CommandKind::None, 0);
+    }
+}
+impl Display for EffectCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            EFFECT_COMMAND_LOOKUP
+                .iter()
+                .position(|c| c.1 == *self)
+                .map(|p| EFFECT_COMMAND_LOOKUP[p].0)
+                .unwrap()
+        )
     }
 }
 
@@ -157,8 +177,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_each_effect_command() {
+        for (char, effect_command) in EFFECT_COMMAND_LOOKUP {
+            let command = Command::from_str(&format!("{}40", char)).unwrap();
+            assert_eq!(
+                command,
+                Command::new(CommandKind::Effect(effect_command), 0x40)
+            );
+        }
+    }
+
+    #[test]
     fn display_round_trips() {
-        for text in ["000", "0FF", "S4A", "C7F", "A00", "W80"] {
+        for text in ["000", "0FF", "S4A", "C7F", "A00", "W80", "F7D"] {
             assert_eq!(Command::from_str(text).unwrap().to_string(), text);
         }
     }

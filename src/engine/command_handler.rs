@@ -286,22 +286,57 @@ impl CommandHandler<MidiCommand> for MidiCommandHandler {
         self.pressed = [false; MIDI_CHANNEL_COUNT];
     }
 }
-pub struct EffectCommandHandler {}
+/// Values from 20 up set the BPM; lower values set the speed.
+const TEMPO_MIN_BPM: u8 = 0x20;
+
+/// Keeps the tempo set by effect commands, which carries over pattern boundaries until it is
+/// reset by 00 or by playback starting or stopping.
+pub struct EffectCommandHandler {
+    bpm: Option<u8>,
+    speed: Option<u8>,
+}
 impl EffectCommandHandler {
     pub fn new() -> Self {
-        Self {}
+        return Self {
+            bpm: None,
+            speed: None,
+        };
+    }
+
+    /// The BPM set by a tempo command, overriding the song's.
+    pub fn bpm(&self) -> Option<u8> {
+        return self.bpm;
+    }
+    /// The ticks per line set by a tempo command, overriding the pattern's.
+    pub fn speed(&self) -> Option<u8> {
+        return self.speed;
     }
 }
 impl CommandHandler<EffectCommand> for EffectCommandHandler {
     fn handle_command(
         &mut self,
-        events: &mut Vec<MidiEvent>,
-        track: usize,
+        _events: &mut Vec<MidiEvent>,
+        _track: usize,
         command: EffectCommand,
         note: &Note,
-        context: &CommandContext,
+        _context: &CommandContext,
     ) {
-        todo!()
+        let value = note.command.value;
+        match command {
+            EffectCommand::SetTempo => match value {
+                0 => {
+                    self.bpm = None;
+                    self.speed = None;
+                }
+                value if value < TEMPO_MIN_BPM => self.speed = Some(value),
+                value => self.bpm = Some(value),
+            },
+        }
+    }
+
+    fn reset(&mut self, _events: &mut Vec<MidiEvent>) {
+        self.bpm = None;
+        self.speed = None;
     }
 }
 
@@ -403,6 +438,40 @@ mod tests {
         let mut events = vec![];
         handler.reset(&mut events);
         assert!(events.is_empty());
+    }
+
+    fn tempo(handler: &mut EffectCommandHandler, value: u8) {
+        let mut note = Note::empty();
+        note.command = Command::new(CommandKind::Effect(EffectCommand::SetTempo), value);
+        let mut events = vec![];
+        handler.handle_command(
+            &mut events,
+            0,
+            EffectCommand::SetTempo,
+            &note,
+            &CommandContext::default(),
+        );
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn tempo_sets_bpm_from_20_and_speed_below() {
+        let mut handler = EffectCommandHandler::new();
+        tempo(&mut handler, 0x1F);
+        assert_eq!((handler.bpm(), handler.speed()), (None, Some(0x1F)));
+        tempo(&mut handler, 0x20);
+        assert_eq!((handler.bpm(), handler.speed()), (Some(0x20), Some(0x1F)));
+        tempo(&mut handler, 0x00);
+        assert_eq!((handler.bpm(), handler.speed()), (None, None));
+    }
+
+    #[test]
+    fn reset_clears_the_tempo() {
+        let mut handler = EffectCommandHandler::new();
+        tempo(&mut handler, 0x90);
+        tempo(&mut handler, 0x03);
+        handler.reset(&mut vec![]);
+        assert_eq!((handler.bpm(), handler.speed()), (None, None));
     }
 
     #[test]

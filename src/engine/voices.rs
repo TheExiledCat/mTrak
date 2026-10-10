@@ -17,6 +17,7 @@ pub struct Voices {
     tracks: [Option<Voice>; TRACK_COUNT as usize],
     held: [[u8; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
     channel_volumes: [u8; MIDI_CHANNEL_COUNT],
+    velocity: u8,
 }
 
 impl Voices {
@@ -25,6 +26,7 @@ impl Voices {
             tracks: [None; TRACK_COUNT as usize],
             held: [[0; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
             channel_volumes: [0xFF; _],
+            velocity: 0xFF,
         };
     }
 
@@ -43,8 +45,9 @@ impl Voices {
         let channel = channel.min(MIDI_CHANNEL_MAX);
         let pitch = pitch.min(PITCH_COUNT as u8 - 1);
         let velocity = (velocity as f32
-            * (self.channel_volumes[channel as usize] as f32 / u8::MAX as f32))
-            .ceil() as u8; // global volume works as velocity multiplier.
+            * (self.channel_volumes[channel as usize] as f32 / u8::MAX as f32)
+            * (self.velocity as f32 / u8::MAX as f32))
+            .ceil() as u8; // global volume and velocity work as velocity multipliers.
         self.release(track, out);
         let held = &mut self.held[channel as usize][pitch as usize];
         *held = held.saturating_add(1);
@@ -85,6 +88,10 @@ impl Voices {
 
     pub fn set_global_volume(&mut self, channel: usize, volume: u8) {
         self.channel_volumes[channel.min(MIDI_CHANNEL_MAX as usize)] = volume;
+    }
+
+    pub fn set_global_velocity(&mut self, velocity: u8) {
+        self.velocity = velocity;
     }
 }
 
@@ -169,6 +176,16 @@ mod tests {
         muted[1] = true;
         voices.release_channels(&muted, &mut out);
         assert_eq!(out, vec![Message::NoteOff(Channel::Ch2, 60, 0)]);
+    }
+
+    #[test]
+    fn global_velocity_scales_with_channel_volume() {
+        let mut voices = Voices::new();
+        let mut out = vec![];
+        voices.set_global_volume(0, 0x80);
+        voices.set_global_velocity(0x80);
+        voices.note_on(0, 0, 60, 100, &mut out);
+        assert_eq!(out, vec![Message::NoteOn(Channel::Ch1, 60, 26)]);
     }
 
     #[test]

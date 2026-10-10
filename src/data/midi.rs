@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use midi::{Channel, Message, RawMessage};
 use num::FromPrimitive;
 
@@ -7,6 +9,14 @@ pub const LINES_PER_QUARTER: u32 = 4;
 pub const PULSES_PER_LINE: u32 = PULSES_PER_QUARTER / LINES_PER_QUARTER;
 pub const VELOCITY_MAX: u8 = 0x7F;
 pub const VOLUME_MAX: u8 = 0x80;
+pub const DEFAULT_BPM: u8 = 125;
+
+pub fn pulse_duration(bpm: u8) -> Duration {
+    return Duration::from_secs_f64(60.0 / (bpm.max(1) as f64 * PULSES_PER_QUARTER as f64));
+}
+pub fn tick_duration(bpm: u8, ticks_per_line: u8) -> Duration {
+    return pulse_duration(bpm) * PULSES_PER_LINE / ticks_per_line.max(1) as u32;
+}
 #[derive(Clone)]
 pub enum MidiEvent {
     Message(Message),
@@ -102,6 +112,18 @@ mod tests {
     use midi::ToRawMessages;
 
     use super::*;
+
+    #[test]
+    fn durations_follow_bpm() {
+        assert_eq!(pulse_duration(125), Duration::from_millis(20));
+        assert_eq!(tick_duration(125, 6), Duration::from_millis(20));
+    }
+
+    #[test]
+    fn zero_bpm_and_ticks_do_not_divide_by_zero() {
+        assert!(pulse_duration(0) > Duration::ZERO);
+        assert!(tick_duration(0, 0) > Duration::ZERO);
+    }
 
     #[test]
     fn notes_off_all_silences_every_channel() {
