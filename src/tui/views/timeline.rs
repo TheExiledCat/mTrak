@@ -27,6 +27,7 @@ use crate::{
             keymap::{ALT_SYMBOL, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
         },
+        glyphs,
     },
     util::strings::split_keep_delim,
 };
@@ -87,8 +88,16 @@ fn movement_keys(keymap: Keymap<TimelineAction>) -> Keymap<TimelineAction> {
             PrevTrack,
             "TRCK",
         )
-        .bind(Key::plain(KeyCode::PageUp), Jump16Up, "±16")
-        .bind(Key::plain(KeyCode::PageDown), Jump16Down, "±16")
+        .bind(
+            Key::plain(KeyCode::PageUp),
+            Jump16Up,
+            glyphs::pick("±16", "+-16"),
+        )
+        .bind(
+            Key::plain(KeyCode::PageDown),
+            Jump16Down,
+            glyphs::pick("±16", "+-16"),
+        )
         .bind(Key::plain(KeyCode::Home), JumpToFirstRow, "Top")
         .bind(Key::plain(KeyCode::End), JumpToLastRow, "End");
     return (0..JUMP_ROWS.len() as u8).fold(keymap, |keymap, i| {

@@ -2,10 +2,11 @@ use std::fmt::{self, Display};
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::tui::app::AppState;
+use crate::tui::{app::AppState, glyphs};
 
 pub const CONTROL_SYMBOL: char = '^';
-pub const SHIFT_SYMBOL: char = '⇧';
+pub const SHIFT_SYMBOL: &'static str = "⇧";
+pub const ASCII_SHIFT_SYMBOL: &'static str = "S-";
 pub const ALT_SYMBOL: &'static str = "A-";
 /// A key plus its modifiers, e.g. Ctrl+S.
 ///
@@ -80,7 +81,7 @@ impl Display for Key {
             write!(f, "{}", ALT_SYMBOL)?;
         }
         if self.modifiers.contains(KeyModifiers::SHIFT) {
-            write!(f, "{}", SHIFT_SYMBOL)?;
+            write!(f, "{}", glyphs::pick(SHIFT_SYMBOL, ASCII_SHIFT_SYMBOL))?;
         }
         let has_modifier = self
             .modifiers
@@ -89,12 +90,12 @@ impl Display for Key {
             KeyCode::Char(' ') => write!(f, "Spc"),
             KeyCode::Char(c) if has_modifier => write!(f, "{}", c.to_ascii_uppercase()),
             KeyCode::Char(c) => write!(f, "{c}"),
-            KeyCode::Up => write!(f, "↑"),
-            KeyCode::Down => write!(f, "↓"),
-            KeyCode::Left => write!(f, "←"),
-            KeyCode::Right => write!(f, "→"),
+            KeyCode::Up => write!(f, "{}", glyphs::pick("↑", "Up")),
+            KeyCode::Down => write!(f, "{}", glyphs::pick("↓", "Dn")),
+            KeyCode::Left => write!(f, "{}", glyphs::pick("←", "Lt")),
+            KeyCode::Right => write!(f, "{}", glyphs::pick("→", "Rt")),
             KeyCode::F(n) => write!(f, "F{n}"),
-            KeyCode::BackTab => write!(f, "{}Tab", SHIFT_SYMBOL),
+            KeyCode::BackTab => write!(f, "{}Tab", glyphs::pick(SHIFT_SYMBOL, ASCII_SHIFT_SYMBOL)),
             KeyCode::PageUp => write!(f, "PgUp"),
             KeyCode::PageDown => write!(f, "PgDn"),
             KeyCode::Insert => write!(f, "Ins"),
