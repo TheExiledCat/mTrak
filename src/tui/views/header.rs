@@ -26,9 +26,10 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, Select, TextPrompt},
-            keymap::{ALT_SYMBOL, Key, KeyActions, KeyHint, Keymap},
+            keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, Key, KeyActions, KeyHint, Keymap},
             widget::{MtrakWidget, clicked_in},
         },
+        glyphs,
         views::header::SequenceAction::*,
     },
 };
@@ -197,11 +198,11 @@ impl MtrakWidget for HeaderBottomLeft {
         hints: &mut Vec<crate::tui::framework::keymap::KeyHint>,
     ) {
         hints.push(KeyHint {
-            key: format!("{}{}", ALT_SYMBOL, "1-8"),
+            key: format!("{}{}", glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL), "1-8"),
             label: "Mute",
         });
         hints.push(KeyHint {
-            key: format!("{}{}", ALT_SYMBOL, "9"),
+            key: format!("{}{}", glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL), "9"),
             label: if self.upper { "Ch 1-8" } else { "Ch 9-16" },
         });
     }

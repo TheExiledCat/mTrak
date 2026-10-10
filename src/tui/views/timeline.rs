@@ -24,7 +24,7 @@ use crate::{
         app::{AppState, TrackCache, column_index_to_note_string_index},
         constants::{self, NOTE_OFF_KEY},
         framework::{
-            keymap::{ALT_SYMBOL, Key, KeyActions, KeyHint, Keymap},
+            keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
         },
         glyphs,
@@ -716,7 +716,7 @@ impl MtrakWidget for TimeLineView {
     fn key_hints(&self, _state: &AppState, hints: &mut Vec<KeyHint>) {
         self.keymap().hints(hints);
         hints.push(KeyHint {
-            key: format!("{}Q-I", ALT_SYMBOL),
+            key: format!("{}Q-I", glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL)),
             label: "TRCK",
         });
     }
