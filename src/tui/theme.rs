@@ -2,6 +2,8 @@ use std::env;
 
 use ratatui::style::{Color, Style, Stylize};
 
+use crate::cli::ColorMode;
+
 // FastTracker 2 palette: blue-grey desktop panels around a black pattern editor
 const FT2_DESKTOP: Color = Color::Rgb(73, 104, 140);
 const FT2_DESKTOP_LIGHT: Color = Color::Rgb(141, 170, 203);
@@ -49,16 +51,34 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Picks the FT2 theme when the terminal advertises 24-bit color, or is Windows Terminal,
-    /// unless the user opted out of color via `NO_COLOR` (https://no-color.org) or the
-    /// terminal is `dumb`, falling back to the monochrome theme.
+    pub fn from_color_mode(mode: Option<ColorMode>) -> Self {
+        return match mode {
+            Some(ColorMode::Mono) => Self::monochrome(),
+            Some(ColorMode::Ansi16) => Self::ansi16(),
+            Some(ColorMode::Full) => Self::ft2(),
+            None => Self::detect(),
+        };
+    }
+
+    /// Picks the FT2 theme when the terminal advertises 24-bit color, or is a Windows console
+    /// with VT support, and the 16-color theme on other Windows consoles, unless the user opted
+    /// out of color via `NO_COLOR` (https://no-color.org) or the terminal is `dumb`, falling
+    /// back to the monochrome theme.
     pub fn detect() -> Self {
         let no_color = env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
         let dumb_terminal = env::var("TERM").is_ok_and(|t| t == "dumb");
-        let truecolor = env::var("COLORTERM").is_ok_and(|c| c == "truecolor" || c == "24bit")
-            || env::var_os("WT_SESSION").is_some();
-        if truecolor && !no_color && !dumb_terminal {
+        if no_color || dumb_terminal {
+            return Self::monochrome();
+        }
+        #[cfg(windows)]
+        let full_color = ratatui::crossterm::ansi_support::supports_ansi();
+        #[cfg(not(windows))]
+        let full_color = env::var("COLORTERM").is_ok_and(|c| c == "truecolor" || c == "24bit");
+        if full_color {
             return Self::ft2();
+        }
+        if cfg!(windows) {
+            return Self::ansi16();
         }
         return Self::monochrome();
     }
@@ -89,6 +109,33 @@ impl Theme {
             key_hint_key: Style::new().fg(FT2_PATTERN_BG).bg(FT2_DESKTOP_LIGHT),
             key_hint_label: Style::new().fg(FT2_TEXT),
             dialog_border: Style::new().fg(FT2_DESKTOP_LIGHT),
+        };
+    }
+
+    pub fn ansi16() -> Self {
+        return Self {
+            desktop: Style::new().fg(Color::White).bg(Color::Blue),
+            pattern_area: Style::new().fg(Color::Gray).bg(Color::Black),
+            header_border: Style::new().fg(Color::White),
+            header_title: Style::new().bold().fg(Color::White),
+            panel_border: Style::new().fg(Color::Gray),
+            timeline_border: Style::new().fg(Color::Gray),
+            track_border: Style::new().fg(Color::Blue),
+            pattern_start: Style::new().fg(Color::Gray),
+            row_number: Style::new().fg(Color::Gray),
+            beat_row_number: Style::new().bold().fg(Color::White),
+            selected_row_number: Style::new().fg(Color::Black).bg(Color::Gray),
+            search: Style::new().fg(Color::Black).bg(Color::Gray),
+            selected_row: Style::new().fg(Color::White).bg(Color::Blue),
+            selected_cell: Style::new().fg(Color::Black).bg(Color::Gray),
+            editing_cell: Style::new().fg(Color::Black).bg(Color::Red),
+            recording: Style::new().fg(Color::Black).bg(Color::Red),
+            cursor: Style::new().fg(Color::Black).bg(Color::White),
+            pattern_border: Style::new().fg(Color::Gray),
+            selected_pattern_border: Style::new().fg(Color::White),
+            key_hint_key: Style::new().fg(Color::Black).bg(Color::Gray),
+            key_hint_label: Style::new().fg(Color::White),
+            dialog_border: Style::new().fg(Color::Gray),
         };
     }
 
