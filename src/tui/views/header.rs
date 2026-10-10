@@ -902,7 +902,7 @@ impl UtilList {
         use UtilListAction::*;
         let keymap = Keymap::new()
             .bind(Key::ctrl('r'), Instruments, "Instrument")
-            .bind(Key::ctrl('e'), Velocity, "GLB Velcity")
+            .bind(Key::ctrl('e'), Velocity, "GLB Velocity")
             .bind(Key::ctrl('o'), Config, "Config");
         return Self { keymap };
     }
