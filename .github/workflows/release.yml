@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: mtrak
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ARCHIVE="${BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.target }}.zip"
+          cd target/${{ matrix.target }}/release
+          zip "$GITHUB_WORKSPACE/$ARCHIVE" "$BIN_NAME"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "$env:BIN_NAME-$env:GITHUB_REF_NAME-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/$env:BIN_NAME.exe" -DestinationPath $archive
+          "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
