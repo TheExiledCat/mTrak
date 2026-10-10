@@ -37,13 +37,19 @@ before you spend time on it.
 ### Checks
 
 ```sh
-cargo fmt
+./fmt.sh
 cargo test
 ```
 
+`fmt.sh` applies clippy's fixes, formats the code and groups imports. Grouping imports needs
+nightly rustfmt (`rustup component add rustfmt --toolchain nightly`); without it the script
+falls back to plain `cargo fmt`.
+
 ### Code style
 
-- Format with `rustfmt` (`cargo fmt`).
+The full set of conventions is in [docs/CONVENTIONS.md](docs/CONVENTIONS.md). In short:
+
+- Format with `rustfmt` (`cargo fmt`) and keep `cargo clippy` free of warnings.
 - Use explicit `return` statements, like the rest of the codebase.
 - Items are either `pub` or private; don't use `pub(crate)` or `pub(super)`.
 - Bind keys through a `Keymap` so the footer hints stay in sync, and put the most used

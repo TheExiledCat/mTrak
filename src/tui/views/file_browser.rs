@@ -6,7 +6,7 @@ use std::{
 use ratatui::{
     crossterm::event::{KeyCode, KeyModifiers},
     layout::{Constraint, Layout},
-    style::{Styled, Stylize},
+    style::Stylize,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget},
 };
@@ -20,7 +20,7 @@ use crate::tui::{
     },
     views::file_browser::FileBrowserMode::SaveFile,
 };
-pub const MTRAK_FILE_EXTENSION: &'static str = ".mtrak";
+pub const MTRAK_FILE_EXTENSION: &str = ".mtrak";
 const ALL_EXTENSIONS_FILTER: &str = "*";
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FileBrowserAction {
@@ -51,6 +51,12 @@ pub struct FileBrowser {
     scroll_offset: usize,
 
     submit_handler: Option<Box<Submit>>,
+}
+
+impl Default for FileBrowser {
+    fn default() -> Self {
+        return Self::new();
+    }
 }
 
 impl FileBrowser {
@@ -101,7 +107,7 @@ impl FileBrowser {
     }
 
     pub fn is_open(&self) -> bool {
-        self.is_open
+        return self.is_open;
     }
     fn load_contents(&mut self) {
         let mut entries: Vec<DirEntry> = fs::read_dir(&self.current_folder)
@@ -168,8 +174,7 @@ impl MtrakWidget for FileBrowser {
                     d.path()
                         .file_name()
                         .map(|s| s.to_string_lossy())
-                        .unwrap_or("N/A".into())
-                        .to_string(),
+                        .unwrap_or("N/A".into()),
                     if !d.path().is_file() { "/" } else { "" }
                 ))
             }))
@@ -207,7 +212,7 @@ impl MtrakWidget for FileBrowser {
             self.selected_file
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or(String::new())
+                .unwrap_or_default()
         ))
         .left_aligned()
         .render(layout[3], buf);
@@ -219,7 +224,7 @@ impl MtrakWidget for FileBrowser {
                 .iter()
                 .flat_map(|h| {
                     [
-                        Span::raw(format!("{}", h.key)).style(state.theme.key_hint_key),
+                        Span::raw(h.key.to_string()).style(state.theme.key_hint_key),
                         Span::raw(format!(" {} ", h.label)).style(state.theme.key_hint_label),
                     ]
                     .into_iter()
@@ -235,7 +240,7 @@ impl KeyActions for FileBrowser {
     type Action = FileBrowserAction;
 
     fn keymap(&self) -> &Keymap<Self::Action> {
-        &self.keymap
+        return &self.keymap;
     }
 
     fn perform(&mut self, action: Self::Action, state: &mut crate::tui::app::AppState) {

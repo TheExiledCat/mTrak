@@ -1,3 +1,8 @@
+use std::{
+    cell::RefCell,
+    iter::{self, repeat_n},
+};
+
 use ratatui::{
     buffer::Buffer,
     crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers},
@@ -5,11 +10,6 @@ use ratatui::{
     symbols::line,
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph, Widget},
-};
-use std::{
-    cell::RefCell,
-    iter::{self, repeat_n},
-    ops::Deref,
 };
 
 use crate::{
@@ -205,7 +205,7 @@ impl TimelineColumnLocation {
             3 => TimelineColumnLocation::Volume {
                 is_on_first_column: false,
             },
-            4 | 5 | 6 => TimelineColumnLocation::Effect {
+            4..=6 => TimelineColumnLocation::Effect {
                 column_offset: index - 4,
             },
             _ => panic!(),
@@ -445,7 +445,7 @@ impl TimeLineView {
         return true;
     }
     fn enter_command(&mut self, state: &mut AppState, digits: [char; 3]) -> bool {
-        let Ok(command) = Command::from_str(&digits.iter().collect::<String>()) else {
+        let Ok(command) = digits.iter().collect::<String>().parse::<Command>() else {
             return false;
         };
 
@@ -570,7 +570,7 @@ impl TimeLineView {
             .render(area, buf);
     }
 
-    fn render_line_number_header(&self, state: &AppState, area: Rect, buf: &mut Buffer) {
+    fn render_line_number_header(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![Line::raw("No.")];
         Paragraph::new(lines).right_aligned().render(area, buf);
     }
@@ -632,7 +632,7 @@ impl TimeLineView {
         let mut columns: Vec<String> = Vec::new();
         for (i, part) in split_keep_delim(&note_string, "|").iter().enumerate() {
             if i == 0 {
-                columns.push(part.deref().to_owned());
+                columns.push((*part).to_owned());
                 continue;
             }
             for char in part.chars() {
@@ -686,12 +686,9 @@ impl MtrakWidget for TimeLineView {
             self.track_index = track;
             return true;
         }
-        match key.code {
-            KeyCode::F(mut f) => {
-                f = f.clamp(0, 8);
-                state.set_octave(f - 1);
-            }
-            _ => (),
+        if let KeyCode::F(mut f) = key.code {
+            f = f.clamp(0, 8);
+            state.set_octave(f - 1);
         };
         if !self.is_editing {
             return state.play_key(self.track_index as usize, *key).is_some();
@@ -754,7 +751,7 @@ impl MtrakWidget for TimeLineView {
         let rows_height = layout[0].height.saturating_sub(ROWS_TOP_OFFSET);
 
         self.render_line_numbers(state, pattern.row_count, rows_height, layout[1], buf);
-        self.render_line_number_header(state, layout[1], buf);
+        self.render_line_number_header(layout[1], buf);
         for track_index in 0..pattern.track_count as usize {
             self.render_track(
                 state,

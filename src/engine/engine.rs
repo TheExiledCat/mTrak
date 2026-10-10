@@ -10,6 +10,10 @@ use chrono::Utc;
 use midi::{Message, ToRawMessages};
 use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
 
+use super::{
+    handle::{EngineCommand, EngineStatus},
+    voices::Voices,
+};
 use crate::{
     data::{
         config::TITLE,
@@ -25,11 +29,6 @@ use crate::{
     engine::command_handler::{
         CommandContext, CommandHandler, EffectCommandHandler, MidiCommandHandler, SlideTarget,
     },
-};
-
-use super::{
-    handle::{EngineCommand, EngineStatus},
-    voices::Voices,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -682,12 +681,11 @@ mod tests {
 
     use midi::Channel;
 
+    use super::*;
     use crate::data::{
         effect::{Command, EffectCommand, MidiCommand},
         note::NotePitch,
     };
-
-    use super::*;
 
     /// Drives an engine without a MIDI port and collects every message it would send.
     struct Harness {
