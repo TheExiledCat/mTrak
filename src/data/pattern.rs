@@ -2,7 +2,7 @@ use std::iter::repeat;
 
 use serde::{Deserialize, Serialize};
 
-use crate::tui::constants;
+use crate::{data::midi::MIDI_CHANNEL_MAX, tui::constants};
 
 use super::note::Note;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -41,7 +41,7 @@ impl Pattern {
             name: None,
 
             ticks_per_line: 6,
-            channel_mutes: [false; 16],
+            channel_mutes: [false; MIDI_CHANNEL_MAX as usize + 1],
         };
         pattern.initialize_rows();
         return pattern;
