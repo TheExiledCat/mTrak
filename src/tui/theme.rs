@@ -11,6 +11,7 @@ const FT2_PATTERN_BG: Color = Color::Rgb(0, 0, 0);
 const FT2_PATTERN_TEXT: Color = Color::Rgb(196, 214, 236);
 const FT2_TEXT: Color = Color::Rgb(255, 255, 255);
 const FT2_EDIT: Color = Color::Rgb(214, 82, 82);
+const FT2_WARNING: Color = Color::Rgb(230, 190, 80);
 
 /// Named styles for everything the views draw, so they never hard-code colors.
 /// The monochrome variant relies only on text modifiers, so every state stays visible
@@ -48,6 +49,8 @@ pub struct Theme {
     /// the description part of a footer hint, e.g. "Save"
     pub key_hint_label: Style,
     pub dialog_border: Style,
+    pub dialog_warning_border: Style,
+    pub dialog_error_border: Style,
 }
 
 impl Theme {
@@ -109,6 +112,8 @@ impl Theme {
             key_hint_key: Style::new().fg(FT2_PATTERN_BG).bg(FT2_DESKTOP_LIGHT),
             key_hint_label: Style::new().fg(FT2_TEXT),
             dialog_border: Style::new().fg(FT2_DESKTOP_LIGHT),
+            dialog_warning_border: Style::new().fg(FT2_WARNING),
+            dialog_error_border: Style::new().fg(FT2_EDIT),
         };
     }
 
@@ -136,6 +141,8 @@ impl Theme {
             key_hint_key: Style::new().fg(Color::Black).bg(Color::Gray),
             key_hint_label: Style::new().fg(Color::White),
             dialog_border: Style::new().fg(Color::Gray),
+            dialog_warning_border: Style::new().fg(Color::Yellow),
+            dialog_error_border: Style::new().fg(Color::Red),
         };
     }
 
@@ -164,6 +171,8 @@ impl Theme {
             key_hint_key: Style::new().reversed(),
             key_hint_label: Style::new(),
             dialog_border: Style::new().bold(),
+            dialog_warning_border: Style::new().bold().underlined(),
+            dialog_error_border: Style::new().bold().reversed(),
         };
     }
 }
