@@ -4,10 +4,18 @@ use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModif
 
 use crate::tui::{app::AppState, glyphs};
 
-pub const CONTROL_SYMBOL: char = '^';
+#[cfg(target_os = "macos")]
+pub const CONTROL_SYMBOL: &'static str = "⌃";
+#[cfg(not(target_os = "macos"))]
+pub const CONTROL_SYMBOL: &'static str = "^";
+pub const ASCII_CONTROL_SYMBOL: &'static str = "^";
+#[cfg(target_os = "macos")]
+pub const ALT_SYMBOL: &'static str = "⌥";
+#[cfg(not(target_os = "macos"))]
+pub const ALT_SYMBOL: &'static str = "A-";
+pub const ASCII_ALT_SYMBOL: &'static str = "A-";
 pub const SHIFT_SYMBOL: &'static str = "⇧";
 pub const ASCII_SHIFT_SYMBOL: &'static str = "S-";
-pub const ALT_SYMBOL: &'static str = "A-";
 /// A key plus its modifiers, e.g. Ctrl+S.
 ///
 /// Terminals disagree on how they report Shift: some send `Char('S')`, others `Char('s')` with
@@ -75,10 +83,10 @@ impl Key {
 impl Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.modifiers.contains(KeyModifiers::CONTROL) {
-            write!(f, "{}", CONTROL_SYMBOL)?;
+            write!(f, "{}", glyphs::pick(CONTROL_SYMBOL, ASCII_CONTROL_SYMBOL))?;
         }
         if self.modifiers.contains(KeyModifiers::ALT) {
-            write!(f, "{}", ALT_SYMBOL)?;
+            write!(f, "{}", glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL))?;
         }
         if self.modifiers.contains(KeyModifiers::SHIFT) {
             write!(f, "{}", glyphs::pick(SHIFT_SYMBOL, ASCII_SHIFT_SYMBOL))?;
@@ -283,7 +291,7 @@ mod tests {
 
     #[test]
     fn display() {
-        assert_eq!(Key::ctrl('s').to_string(), "^S");
+        assert_eq!(Key::ctrl('s').to_string(), format!("{CONTROL_SYMBOL}S"));
         assert_eq!(Key::char(' ').to_string(), "Spc");
         assert_eq!(Key::plain(KeyCode::Up).to_string(), "↑");
         assert_eq!(Key::plain(KeyCode::Enter).to_string(), "Enter");
@@ -300,7 +308,10 @@ mod tests {
         let shown: Vec<(String, &str)> = hints.into_iter().map(|h| (h.key, h.label)).collect();
         assert_eq!(
             shown,
-            vec![("↑/↓".to_string(), "ROW"), ("^S".to_string(), "Save")]
+            vec![
+                ("↑/↓".to_string(), "ROW"),
+                (format!("{CONTROL_SYMBOL}S"), "Save")
+            ]
         );
     }
 
@@ -331,6 +342,9 @@ mod tests {
         let mut hints = Vec::new();
         keymap.hints(&mut hints);
         let shown: Vec<(String, &str)> = hints.into_iter().map(|h| (h.key, h.label)).collect();
-        assert_eq!(shown, vec![("Del/Bksp/⇧Del/A-Del".to_string(), "Del")]);
+        assert_eq!(
+            shown,
+            vec![(format!("Del/Bksp/⇧Del/{ALT_SYMBOL}Del"), "Del")]
+        );
     }
 }
