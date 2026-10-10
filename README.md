@@ -55,8 +55,37 @@ mtrak                  # start with an empty project
 mtrak song.mtrak       # open a project
 ```
 
-Pick a MIDI output port with `Ctrl+O`. mTrak makes no sound on its own, so connect it to
-a synth such as FluidSynth or a DAW.
+Pick a MIDI output port with `Ctrl+O`. mTrak makes no sound on its own, so connect it to a physical (or virtual) midi device to make music.
+
+## Roadmap
+
+Planned features, in no particular order:
+
+- [ ] **Undo system**
+- [ ] **MIDI file import/export**
+- [ ] **MIDI input**
+- [ ] **MIDI clock out**: send clock and start/stop to sync external sequencers, drum machines and arpeggiators
+- [ ] **Multiple output ports**: map instruments to different MIDI devices, not just channels on one port
+- [ ] **Program change and bank select per instrument**, so loading a project restores the right patches
+- [ ] **Panic button**: all notes off and reset controllers, for stuck notes
+- [ ] **Live record**: play notes in while the song is playing, for beatmaking
+- [ ] **Row lock edit**: option to stop the cursor following the playback row, so you can edit a pattern while it plays (handy for loops)
+- [ ] **Block operations**: select, copy, paste and transpose across rows and tracks
+- [ ] **Swing/groove**, per pattern or global
+- [ ] **More commands**
+  - [ ] Roll
+  - [ ] Roll with volume glide
+  - [ ] Tempo (BPM) change
+  - [ ] Note delay
+  - [ ] Note probability
+  - [ ] Shorthand commands for common CCs (mod wheel, filter cutoff, etc.)
+- [ ] **Autosave and crash recovery**
+- [ ] **Custom themes**
+- [ ] **Keyboard remapping**, with default layouts per OS/shell
+- [ ] **Proper CLI argument parsing** and a global app config
+- [ ] ...and more
+
+Have an idea? Feel free to open an issue.
 
 ## Contributing
 
