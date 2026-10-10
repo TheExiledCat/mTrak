@@ -4,12 +4,14 @@ use midi::{
 };
 use num::FromPrimitive;
 
-use crate::data::{
-    effect::{EffectCommand, MidiCommand},
-    midi::{MIDI_CHANNEL_MAX, MidiEvent},
-    note::Note,
+use crate::{
+    data::{
+        effect::{EffectCommand, MidiCommand},
+        midi::{MIDI_CHANNEL_MAX, MidiEvent},
+        note::Note,
+    },
+    tui::constants::TRACK_COUNT,
 };
-use crate::tui::constants::TRACK_COUNT;
 
 /// What the engine found ahead of a command, for commands that depend on later rows.
 #[derive(Default)]
@@ -147,6 +149,12 @@ pub struct MidiCommandHandler {
     bent: [bool; MIDI_CHANNEL_COUNT],
     pressed: [bool; MIDI_CHANNEL_COUNT],
 }
+impl Default for MidiCommandHandler {
+    fn default() -> Self {
+        return Self::new();
+    }
+}
+
 impl MidiCommandHandler {
     pub fn new() -> Self {
         return Self {
@@ -295,6 +303,12 @@ pub struct EffectCommandHandler {
     bpm: Option<u8>,
     speed: Option<u8>,
 }
+impl Default for EffectCommandHandler {
+    fn default() -> Self {
+        return Self::new();
+    }
+}
+
 impl EffectCommandHandler {
     pub fn new() -> Self {
         return Self {
@@ -344,12 +358,11 @@ impl CommandHandler<EffectCommand> for EffectCommandHandler {
 mod tests {
     use midi::Message;
 
+    use super::*;
     use crate::data::{
         effect::{Command, CommandKind},
         note::Note,
     };
-
-    use super::*;
 
     fn cc_note(command: MidiCommand, value: u8, instrument: u8) -> Note {
         let mut note = Note::empty();

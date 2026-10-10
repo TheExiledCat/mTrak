@@ -1,3 +1,5 @@
+use std::fmt::{self, Display};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -7,7 +9,7 @@ use crate::{
 
 #[derive(Debug)]
 pub enum NoteError {
-    PARSE_FAILURE(String),
+    ParseFailure(String),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -27,12 +29,12 @@ impl NoteKind {
     }
 }
 
-impl ToString for NoteKind {
-    fn to_string(&self) -> String {
+impl Display for NoteKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         return match self {
-            NoteKind::Empty => String::from("---"),
-            NoteKind::Off => String::from("==="),
-            NoteKind::On(pitch) => pitch.to_string(),
+            NoteKind::Empty => write!(f, "---"),
+            NoteKind::Off => write!(f, "==="),
+            NoteKind::On(pitch) => write!(f, "{}", pitch),
         };
     }
 }
@@ -64,19 +66,20 @@ impl Note {
     pub fn from_string(string: &str) -> Result<Note, NoteError> {
         let chunks = string.split("|").collect::<Vec<&str>>();
         if chunks.len() != 4 {
-            return Err(NoteError::PARSE_FAILURE(string.to_owned()));
+            return Err(NoteError::ParseFailure(string.to_owned()));
         }
 
         let kind = NoteKind::from_string(chunks[0])?;
         let instrument_id = match chunks[1] {
             "-" => None,
             s => Some(
-                u8::from_str_radix(s, 16).map_err(|e| NoteError::PARSE_FAILURE(e.to_string()))?,
+                u8::from_str_radix(s, 16).map_err(|e| NoteError::ParseFailure(e.to_string()))?,
             ),
         };
         let velocity = u8::from_str_radix(chunks[2], 16).ok();
-        let command = Command::from_str(chunks[3])
-            .map_err(|_| NoteError::PARSE_FAILURE("Invalid Command String".into()))?;
+        let command = chunks[3]
+            .parse::<Command>()
+            .map_err(|_| NoteError::ParseFailure("Invalid Command String".into()))?;
         return Ok(Note::new(kind, instrument_id, velocity, command));
     }
     /// Clears the note and the instrument that goes with it.
@@ -92,18 +95,19 @@ impl Note {
     }
 }
 
-impl ToString for Note {
-    fn to_string(&self) -> String {
-        return format!(
+impl Display for Note {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        return write!(
+            f,
             "{}|{}|{}|{}",
-            self.kind.to_string(),
+            self.kind,
             self.instrument_id
                 .map(|i| format!("{:1X}", i))
                 .unwrap_or("-".into()),
             self.velocity
                 .map(|v| format!("{:02X}", v))
                 .unwrap_or("--".into()),
-            self.command.to_string()
+            self.command
         );
     }
 }
@@ -122,41 +126,40 @@ impl NotePitch {
     }
     pub fn from_string(string: &str) -> Result<NotePitch, NoteError> {
         if !string.is_char_boundary(2) {
-            return Err(NoteError::PARSE_FAILURE(string.to_owned()));
+            return Err(NoteError::ParseFailure(string.to_owned()));
         }
         let (note_name, octave) = string.split_at(2);
         let octave: u8 = octave
             .parse()
-            .map_err(|_| NoteError::PARSE_FAILURE(string.to_owned()))?;
+            .map_err(|_| NoteError::ParseFailure(string.to_owned()))?;
         let note_index = constants::NOTE_NAMES
             .iter()
             .position(|s| *s == note_name)
-            .ok_or(NoteError::PARSE_FAILURE(string.to_owned()))?;
+            .ok_or(NoteError::ParseFailure(string.to_owned()))?;
         let pitch = octave
             .checked_add(1)
             .and_then(|o| o.checked_mul(12))
             .and_then(|p| p.checked_add(note_index as u8))
             .filter(|p| *p <= Self::MAX)
-            .ok_or(NoteError::PARSE_FAILURE(string.to_owned()))?;
+            .ok_or(NoteError::ParseFailure(string.to_owned()))?;
         return Ok(NotePitch(pitch));
     }
 }
 
-impl ToString for NotePitch {
-    fn to_string(&self) -> String {
+impl Display for NotePitch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let note = self.0;
         let pitch_class = note as usize % 12;
         let octave = (note as i32 / 12) - 1;
         let note_name = constants::NOTE_NAMES[pitch_class];
-        format!("{}{}", note_name, octave)
+        return write!(f, "{}{}", note_name, octave);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::data::{effect::CommandKind, midi::MIDI_CHANNEL_MAX};
-
     use super::*;
+    use crate::data::{effect::CommandKind, midi::MIDI_CHANNEL_MAX};
     #[test]
     fn note_string_to_note() {
         let note = Note::from_string("D#5|1|F0|0FF").unwrap();

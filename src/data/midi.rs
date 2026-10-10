@@ -53,10 +53,10 @@ pub fn midi_to_string(event: &MidiEvent) -> String {
             Message::Stop => "Stop".into(),
             Message::ActiveSensing => todo!(),
             Message::SystemReset => todo!(),
-            Message::AllSoundOff(channel) => todo!(),
-            Message::ResetAllControllers(channel) => todo!(),
-            Message::LocalControlOff(channel) => todo!(),
-            Message::LocalControlOn(channel) => todo!(),
+            Message::AllSoundOff(_) => todo!(),
+            Message::ResetAllControllers(_) => todo!(),
+            Message::LocalControlOff(_) => todo!(),
+            Message::LocalControlOn(_) => todo!(),
             Message::AllNotesOff(channel) => format!("{:?} Note Off All", channel),
             Message::NoteOff(channel, note, vel) => {
                 format!("{:?} Note Off ({}, {})", channel, note, vel)
@@ -65,26 +65,26 @@ pub fn midi_to_string(event: &MidiEvent) -> String {
                 format!("{:?} Program Change ({})", channel, num)
             }
             Message::ControlChange(channel, cc, val) => format!("{:?} CC{} {}", channel, cc, val),
-            Message::RPN7(channel, _, _) => todo!(),
-            Message::RPN14(channel, _, _) => todo!(),
-            Message::NRPN7(channel, _, _) => todo!(),
-            Message::NRPN14(channel, _, _) => todo!(),
-            Message::SysEx(manufacturer, items) => todo!(),
+            Message::RPN7(_, _, _) => todo!(),
+            Message::RPN14(_, _, _) => todo!(),
+            Message::NRPN7(_, _, _) => todo!(),
+            Message::NRPN14(_, _, _) => todo!(),
+            Message::SysEx(_, _) => todo!(),
             Message::NoteOn(channel, note, vel) => {
                 format!("{:?} Note On ({}, {})", channel, note, vel)
             }
             Message::PitchBend(channel, bend) => {
                 format!("{:?} Bend ({})", channel, *bend as i16)
             }
-            Message::PolyphonicPressure(channel, _, _) => todo!(),
+            Message::PolyphonicPressure(_, _, _) => todo!(),
             Message::ChannelPressure(channel, pressure) => {
                 format!("{:?} Pressure ({})", channel, pressure)
             }
         },
-        MidiEvent::NotesOffAll => format!("Note Off Global"),
+        MidiEvent::NotesOffAll => "Note Off Global".to_string(),
         MidiEvent::Aggregate(messages) => messages
             .iter()
-            .map(|m| midi_to_string(m))
+            .map(midi_to_string)
             .collect::<Vec<String>>()
             .join("\n"),
     }
@@ -94,11 +94,11 @@ pub fn raw_message_to_bytes(msg: RawMessage) -> Vec<u8> {
         RawMessage::Status(status) => vec![status],
 
         RawMessage::StatusData(status, data) => {
-            vec![status, u8::from(data)]
+            vec![status, data]
         }
 
         RawMessage::StatusDataData(status, data1, data2) => {
-            vec![status, u8::from(data1), u8::from(data2)]
+            vec![status, data1, data2]
         }
 
         RawMessage::Raw(byte) => {

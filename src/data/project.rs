@@ -6,15 +6,14 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::{
-    midi::{DEFAULT_BPM, MIDI_CHANNEL_MAX},
-    pattern::PatternId,
-};
-
 use super::{
     config::Config,
     instrument::Instrument,
     pattern::{Pattern, PatternStore},
+};
+use crate::data::{
+    midi::{DEFAULT_BPM, MIDI_CHANNEL_MAX},
+    pattern::PatternId,
 };
 const PROJECT_HEADER: [u8; 4] = *b"MTRK";
 const PROJECT_VERSION: u16 = 1;
@@ -109,15 +108,10 @@ impl Project {
         );
     }
     pub fn save(&mut self, config: &Config, name: Option<String>) -> Result<(), Error> {
-        if let Some(name) = name.clone() {
+        if let Some(name) = name {
             self.name = Some(name);
-        } else {
-            if let Some(_name) = self.name.clone() {
-                // all is good
-            } else {
-                // there is no name
-                panic!("No name set for project");
-            }
+        } else if self.name.is_none() {
+            panic!("No name set for project");
         }
         let file_path = config.project_dir.join(self.name.clone().unwrap());
         let mut file = File::create(file_path)?;

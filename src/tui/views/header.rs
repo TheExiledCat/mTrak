@@ -11,7 +11,7 @@ use ratatui::{
         terminal,
     },
     layout::{Constraint, Layout, Rect},
-    style::{Style, Styled, Stylize},
+    style::{Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph, Widget},
 };
@@ -40,6 +40,12 @@ pub struct Header {
     midi_events: MidiEventList,
     util: UtilList,
     instruments: InstrumentList,
+}
+
+impl Default for Header {
+    fn default() -> Self {
+        return Self::new();
+    }
 }
 
 impl Header {
@@ -177,7 +183,7 @@ impl MtrakWidget for HeaderBottomLeft {
             return false;
         };
         let n = n as u8;
-        let boundary = (MIDI_CHANNEL_MAX + 1) / 2;
+        let boundary = MIDI_CHANNEL_MAX.div_ceil(2);
         if n == boundary + 1 {
             self.upper = !self.upper;
             return true;
@@ -216,7 +222,7 @@ impl MtrakWidget for HeaderBottomLeft {
             .borders(Borders::ALL)
             .title_top("Channels")
             .title_style(Style::new().reversed());
-        let grid_rect = grid_block.inner(area.clone());
+        let grid_rect = grid_block.inner(area);
         grid_block.render(area, buf);
         let grid = {
             let vertical_layout =
@@ -225,7 +231,7 @@ impl MtrakWidget for HeaderBottomLeft {
                 Constraint::Fill(1),
                 (MIDI_CHANNEL_MAX + 1) as usize / 2,
             ));
-            let top = layout.split(vertical_layout[0].clone()).to_vec();
+            let top = layout.split(vertical_layout[0]).to_vec();
             let bottom = layout.split(vertical_layout[1]).to_vec();
             top.into_iter().chain(bottom).collect::<Vec<Rect>>()
         };
@@ -506,9 +512,9 @@ impl MtrakWidget for PatternInfo {
             Layout::vertical([Constraint::Fill(1), Constraint::Max(3)]).split(area);
 
         let font = FIGlet::small().unwrap();
-        let figlet = font.convert(TITLE).take().unwrap();
+        let figlet = font.convert(TITLE).unwrap();
         let _terminal_size = terminal::size().unwrap();
-        let _title = Paragraph::new(figlet.as_str())
+        Paragraph::new(figlet.as_str())
             .centered()
             .bold()
             .block(
@@ -571,7 +577,7 @@ impl MtrakWidget for PatternInfo {
                 ),
             ]
             .into_iter()
-            .map(|l| Line::raw(l))
+            .map(Line::raw)
             .collect::<Vec<Line>>(),
         );
         let horizontal_layout = Layout::horizontal([Constraint::Max(width), Constraint::Fill(1)])
@@ -599,7 +605,7 @@ impl KeyActions for PatternInfo {
     type Action = PatternInfoActions;
 
     fn keymap(&self) -> &Keymap<Self::Action> {
-        &self.keymap
+        return &self.keymap;
     }
 
     fn perform(&mut self, action: Self::Action, state: &mut AppState) {
@@ -840,7 +846,7 @@ impl MidiEventList {
         return match event {
             MidiEvent::Aggregate(midi_events) => midi_events
                 .iter()
-                .flat_map(|e| Self::create_lines_from_event(e))
+                .flat_map(Self::create_lines_from_event)
                 .collect(),
             _ => vec![midi_to_string(event)],
         };
@@ -854,7 +860,7 @@ impl MtrakWidget for MidiEventList {
             .flat_map(|e| Self::create_lines_from_event(&e))
             .collect::<Vec<String>>();
 
-        if pending.len() > 0 {
+        if !pending.is_empty() {
             self.pending_lines.append(&mut pending);
         }
         let overflow = self
@@ -932,7 +938,7 @@ impl KeyActions for UtilList {
     type Action = UtilListAction;
 
     fn keymap(&self) -> &Keymap<Self::Action> {
-        &self.keymap
+        return &self.keymap;
     }
 
     fn perform(&mut self, action: Self::Action, state: &mut AppState) {

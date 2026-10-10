@@ -14,7 +14,7 @@ pub fn split_keep_delim<'a>(s: &'a str, pat: &str) -> Vec<&'a str> {
         result.push(&s[last..]); // remainder
     }
 
-    result
+    return result;
 }
 
 #[cfg(test)]
