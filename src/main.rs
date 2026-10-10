@@ -7,7 +7,7 @@ use ratatui::crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
 };
-use tui::{app::App, glyphs};
+use tui::{app::App, glyphs, theme::Theme};
 
 pub mod cli;
 pub mod data;
@@ -23,6 +23,7 @@ fn main() -> Result<(), io::Error> {
     let mut app = App::new(
         terminal,
         120,
+        Theme::from_color_mode(args.color),
         if let Some(path) = args.project_file {
             Project::new(path)
         } else {
