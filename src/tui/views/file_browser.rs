@@ -20,7 +20,7 @@ use crate::tui::{
     },
     views::file_browser::FileBrowserMode::SaveFile,
 };
-
+pub const MTRAK_FILE_EXTENSION: &'static str = ".mtrak";
 const ALL_EXTENSIONS_FILTER: &str = "*";
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FileBrowserAction {
@@ -32,7 +32,7 @@ pub enum FileBrowserAction {
 }
 
 enum FileBrowserMode {
-    SaveFile,
+    SaveFile { extension_filter: String },
     OpenFile { extension_filter: String },
 }
 pub type Submit = dyn FnOnce(&mut AppState, PathBuf);
@@ -71,7 +71,9 @@ impl FileBrowser {
             keymap,
             default_path: default_path.clone(),
             is_open: false,
-            mode: SaveFile,
+            mode: SaveFile {
+                extension_filter: ".mtrak".into(),
+            },
             current_folder: default_path,
             title: String::new(),
             selected_file: None,
@@ -82,10 +84,19 @@ impl FileBrowser {
         };
     }
 
-    pub fn save_file(&mut self, on_submit: Box<Submit>) {
-        self.mode = SaveFile;
+    pub fn save_file(
+        &mut self,
+        on_submit: Box<Submit>,
+        title: impl Into<String>,
+        file_filter: impl Into<String>,
+    ) {
+        self.mode = SaveFile {
+            extension_filter: file_filter.into(),
+        };
         self.is_open = true;
         self.submit_handler = Some(on_submit);
+        self.title = title.into();
+
         self.load_contents();
     }
 
@@ -166,7 +177,7 @@ impl MtrakWidget for FileBrowser {
             .map(|l| {
                 let index = l.0;
                 let line = l.1;
-                let mut style = state.theme.header_border;
+                let mut style = state.theme.pattern_area;
                 if self.selected_index == index {
                     style = style.reversed();
                 }
@@ -181,13 +192,16 @@ impl MtrakWidget for FileBrowser {
         } else if visible > 0 && self.selected_index >= self.scroll_offset + visible {
             self.scroll_offset = self.selected_index + 1 - visible;
         }
-
+        let total_lines = lines.len();
+        let block = Block::new().style(state.theme.pattern_area);
         Paragraph::new(lines)
-            .style(state.theme.header_border)
             .left_aligned()
             .scroll((self.scroll_offset as u16, 0))
+            .block(block.clone())
             .render(layout[1], buf);
-
+        if self.scroll_offset + visible < total_lines {
+            Paragraph::new("▼").block(block).render(layout[2], buf);
+        }
         Paragraph::new(format!(
             "Selected: {}",
             self.selected_file
@@ -205,8 +219,8 @@ impl MtrakWidget for FileBrowser {
                 .iter()
                 .flat_map(|h| {
                     [
-                        Span::raw(format!("{} ", h.key)).style(state.theme.key_hint_key),
-                        Span::raw(format!("{} ", h.label)).style(state.theme.key_hint_label),
+                        Span::raw(format!("{}", h.key)).style(state.theme.key_hint_key),
+                        Span::raw(format!(" {} ", h.label)).style(state.theme.key_hint_label),
                     ]
                     .into_iter()
                     .collect::<Vec<Span>>()

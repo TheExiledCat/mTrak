@@ -701,13 +701,14 @@ impl MtrakWidget for TimeLineView {
         }
 
         // enter_note_digit validates per column; '+' is rejected because from_str_radix accepts it as a sign
-        if let KeyCode::Char(digit) = key.code
-            && digit != '+'
-            && !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-        {
-            return self.enter_note_digit(state, digit);
+        if let KeyCode::Char(digit) = key.code {
+            if digit != '+'
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            {
+                return self.enter_note_digit(state, digit);
+            }
         }
         return false;
     }
