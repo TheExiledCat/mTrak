@@ -72,10 +72,11 @@ Planned features, in no particular order:
 - [ ] **Row lock edit**: option to stop the cursor following the playback row, so you can edit a pattern while it plays (handy for loops)
 - [ ] **Block operations**: select, copy, paste and transpose across rows and tracks
 - [ ] **Swing/groove**, per pattern or global
+- [x] **Prebuilt binaries** for Linux, Windows and macOS on every release
 - [ ] **More commands**
   - [ ] Roll
   - [ ] Roll with volume glide
-  - [ ] Tempo (BPM) change
+  - [x] Tempo (BPM) and speed change (`F`)
   - [ ] Note delay
   - [ ] Note probability
   - [ ] Shorthand commands for common CCs (mod wheel, filter cutoff, etc.)
