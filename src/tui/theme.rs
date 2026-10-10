@@ -64,7 +64,8 @@ impl Theme {
     }
 
     /// Picks the FT2 theme when the terminal advertises 24-bit color, or is a Windows console
-    /// with VT support, and the 16-color theme on other Windows consoles, unless the user opted
+    /// with VT support, and the 16-color theme on other Windows consoles and macOS terminals,
+    /// since every macOS terminal supports at least 16 colors, unless the user opted
     /// out of color via `NO_COLOR` (https://no-color.org) or the terminal is `dumb`, falling
     /// back to the monochrome theme.
     pub fn detect() -> Self {
@@ -80,7 +81,7 @@ impl Theme {
         if full_color {
             return Self::ft2();
         }
-        if cfg!(windows) {
+        if cfg!(any(windows, target_os = "macos")) {
             return Self::ansi16();
         }
         return Self::monochrome();
