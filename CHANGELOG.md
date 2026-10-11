@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.1.0 - 2026-10-11
+
+### Added
+
+- Copy, cut and paste in the pattern editor, with FT2's keys for tracks and patterns. These
+  work in and out of edit mode, and during playback:
+  - Track: `Shift+F3` cut, `Shift+F4` copy, `Shift+F5` paste into the track under the cursor.
+  - Pattern: `Ctrl+F3` cut, `Ctrl+F4` copy, `Ctrl+F5` paste over the current pattern.
+  - Block: press `Alt+B` to drop a mark at the cursor, then move the cursor to stretch a
+    highlighted block from the mark. `Alt+X` cuts it, `Alt+C` copies it, and `Alt+V` pastes
+    it with its top-left corner at the cursor. Press `Alt+B` again to clear the mark.
+- Pasting a pattern into a shorter one asks whether to lengthen the pattern to fit, cut the
+  paste off at the end of the pattern, or cancel.
+- A keybindings screen: press `?` to see every key in mTrak, grouped by section (pattern
+  editor, edit mode, sequence, pattern, channels, instruments, file browser, dialogs). Scroll
+  with `↑`/`↓`, `PgUp`/`PgDn` and `Home`/`End`; `Esc` closes it.
+- MIDI clock: tick "Send MIDI clock" in the Config dialog (`Ctrl+O`) to send clock (24 pulses
+  per quarter note) to your MIDI output while playing, following the song's tempo, including
+  tempo commands. Clock messages aren't shown in the MIDI events panel.
+- Projects remember their MIDI output. When you open a project, mTrak reconnects to the
+  device it was saved with if it's connected, and leaves the output unset if it isn't.
+
+### Changed
+
+- The footer only shows the main keys now: `?` for the keybindings screen, edit, record,
+  note off, delete and insert (in edit mode), save and quit. Everything else is on the `?`
+  screen.
+- Project files made by earlier versions can't be opened, because the file format changed
+  (mTrak shows an error and starts an empty project instead). Until v1.0.0 the format may
+  change between releases.
+- Smaller download: unused dependencies were removed.
+
+### Fixed
+
+- mTrak no longer fails on startup with a missing music folder error on systems where
+  `XDG_MUSIC_DIR` isn't set (common on WSL and minimal Linux installs). It now uses
+  `~/Music/mtrak`.
+- The pattern-length-down key hint read "LEN UP" instead of "LEN DN".
+
+### Known issues
+
+- Projects can only be opened from the command line (`mtrak song.mtrak`), not from inside
+  mTrak yet.
+- Long error messages are cut off in the warning dialog.
+
 ## v0.0.2 - 2026-10-11
 
 ### Added
