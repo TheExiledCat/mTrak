@@ -51,6 +51,8 @@ pub struct Project {
     pub sequence: Vec<SequenceRow>,
     pub patterns: PatternStore,
     pub instruments: [Instrument; MIDI_CHANNEL_MAX as usize + 1],
+    pub midi_output: Option<String>,
+    pub send_midi_clock: bool,
 }
 impl Project {
     pub fn empty() -> Self {
@@ -65,6 +67,8 @@ impl Project {
             }],
             instruments: std::array::from_fn(|_| Instrument::default()),
             patterns: PatternStore::new(vec![Pattern::default()]),
+            midi_output: None,
+            send_midi_clock: false,
         };
     }
     pub fn load(project_file_path: PathBuf) -> Result<Self> {
@@ -139,6 +143,17 @@ mod tests {
         let loaded = Project::load(path.clone()).unwrap();
         std::fs::remove_file(path).unwrap();
         assert_eq!(loaded.bpm, 140);
+    }
+
+    #[test]
+    fn midi_output_round_trips() {
+        let path = temp_file("midi-output.mtrak", b"");
+        let mut project = Project::empty();
+        project.midi_output = Some("Synth".into());
+        project.save(path.clone()).unwrap();
+        let loaded = Project::load(path.clone()).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(loaded.midi_output.as_deref(), Some("Synth"));
     }
 
     #[test]

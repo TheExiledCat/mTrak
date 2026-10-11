@@ -23,7 +23,7 @@ use crate::{
         app::AppState,
         framework::{
             core_extensions::Boxed,
-            dialog::{Dialog, Select, TextPrompt},
+            dialog::{Checkbox, Dialog, Select, TextPrompt},
             keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::{MtrakWidget, clicked_in},
         },
@@ -734,9 +734,15 @@ fn open_config_dialog(state: &mut AppState) {
                 .label("MIDI output")
                 .selected(current)
                 .boxed(),
+            Checkbox::new("midi_clock", "Send MIDI clock")
+                .checked(state.project.send_midi_clock)
+                .boxed(),
         ],
     )
     .on_submit(|state, result| {
+        if let Some(enabled) = result.bool("midi_clock") {
+            state.set_midi_clock(enabled);
+        }
         let Some(index) = result.choice("port") else {
             return Ok(());
         };
@@ -744,8 +750,7 @@ fn open_config_dialog(state: &mut AppState) {
             .midi_client
             .as_ref()
             .and_then(|client| client.ports().get(index).cloned());
-        state.engine.set_output_port(port.clone());
-        state.active_port = port;
+        state.set_midi_output(port);
         return Ok(());
     });
     state.open_dialog(dialog);
