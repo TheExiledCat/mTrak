@@ -977,7 +977,12 @@ impl MtrakWidget for UtilList {
     }
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
         let bindings = &self.keymap.bindings();
-        let layout = Layout::vertical([Constraint::Length(bindings.len() as u16)]).split(area);
+        let layout = Layout::vertical([
+            Constraint::Length(bindings.len() as u16),
+            Constraint::Fill(1),
+            Constraint::Length(2),
+        ])
+        .split(area);
         let lines: Vec<Line> = bindings
             .iter()
             .map(|b| {
@@ -989,6 +994,12 @@ impl MtrakWidget for UtilList {
         Paragraph::new(lines)
             .block(Block::new().style(state.theme.header_title).reversed())
             .render(layout[0], buf);
+        if let Some(notification) = &state.notification {
+            Paragraph::new(notification.as_str())
+                .left_aligned()
+                .block(Block::bordered().borders(Borders::TOP))
+                .render(*layout.last().unwrap(), buf);
+        }
     }
 }
 impl KeyActions for UtilList {

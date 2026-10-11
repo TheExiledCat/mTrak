@@ -63,6 +63,7 @@ pub struct App {
     pub root: Container,
     pub dialogs: Vec<Dialog>,
     pub file_browser: FileBrowser,
+
     held_keys: HashSet<KeyCode>,
     reports_releases: bool,
 }
@@ -212,6 +213,7 @@ pub struct AppState {
     /// Where the project was last loaded from or saved to, so saving again skips the browser.
     pub project_path: Option<PathBuf>,
     pub copy_buffers: CopyBuffers,
+    pub notification: Option<String>,
     pending_dialogs: Vec<Dialog>,
     help_requested: bool,
     save_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
@@ -236,6 +238,7 @@ impl AppState {
             config: Config::default(),
             project,
             engine: EngineHandle::spawn()?,
+            notification: None,
             theme,
             exit_requested: false,
             active_sequence_index: 0,
@@ -373,6 +376,9 @@ impl AppState {
     }
     pub fn open_dialog(&mut self, dialog: Dialog) {
         self.pending_dialogs.push(dialog);
+    }
+    pub fn notify(&mut self, notification: impl Into<String>) {
+        self.notification = Some(notification.into());
     }
 
     pub fn request_save_file(
