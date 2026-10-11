@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.1.1 - 2026-10-11
+
+### Changed
+
+- Cut track is now `Shift+F6` and cut pattern is `Ctrl+F6` (they were `Shift+F3` and
+  `Ctrl+F3`). Copy (`F4`) and paste (`F5`) keys are unchanged.
+- Copy, cut and paste now confirm what they did (e.g. `TRCK CUT`, `PTN PASTE`,
+  `BLCK COPY`) at the bottom of the Util panel in the header.
+
+### Fixed
+
+- Cutting a track or pattern did nothing. Most terminals send `Shift+F3` and `Ctrl+F3` in a
+  form that is read as a cursor position report instead of a key press, so the keys never
+  reached mTrak. They've moved to `F6` (see above).
+
 ## v0.1.0 - 2026-10-11
 
 ### Added
