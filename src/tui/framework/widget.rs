@@ -4,7 +4,10 @@ use ratatui::{
     layout::{Position, Rect},
 };
 
-use crate::tui::{app::AppState, framework::keymap::KeyHint};
+use crate::tui::{
+    app::AppState,
+    framework::keymap::{HelpSection, KeyHint},
+};
 
 pub trait MtrakWidget {
     fn update(&mut self, _state: &mut AppState) {}
@@ -14,6 +17,7 @@ pub trait MtrakWidget {
     /// Adds the keys this widget currently responds to, for display in a footer or help view.
     /// Widgets with children should forward this to them.
     fn key_hints(&self, _state: &AppState, _hints: &mut Vec<KeyHint>) {}
+    fn help(&self, _sections: &mut Vec<HelpSection>) {}
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer);
 }
 

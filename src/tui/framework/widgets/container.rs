@@ -1,6 +1,9 @@
 use ratatui::widgets::{Block, Padding};
 
-use crate::tui::framework::{keymap::KeyHint, widget::MtrakWidget};
+use crate::tui::framework::{
+    keymap::{HelpSection, KeyHint},
+    widget::MtrakWidget,
+};
 
 pub struct Container {
     padding: Padding,
@@ -29,6 +32,10 @@ impl MtrakWidget for Container {
 
     fn key_hints(&self, state: &crate::tui::app::AppState, hints: &mut Vec<KeyHint>) {
         self.child.key_hints(state, hints);
+    }
+
+    fn help(&self, sections: &mut Vec<HelpSection>) {
+        self.child.help(sections);
     }
 
     fn render(

@@ -26,6 +26,10 @@ pub enum MTrakError {
     MissingDirectory(&'static str),
     /// A feature that isn't implemented yet.
     Unsupported(&'static str),
+    /// When pasting patterns only, if the pattern buffer is larger than the current patterns length. Not thrown for track or block buffers as those are truncated.
+    PatternPasteOverflow {
+        overflow_length: u8,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, MTrakError>;
@@ -42,6 +46,7 @@ impl MTrakError {
             MTrakError::Midi(_) => "MIDI error",
             MTrakError::Parse(_) => "Invalid input",
             MTrakError::Unsupported(_) => "Not supported",
+            MTrakError::PatternPasteOverflow { .. } => "Paste overflow",
         };
     }
 }
@@ -64,6 +69,11 @@ impl Display for MTrakError {
                 write!(f, "Could not find the {} folder on this system", name)
             }
             MTrakError::Unsupported(feature) => write!(f, "{} is not supported yet", feature),
+            MTrakError::PatternPasteOverflow { overflow_length } => write!(
+                f,
+                "Pattern buffer is larger than current pattern by {} rows",
+                overflow_length
+            ),
         };
     }
 }
