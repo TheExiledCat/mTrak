@@ -21,7 +21,7 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, PopupLevel, Select, TextPrompt},
-            keymap::{Key, KeyActions, Keymap},
+            keymap::{HelpSection, Key, KeyActions, Keymap},
             widget::MtrakWidget,
             widgets::footer::Footer,
         },
@@ -294,6 +294,9 @@ impl MtrakWidget for FileBrowser {
     ) {
         self.keymap.hints(_hints);
     }
+    fn help(&self, sections: &mut Vec<HelpSection>) {
+        sections.push(self.help_section("File browser"));
+    }
     fn handle_event(
         &mut self,
         _state: &mut AppState,
@@ -449,6 +452,17 @@ impl KeyActions for FileBrowser {
             }
         }
         return Ok(());
+    }
+
+    fn describe(action: FileBrowserAction) -> &'static str {
+        return match action {
+            FileBrowserAction::Down => "Move down",
+            FileBrowserAction::Up => "Move up",
+            FileBrowserAction::Select => "Open a folder, or select a file",
+            FileBrowserAction::Confirm => "Confirm",
+            FileBrowserAction::NewDirectory => "Create a folder",
+            FileBrowserAction::Cancel => "Close the file browser",
+        };
     }
 }
 

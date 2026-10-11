@@ -24,7 +24,7 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, Select, TextPrompt},
-            keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, Key, KeyActions, KeyHint, Keymap},
+            keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::{MtrakWidget, clicked_in},
         },
         glyphs,
@@ -107,6 +107,18 @@ impl MtrakWidget for Header {
         self.midi_events
             .render(state, layout[layout.len() - 2], buf);
         self.instruments.render(state, *layout.last().unwrap(), buf)
+    }
+    fn help(&self, sections: &mut Vec<HelpSection>) {
+        let alt = glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL);
+        sections.push(self.top_left.sequence_list.help_section("Sequence"));
+        sections.push(self.top_left.pattern_info.help_section("Pattern"));
+        sections.push(
+            HelpSection::new("Channels")
+                .entry(format!("{alt}1-8"), "Mute or unmute a channel")
+                .entry(format!("{alt}9"), "Switch between channels 1-8 and 9-16"),
+        );
+        sections.push(self.instruments.help_section("Instruments"));
+        sections.push(self.util.help_section("Util"));
     }
     fn key_hints(&self, state: &AppState, hints: &mut Vec<KeyHint>) {
         self.bottom_left.key_hints(state, hints);
@@ -403,6 +415,19 @@ impl KeyActions for SequenceList {
         }
         return Ok(());
     }
+
+    fn describe(action: SequenceAction) -> &'static str {
+        return match action {
+            NextPattern => "Next sequence position",
+            PrevPattern => "Previous sequence position",
+            Insert => "Insert the current pattern after this position",
+            Delete => "Delete this sequence position",
+            IncPattern => "Next pattern at this position",
+            DecPattern => "Previous pattern at this position",
+            IncRepeats => "Repeat this position more",
+            DecRepeats => "Repeat this position less",
+        };
+    }
 }
 impl MtrakWidget for SequenceList {
     fn handle_event(
@@ -491,7 +516,7 @@ impl PatternInfo {
             .bind(
                 Key::new(KeyCode::Down, KeyModifiers::CONTROL),
                 PatternLengthDown,
-                "LEN UP",
+                "LEN DN",
             );
         return Self { keymap };
     }
@@ -623,6 +648,21 @@ impl KeyActions for PatternInfo {
         }
         return Ok(());
     }
+
+    fn describe(action: PatternInfoActions) -> &'static str {
+        return match action {
+            PatternInfoActions::BpmUp => "Increase BPM",
+            PatternInfoActions::BpmDown => "Decrease BPM",
+            PatternInfoActions::SpeedUp => "Increase ticks per row",
+            PatternInfoActions::SpeedDown => "Decrease ticks per row",
+            PatternInfoActions::LineAddUp => "Increase rows skipped after entering a note",
+            PatternInfoActions::LineAddDown => "Decrease rows skipped after entering a note",
+            PatternInfoActions::PatternUp => "Next pattern",
+            PatternInfoActions::PatternDown => "Previous pattern",
+            PatternInfoActions::PatternLengthUp => "Make the pattern a row longer",
+            PatternInfoActions::PatternLengthDown => "Make the pattern a row shorter",
+        };
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -671,6 +711,13 @@ impl KeyActions for InstrumentList {
             }
         };
         return Ok(());
+    }
+
+    fn describe(action: InstrumentListAction) -> &'static str {
+        return match action {
+            InstrumentListAction::PrevInstrument => "Previous instrument",
+            InstrumentListAction::NextInstrument => "Next instrument",
+        };
     }
 }
 fn open_config_dialog(state: &mut AppState) {
@@ -953,5 +1000,13 @@ impl KeyActions for UtilList {
             UtilListAction::Config => open_config_dialog(state),
         }
         return Ok(());
+    }
+
+    fn describe(action: UtilListAction) -> &'static str {
+        return match action {
+            UtilListAction::Instruments => "Edit the current instrument",
+            UtilListAction::Velocity => "Set the global velocity",
+            UtilListAction::Config => "Choose the MIDI output",
+        };
     }
 }

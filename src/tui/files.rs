@@ -13,7 +13,9 @@ pub fn initialize_directories() -> Result<()> {
 }
 
 pub fn get_projects_directory_root() -> Option<PathBuf> {
-    return dirs::audio_dir().map(|d| d.join(FOLDER_ROOT_NAME));
+    return dirs::audio_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join("Music")))
+        .map(|d| d.join(FOLDER_ROOT_NAME));
 }
 pub fn get_config_directory_root() -> Option<PathBuf> {
     return dirs::config_local_dir().map(|d| d.join(FOLDER_ROOT_NAME));
