@@ -123,6 +123,38 @@ pub struct KeyHint {
     pub label: &'static str,
 }
 
+pub struct HelpEntry {
+    pub key: String,
+    pub description: &'static str,
+}
+
+pub struct HelpSection {
+    pub title: &'static str,
+    pub entries: Vec<HelpEntry>,
+}
+
+impl HelpSection {
+    pub fn new(title: &'static str) -> Self {
+        return Self {
+            title,
+            entries: Vec::new(),
+        };
+    }
+
+    pub fn entry(mut self, key: impl Into<String>, description: &'static str) -> Self {
+        self.entries.push(HelpEntry {
+            key: key.into(),
+            description,
+        });
+        return self;
+    }
+
+    pub fn entries(mut self, entries: Vec<HelpEntry>) -> Self {
+        self.entries.extend(entries);
+        return self;
+    }
+}
+
 pub struct Binding<A> {
     pub key: Key,
     pub action: A,
@@ -203,6 +235,26 @@ impl<A: Copy + PartialEq> Keymap<A> {
     }
 }
 
+impl<A: Copy + PartialEq> Keymap<A> {
+    pub fn help_entries(&self, describe: impl Fn(A) -> &'static str) -> Vec<HelpEntry> {
+        let mut groups: Vec<(&'static str, Vec<Key>)> = Vec::new();
+        for binding in &self.bindings {
+            let description = describe(binding.action);
+            match groups.iter_mut().find(|(d, _)| *d == description) {
+                Some((_, keys)) => keys.push(binding.key),
+                None => groups.push((description, vec![binding.key])),
+            }
+        }
+        return groups
+            .into_iter()
+            .map(|(description, keys)| HelpEntry {
+                key: join_keys(&keys),
+                description,
+            })
+            .collect();
+    }
+}
+
 /// Joins keys with "/", collapsing runs of three or more consecutive function keys into a
 /// range, e.g. "Fn9-12" instead of "F9/F10/F11/F12".
 fn join_keys(keys: &[Key]) -> String {
@@ -241,6 +293,12 @@ pub trait KeyActions {
 
     /// Runs `action`. Errors are shown to the user in a warning dialog.
     fn perform(&mut self, action: Self::Action, state: &mut AppState) -> Result<()>;
+
+    fn describe(action: Self::Action) -> &'static str;
+
+    fn help_section(&self, title: &'static str) -> HelpSection {
+        return HelpSection::new(title).entries(self.keymap().help_entries(Self::describe));
+    }
 
     /// Runs the action bound to `event`, returning whether it was handled.
     fn dispatch(&mut self, state: &mut AppState, event: &Event) -> bool {

@@ -27,7 +27,7 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, Label, Select},
-            keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, Key, KeyActions, KeyHint, Keymap},
+            keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
         },
         glyphs,
@@ -570,6 +570,44 @@ impl KeyActions for TimeLineView {
         }
         return Ok(());
     }
+
+    fn describe(action: TimelineAction) -> &'static str {
+        use TimelineAction::*;
+        return match action {
+            RowUp => "Move up a row",
+            RowDown => "Move down a row",
+            PrevTrack => "Previous track",
+            NextTrack => "Next track",
+            PrevColumn => "Move left a column",
+            NextColumn => "Move right a column",
+            ToggleEdit => "Toggle edit mode, or stop playback",
+            ToggleRecord => "Toggle record mode",
+            Jump16Down => "Jump 16 rows down",
+            Jump16Up => "Jump 16 rows up",
+            JumpToFirstRow => "Jump to the first row",
+            JumpToLastRow => "Jump to the last row",
+            JumpToMarker(_) => "Jump to row 00/10/20/30",
+            NoteOff => "Note off",
+            DeleteAtCursor => "Clear the note, or the volume on the volume column",
+            DeleteAll => "Clear note, volume and effect",
+            DeleteVolumeAndEffect => "Clear volume and effect",
+            DeleteEffect => "Clear effect",
+            DeletePreviousNote => "Delete the note above, pulling the track up",
+            DeletePreviousLine => "Delete the row above, pulling every track up",
+            InsertNote => "Insert an empty note, pushing the track down",
+            InsertLine => "Insert an empty row, pushing every track down",
+            CutTrack => "Cut track",
+            CopyTrack => "Copy track",
+            PasteTrack => "Paste track",
+            CutPattern => "Cut pattern",
+            CopyPattern => "Copy pattern",
+            PastePattern => "Paste pattern",
+            ToggleBlockMark => "Start or clear a block mark at the cursor",
+            CutBlock => "Cut the marked block",
+            CopyBlock => "Copy the marked block",
+            PasteBlock => "Paste block at the cursor",
+        };
+    }
 }
 impl TimeLineView {
     fn marked_block(&self, state: &AppState) -> Option<(u8, u8, u8, u8)> {
@@ -927,12 +965,39 @@ impl MtrakWidget for TimeLineView {
         return false;
     }
 
+    fn help(&self, sections: &mut Vec<HelpSection>) {
+        let alt = glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL);
+        let normal = self.normal_keys.help_entries(Self::describe);
+        let edit_only = self
+            .edit_keys
+            .help_entries(Self::describe)
+            .into_iter()
+            .filter(|e| {
+                !normal
+                    .iter()
+                    .any(|n| n.key == e.key && n.description == e.description)
+            })
+            .collect();
+        sections.push(
+            HelpSection::new("Pattern editor")
+                .entries(normal)
+                .entry(format!("{alt}Q-I"), "Jump to track 1-8")
+                .entry("Fn1-8", "Set octave")
+                .entry("Z-, / Q-I", "Play a note on the current track"),
+        );
+        sections.push(
+            HelpSection::new("Pattern editor (edit mode)")
+                .entries(edit_only)
+                .entry("Z-, / Q-I", "Enter a note on the note column")
+                .entry("0-9 / A-F", "Enter a hex digit on the other columns"),
+        );
+    }
+
     fn key_hints(&self, _state: &AppState, hints: &mut Vec<KeyHint>) {
-        self.keymap().hints(hints);
-        hints.push(KeyHint {
-            key: format!("{}Q-I", glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL)),
-            label: "TRCK",
-        });
+        use TimelineAction::*;
+        for action in [ToggleEdit, ToggleRecord, NoteOff, DeleteAtCursor, InsertNote] {
+            hints.extend(self.keymap().hint_for(action));
+        }
     }
 
     fn render(
