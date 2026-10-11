@@ -26,6 +26,7 @@ use crate::{
     engine::{engine::PlayMode, handle::EngineHandle},
     error::{MTrakError, Result},
     tui::{
+        copy_buffers::CopyBuffers,
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, PopupLevel},
@@ -197,6 +198,7 @@ pub struct AppState {
     pub recording: bool,
     /// Where the project was last loaded from or saved to, so saving again skips the browser.
     pub project_path: Option<PathBuf>,
+    pub copy_buffers: CopyBuffers,
     pending_dialogs: Vec<Dialog>,
     save_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
     changed_patterns: HashSet<PatternId>,
@@ -238,6 +240,7 @@ impl AppState {
             sequence_changed: true,
             save_file_request: None,
             errors,
+            copy_buffers: CopyBuffers::new(),
         };
         for (channel, instrument) in state.project.instruments.iter().enumerate() {
             state
@@ -311,6 +314,15 @@ impl AppState {
             .patterns
             .get_pattern_by_id_mut(self.active_pattern)
             .unwrap();
+    }
+    pub fn copy_buffers_and_active_pattern_mut(&mut self) -> (&mut CopyBuffers, &mut Pattern) {
+        self.changed_patterns.insert(self.active_pattern);
+        let pattern = self
+            .project
+            .patterns
+            .get_pattern_by_id_mut(self.active_pattern)
+            .unwrap();
+        return (&mut self.copy_buffers, pattern);
     }
     pub fn open_dialog(&mut self, dialog: Dialog) {
         self.pending_dialogs.push(dialog);

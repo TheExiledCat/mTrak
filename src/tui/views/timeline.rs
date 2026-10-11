@@ -20,11 +20,13 @@ use crate::{
         pattern::PatternId,
     },
     engine::engine::PlayMode,
-    error::Result,
+    error::{MTrakError, Result},
     tui::{
         app::{AppState, TrackCache, column_index_to_note_string_index},
         constants::{self, NOTE_OFF_KEY},
         framework::{
+            core_extensions::Boxed,
+            dialog::{Dialog, Label, Select},
             keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
         },
@@ -66,6 +68,16 @@ pub enum TimelineAction {
     InsertNote,
     /// Pushes every track down from the cursor, leaving an empty row.
     InsertLine,
+    CutTrack,
+    CopyTrack,
+    PasteTrack,
+    CutPattern,
+    CopyPattern,
+    PastePattern,
+    ToggleBlockMark,
+    CutBlock,
+    CopyBlock,
+    PasteBlock,
 }
 
 /// Rows F9..F12 jump to, as in FT2. Clamped to the last row for shorter patterns.
@@ -105,19 +117,74 @@ fn movement_keys(keymap: Keymap<TimelineAction>) -> Keymap<TimelineAction> {
     });
 }
 
+fn clipboard_keys(keymap: Keymap<TimelineAction>) -> Keymap<TimelineAction> {
+    use TimelineAction::*;
+    return keymap
+        .bind(
+            Key::new(KeyCode::Char('b'), KeyModifiers::ALT),
+            ToggleBlockMark,
+            "Mark",
+        )
+        .bind(
+            Key::new(KeyCode::F(4), KeyModifiers::SHIFT),
+            CopyTrack,
+            "Copy",
+        )
+        .bind(
+            Key::new(KeyCode::F(4), KeyModifiers::CONTROL),
+            CopyPattern,
+            "Copy",
+        )
+        .bind(
+            Key::new(KeyCode::Char('c'), KeyModifiers::ALT),
+            CopyBlock,
+            "Copy",
+        )
+        .bind(
+            Key::new(KeyCode::F(3), KeyModifiers::SHIFT),
+            CutTrack,
+            "Cut",
+        )
+        .bind(
+            Key::new(KeyCode::F(3), KeyModifiers::CONTROL),
+            CutPattern,
+            "Cut",
+        )
+        .bind(
+            Key::new(KeyCode::Char('x'), KeyModifiers::ALT),
+            CutBlock,
+            "Cut",
+        )
+        .bind(
+            Key::new(KeyCode::F(5), KeyModifiers::SHIFT),
+            PasteTrack,
+            "Paste",
+        )
+        .bind(
+            Key::new(KeyCode::F(5), KeyModifiers::CONTROL),
+            PastePattern,
+            "Paste",
+        )
+        .bind(
+            Key::new(KeyCode::Char('v'), KeyModifiers::ALT),
+            PasteBlock,
+            "Paste",
+        );
+}
+
 fn normal_keymap() -> Keymap<TimelineAction> {
     use TimelineAction::*;
-    return movement_keys(
+    return clipboard_keys(movement_keys(
         Keymap::new()
             .bind(Key::char(' '), ToggleEdit, "Edit")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
             .bind(Key::char(NOTE_OFF_KEY), NoteOff, "Off"),
-    );
+    ));
 }
 
 fn edit_keymap() -> Keymap<TimelineAction> {
     use TimelineAction::*;
-    return movement_keys(
+    return clipboard_keys(movement_keys(
         Keymap::new()
             .bind(Key::char(' '), ToggleEdit, "Edit")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
@@ -150,7 +217,41 @@ fn edit_keymap() -> Keymap<TimelineAction> {
                 InsertLine,
                 "Ins",
             ),
-    );
+    ));
+}
+
+fn open_paste_overflow_dialog(state: &mut AppState, row_count: u8, overflow_length: u8) {
+    let buffer_length = row_count.saturating_add(overflow_length);
+    let options = vec![
+        format!("Resize pattern to {:02X} rows", buffer_length),
+        format!("Truncate to {:02X} rows", row_count),
+        "Cancel".to_owned(),
+    ];
+    let dialog = Dialog::new(
+        "Paste overflow",
+        vec![
+            Label::new(format!(
+                "The copied pattern is {:02X} rows longer than this one.",
+                overflow_length
+            ))
+            .boxed(),
+            Select::new("action", options).boxed(),
+        ],
+    )
+    .width(60)
+    .on_submit(move |state, result| {
+        let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
+        match result.choice("action") {
+            Some(0) => {
+                pattern.set_length(buffer_length);
+                buffers.paste_pattern_truncated(pattern);
+            }
+            Some(1) => buffers.paste_pattern_truncated(pattern),
+            _ => {}
+        }
+        return Ok(());
+    });
+    state.open_dialog(dialog);
 }
 
 /// The track an Alt+letter press jumps to, if it is one of `TRACK_JUMP_KEYS`.
@@ -221,6 +322,7 @@ pub struct TimeLineView {
     pub track_index: u8,
     pub is_editing: bool,
     pub row_number_lookup: String,
+    block_anchor: Option<(PatternId, u8, u8)>,
     normal_keys: Keymap<TimelineAction>,
     edit_keys: Keymap<TimelineAction>,
 }
@@ -235,6 +337,7 @@ impl TimeLineView {
             column_index: 0,
             is_editing: false,
             row_number_lookup: String::new(),
+            block_anchor: None,
             normal_keys: normal_keymap(),
             edit_keys: edit_keymap(),
         };
@@ -380,11 +483,109 @@ impl KeyActions for TimeLineView {
                 state.active_pattern_mut().insert_line(row);
                 self.refresh_rows_from(state, row);
             }
+            TimelineAction::CutTrack => {
+                let track = self.track_index;
+                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
+                buffers.cut_track(pattern, track);
+                self.refresh_rows_from(state, 0);
+            }
+            TimelineAction::CopyTrack => {
+                let pattern = state
+                    .project
+                    .patterns
+                    .get_pattern_by_id(state.active_pattern);
+                if let Some(pattern) = pattern {
+                    state.copy_buffers.copy_track(pattern, self.track_index);
+                }
+            }
+            TimelineAction::PasteTrack => {
+                let track = self.track_index;
+                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
+                buffers.paste_track(pattern, track);
+                self.refresh_rows_from(state, 0);
+            }
+            TimelineAction::CutPattern => {
+                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
+                buffers.cut_pattern(pattern);
+                self.refresh_rows_from(state, 0);
+            }
+            TimelineAction::CopyPattern => {
+                let pattern = state
+                    .project
+                    .patterns
+                    .get_pattern_by_id(state.active_pattern);
+                if let Some(pattern) = pattern {
+                    state.copy_buffers.copy_pattern(pattern);
+                }
+            }
+            TimelineAction::PastePattern => {
+                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
+                let row_count = pattern.row_count;
+                match buffers.paste_pattern(pattern) {
+                    Err(MTrakError::PatternPasteOverflow { overflow_length }) => {
+                        open_paste_overflow_dialog(state, row_count, overflow_length);
+                    }
+                    result => {
+                        self.refresh_rows_from(state, 0);
+                        result?;
+                    }
+                }
+            }
+            TimelineAction::ToggleBlockMark => {
+                self.block_anchor = match self.block_anchor {
+                    Some((pattern, ..)) if pattern == state.active_pattern => None,
+                    _ => Some((state.active_pattern, self.track_index, self.row_index)),
+                };
+            }
+            TimelineAction::CutBlock => {
+                let Some((start_track, width, start_row, height)) = self.marked_block(state) else {
+                    return Ok(());
+                };
+                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
+                buffers.cut_block(pattern, start_track, width, start_row, height);
+                self.block_anchor = None;
+                self.refresh_rows_from(state, 0);
+            }
+            TimelineAction::CopyBlock => {
+                let Some((start_track, width, start_row, height)) = self.marked_block(state) else {
+                    return Ok(());
+                };
+                let pattern = state
+                    .project
+                    .patterns
+                    .get_pattern_by_id(state.active_pattern);
+                if let Some(pattern) = pattern {
+                    state
+                        .copy_buffers
+                        .copy_block(pattern, start_track, width, start_row, height);
+                }
+            }
+            TimelineAction::PasteBlock => {
+                let (track, row) = (self.track_index, self.row_index);
+                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
+                buffers.paste_block(pattern, track, row);
+                self.block_anchor = None;
+                self.refresh_rows_from(state, 0);
+            }
         }
         return Ok(());
     }
 }
 impl TimeLineView {
+    fn marked_block(&self, state: &AppState) -> Option<(u8, u8, u8, u8)> {
+        let (pattern, anchor_track, anchor_row) = self.block_anchor?;
+        if pattern != state.active_pattern {
+            return None;
+        }
+        let last_row = state.active_pattern().row_count.saturating_sub(1);
+        let anchor_row = anchor_row.min(last_row);
+        let cursor_row = self.row_index.min(last_row);
+        let start_track = anchor_track.min(self.track_index);
+        let start_row = anchor_row.min(cursor_row);
+        let width = anchor_track.abs_diff(self.track_index) + 1;
+        let height = anchor_row.abs_diff(cursor_row) + 1;
+        return Some((start_track, width, start_row, height));
+    }
     fn refresh_row_and_advance(&mut self, state: &mut AppState, row: usize) {
         self.refresh_row(state, row);
         let row_count = state.active_pattern().row_count;
@@ -598,6 +799,14 @@ impl TimeLineView {
 
         let cache = self.track_cache.borrow();
         let mut rows = cache.get_all_rows_for_track(state.active_pattern, track_index as usize);
+        if let Some((start_track, width, start_row, height)) = self.marked_block(state) {
+            if (start_track..start_track + width).contains(&track_index) {
+                let marked = start_row as usize..(start_row + height) as usize;
+                for row in rows.iter_mut().take(marked.end).skip(marked.start) {
+                    *row = row.clone().patch_style(state.theme.marked_block);
+                }
+            }
+        }
         let selected_row = rows[self.row_index as usize].clone();
         rows[self.row_index as usize] =
             self.highlight_selected_row(state, track_index, selected_row);
@@ -659,6 +868,10 @@ impl TimeLineView {
 }
 impl MtrakWidget for TimeLineView {
     fn update(&mut self, state: &mut AppState) {
+        self.track_cache
+            .borrow_mut()
+            .sync_pattern(state.active_pattern, state.active_pattern());
+        self.refresh_rows_from(state, 0);
         let status = state.engine.status();
         let mode = status.play_mode();
         if mode == PlayMode::Paused {
@@ -688,7 +901,9 @@ impl MtrakWidget for TimeLineView {
             self.track_index = track;
             return true;
         }
-        if let KeyCode::F(mut f) = key.code {
+        if let KeyCode::F(mut f) = key.code
+            && key.modifiers.is_empty()
+        {
             f = f.clamp(0, 8);
             state.set_octave(f - 1);
         };

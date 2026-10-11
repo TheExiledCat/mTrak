@@ -31,6 +31,12 @@ impl PatternRow {
             dirty: true,
         };
     }
+    pub fn with_tracks(track_cells: Vec<Note>) -> Self {
+        return Self {
+            tracks: track_cells,
+            dirty: false,
+        };
+    }
 }
 
 impl Pattern {
@@ -128,6 +134,12 @@ impl Pattern {
 
     pub fn increase_length(&mut self) {
         self.row_count = self.row_count.saturating_add(1);
+        self.rows
+            .resize_with(self.row_count as usize, PatternRow::new);
+    }
+
+    pub fn set_length(&mut self, row_count: u8) {
+        self.row_count = row_count.max(1);
         self.rows
             .resize_with(self.row_count as usize, PatternRow::new);
     }
