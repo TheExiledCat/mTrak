@@ -141,12 +141,12 @@ fn clipboard_keys(keymap: Keymap<TimelineAction>) -> Keymap<TimelineAction> {
             "Copy",
         )
         .bind(
-            Key::new(KeyCode::F(3), KeyModifiers::SHIFT),
+            Key::new(KeyCode::F(6), KeyModifiers::SHIFT),
             CutTrack,
             "Cut",
         )
         .bind(
-            Key::new(KeyCode::F(3), KeyModifiers::CONTROL),
+            Key::new(KeyCode::F(6), KeyModifiers::CONTROL),
             CutPattern,
             "Cut",
         )
@@ -249,6 +249,7 @@ fn open_paste_overflow_dialog(state: &mut AppState, row_count: u8, overflow_leng
             Some(1) => buffers.paste_pattern_truncated(pattern),
             _ => {}
         }
+        state.notify("PTN PASTE");
         return Ok(());
     });
     state.open_dialog(dialog);
@@ -488,6 +489,7 @@ impl KeyActions for TimeLineView {
                 let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
                 buffers.cut_track(pattern, track);
                 self.refresh_rows_from(state, 0);
+                state.notify("TRCK CUT");
             }
             TimelineAction::CopyTrack => {
                 let pattern = state
@@ -496,6 +498,7 @@ impl KeyActions for TimeLineView {
                     .get_pattern_by_id(state.active_pattern);
                 if let Some(pattern) = pattern {
                     state.copy_buffers.copy_track(pattern, self.track_index);
+                    state.notify("TRCK COPY");
                 }
             }
             TimelineAction::PasteTrack => {
@@ -503,11 +506,13 @@ impl KeyActions for TimeLineView {
                 let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
                 buffers.paste_track(pattern, track);
                 self.refresh_rows_from(state, 0);
+                state.notify("TRCK PASTE");
             }
             TimelineAction::CutPattern => {
                 let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
                 buffers.cut_pattern(pattern);
                 self.refresh_rows_from(state, 0);
+                state.notify("PTN CUT");
             }
             TimelineAction::CopyPattern => {
                 let pattern = state
@@ -516,6 +521,7 @@ impl KeyActions for TimeLineView {
                     .get_pattern_by_id(state.active_pattern);
                 if let Some(pattern) = pattern {
                     state.copy_buffers.copy_pattern(pattern);
+                    state.notify("PTN COPY");
                 }
             }
             TimelineAction::PastePattern => {
@@ -527,6 +533,7 @@ impl KeyActions for TimeLineView {
                     }
                     result => {
                         self.refresh_rows_from(state, 0);
+                        state.notify("PTN PASTE");
                         result?;
                     }
                 }
@@ -545,6 +552,8 @@ impl KeyActions for TimeLineView {
                 buffers.cut_block(pattern, start_track, width, start_row, height);
                 self.block_anchor = None;
                 self.refresh_rows_from(state, 0);
+
+                state.notify("BLCK CUT");
             }
             TimelineAction::CopyBlock => {
                 let Some((start_track, width, start_row, height)) = self.marked_block(state) else {
@@ -558,6 +567,7 @@ impl KeyActions for TimeLineView {
                     state
                         .copy_buffers
                         .copy_block(pattern, start_track, width, start_row, height);
+                    state.notify("BLCK COPY");
                 }
             }
             TimelineAction::PasteBlock => {
@@ -566,6 +576,7 @@ impl KeyActions for TimeLineView {
                 buffers.paste_block(pattern, track, row);
                 self.block_anchor = None;
                 self.refresh_rows_from(state, 0);
+                state.notify("BLCK PASTE");
             }
         }
         return Ok(());
