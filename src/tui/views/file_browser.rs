@@ -1,39 +1,54 @@
 use std::{
+    cell::RefCell,
+    ffi::OsStr,
     fs::{self, DirEntry},
     path::PathBuf,
+    rc::Rc,
 };
 
 use ratatui::{
     crossterm::event::{KeyCode, KeyModifiers},
     layout::{Constraint, Layout},
     style::Stylize,
-    text::{Line, Span},
+    text::Line,
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
 use crate::tui::{
     app::AppState,
     framework::{
-        dialog::{Dialog, PopupLevel},
+        core_extensions::Boxed,
+        dialog::{Dialog, PopupLevel, Select, TextPrompt},
         keymap::{Key, KeyActions, Keymap},
         widget::MtrakWidget,
+        widgets::footer::Footer,
     },
-    views::file_browser::FileBrowserMode::SaveFile,
+    views::file_browser::FileBrowserMode::{OpenFile, SaveFile},
 };
 pub const MTRAK_FILE_EXTENSION: &str = ".mtrak";
 const ALL_EXTENSIONS_FILTER: &str = "*";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FileBrowserAction {
     Down,
     Up,
     Select,
     Confirm,
+    NewDirectory,
     Cancel,
 }
 
 enum FileBrowserMode {
-    SaveFile { extension_filter: String },
-    OpenFile { extension_filter: String },
+    SaveFile { extensions: Vec<String> },
+    OpenFile { extensions: Vec<String> },
+}
+
+impl FileBrowserMode {
+    fn extensions(&self) -> &[String] {
+        return match self {
+            SaveFile { extensions } | OpenFile { extensions } => extensions,
+        };
+    }
 }
 pub type Submit = dyn FnOnce(&mut AppState, PathBuf);
 pub struct FileBrowser {
@@ -51,6 +66,8 @@ pub struct FileBrowser {
     scroll_offset: usize,
 
     submit_handler: Option<Box<Submit>>,
+    pending_input: Rc<RefCell<Option<PendingInput>>>,
+    footer: Footer,
 }
 
 impl Default for FileBrowser {
@@ -66,6 +83,7 @@ impl FileBrowser {
             .bind(Key::new(KeyCode::Down, KeyModifiers::NONE), Down, "Move")
             .bind(Key::new(KeyCode::Up, KeyModifiers::NONE), Up, "Move")
             .bind(Key::char(' '), Select, "Select")
+            .bind(Key::ctrl('n'), NewDirectory, "Create")
             .bind(Key::new(KeyCode::Esc, KeyModifiers::NONE), Cancel, "Cancel")
             .bind(
                 Key::new(KeyCode::Enter, KeyModifiers::NONE),
@@ -78,7 +96,7 @@ impl FileBrowser {
             default_path: default_path.clone(),
             is_open: false,
             mode: SaveFile {
-                extension_filter: ".mtrak".into(),
+                extensions: vec![ALL_EXTENSIONS_FILTER.into()],
             },
             current_folder: default_path,
             title: String::new(),
@@ -86,22 +104,29 @@ impl FileBrowser {
             selected_index: 0,
             scroll_offset: 0,
             submit_handler: None,
+            pending_input: Rc::new(RefCell::new(None)),
+            footer: Footer::new(),
             current_folder_contents: vec![],
         };
     }
-
+    //opens a save file picker, picks a directory to save the file in and a name for the file.
     pub fn save_file(
         &mut self,
         on_submit: Box<Submit>,
+        start_directory: PathBuf,
         title: impl Into<String>,
-        file_filter: impl Into<String>,
+        extensions: Vec<String>,
     ) {
-        self.mode = SaveFile {
-            extension_filter: file_filter.into(),
-        };
+        self.mode = SaveFile { extensions };
         self.is_open = true;
         self.submit_handler = Some(on_submit);
         self.title = title.into();
+        let _ = fs::create_dir_all(&start_directory);
+        self.current_folder = start_directory;
+        self.selected_index = 0;
+        self.scroll_offset = 0;
+        self.selected_file = None;
+        self.pending_input.replace(None);
 
         self.load_contents();
     }
@@ -113,6 +138,8 @@ impl FileBrowser {
         let mut entries: Vec<DirEntry> = fs::read_dir(&self.current_folder)
             .map(|entries| entries.filter_map(Result::ok).collect())
             .unwrap_or_default();
+        let extensions = self.mode.extensions();
+        entries.retain(|e| e.path().is_dir() || matches_filter(&e.file_name(), extensions));
         entries.sort_by_cached_key(|e| {
             (
                 e.path().is_file(),
@@ -122,11 +149,138 @@ impl FileBrowser {
         self.current_folder_contents = entries;
     }
     fn submit(&mut self, state: &mut AppState) {
+        match &self.mode {
+            SaveFile { extensions } => {
+                if let Some(file) = self.selected_file.clone() {
+                    self.finish(state, file);
+                    return;
+                }
+                let options = extensions
+                    .iter()
+                    .map(|e| extension_label(e).to_owned())
+                    .collect();
+                let pending = self.pending_input.clone();
+                let dialog = Dialog::new(
+                    "Save file",
+                    vec![
+                        TextPrompt::new("name", "Name").boxed(),
+                        Select::new("extension", options)
+                            .label("Extension")
+                            .max_visible(4)
+                            .boxed(),
+                    ],
+                )
+                .on_submit(move |_, result| {
+                    pending.replace(Some(PendingInput::FileName {
+                        name: result.text("name").unwrap_or_default().to_owned(),
+                        extension: result.choice("extension").unwrap_or(0),
+                    }));
+                });
+                state.open_dialog(dialog);
+            }
+            OpenFile { .. } => todo!(),
+        };
+    }
+    fn finish(&mut self, state: &mut AppState, path: PathBuf) {
         self.is_open = false;
-        self.submit_handler.take().unwrap()(state, self.selected_file.take().unwrap_or("".into()));
+        if let Some(on_submit) = self.submit_handler.take() {
+            on_submit(state, path);
+        }
+    }
+    fn request_new_directory(&self, state: &mut AppState) {
+        let pending = self.pending_input.clone();
+        let dialog = Dialog::text_field("New directory", String::new(), "name").on_submit(
+            move |_, result| {
+                let name = result.text("name").unwrap_or_default().to_owned();
+                pending.replace(Some(PendingInput::NewDirectory(name)));
+            },
+        );
+        state.open_dialog(dialog);
+    }
+    fn create_directory(&mut self, state: &mut AppState, name: &str) {
+        let path = self.current_folder.join(name);
+        if let Err(e) = fs::create_dir(&path) {
+            state.open_dialog(Dialog::popup(
+                PopupLevel::Error,
+                "New directory",
+                e.to_string(),
+            ));
+            return;
+        }
+        self.load_contents();
+        if let Some(i) = self
+            .current_folder_contents
+            .iter()
+            .position(|e| e.path() == path)
+        {
+            self.selected_index = i + 1;
+        }
     }
 }
+
+enum PendingInput {
+    FileName { name: String, extension: usize },
+    NewDirectory(String),
+}
+
+/// The extension part of a filter like `*.mtrak`, empty for `*`.
+fn extension_of(filter: &str) -> &str {
+    return filter.trim_start_matches('*');
+}
+
+fn extension_label(filter: &str) -> &str {
+    let extension = extension_of(filter);
+    if extension.is_empty() {
+        return "Any";
+    }
+    return extension;
+}
+
+fn matches_filter(file_name: &OsStr, filters: &[String]) -> bool {
+    let file_name = file_name.to_string_lossy().to_lowercase();
+    return filters.iter().any(|filter| {
+        filter == ALL_EXTENSIONS_FILTER || file_name.ends_with(&extension_of(filter).to_lowercase())
+    });
+}
+
+fn with_extension(name: String, filter: &str) -> String {
+    let extension = extension_of(filter);
+    if extension.is_empty() || name.ends_with(extension) {
+        return name;
+    }
+    return name + extension;
+}
+
 impl MtrakWidget for FileBrowser {
+    fn update(&mut self, state: &mut AppState) {
+        let Some(input) = self.pending_input.take() else {
+            return;
+        };
+        match input {
+            PendingInput::FileName { name, extension } => {
+                let name = name.trim();
+                if name.is_empty() {
+                    return;
+                }
+                let filter = self
+                    .mode
+                    .extensions()
+                    .get(extension)
+                    .map(String::as_str)
+                    .unwrap_or(ALL_EXTENSIONS_FILTER);
+                let path = self
+                    .current_folder
+                    .join(with_extension(name.to_owned(), filter));
+                self.finish(state, path);
+            }
+            PendingInput::NewDirectory(name) => {
+                let name = name.trim();
+                if !name.is_empty() {
+                    self.create_directory(state, name);
+                }
+            }
+        }
+    }
     fn key_hints(
         &self,
         _state: &AppState,
@@ -207,32 +361,27 @@ impl MtrakWidget for FileBrowser {
         if self.scroll_offset + visible < total_lines {
             Paragraph::new("▼").block(block).render(layout[2], buf);
         }
-        Paragraph::new(format!(
-            "Selected: {}",
-            self.selected_file
+        let selection_text = match &self.mode {
+            SaveFile { .. } => self
+                .selected_file
+                .as_ref()
+                .unwrap_or(&self.current_folder)
+                .to_string_lossy()
+                .to_string(),
+            OpenFile { .. } => self
+                .selected_file
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default()
-        ))
-        .left_aligned()
-        .render(layout[3], buf);
+                .unwrap_or_default(),
+        };
+        Paragraph::new(format!("Selected: {}", selection_text))
+            .left_aligned()
+            .render(layout[3], buf);
 
         let mut hints = vec![];
         self.key_hints(state, &mut hints);
-        Paragraph::new(Line::from(
-            hints
-                .iter()
-                .flat_map(|h| {
-                    [
-                        Span::raw(h.key.to_string()).style(state.theme.key_hint_key),
-                        Span::raw(format!(" {} ", h.label)).style(state.theme.key_hint_label),
-                    ]
-                    .into_iter()
-                    .collect::<Vec<Span>>()
-                })
-                .collect::<Vec<Span>>(),
-        ))
-        .render(*layout.last().unwrap(), buf);
+        self.footer.set_hints(hints);
+        self.footer.render(state, *layout.last().unwrap(), buf);
     }
 }
 
@@ -261,15 +410,19 @@ impl KeyActions for FileBrowser {
                     Some(dir) if dir.is_dir() => {
                         self.selected_index = 0;
                         self.scroll_offset = 0;
+                        self.selected_file = None;
                         self.current_folder = dir;
                         self.load_contents();
+                    }
+                    Some(file) if self.selected_file.as_ref() == Some(&file) => {
+                        self.selected_file = None
                     }
                     Some(file) => self.selected_file = Some(file),
                     None => {}
                 }
             }
             FileBrowserAction::Confirm => {
-                if self.selected_file.is_some() {
+                if matches!(self.mode, SaveFile { .. }) || self.selected_file.is_some() {
                     self.submit(state);
                 } else {
                     state.open_dialog(Dialog::popup(
@@ -279,10 +432,36 @@ impl KeyActions for FileBrowser {
                     ));
                 }
             }
+            FileBrowserAction::NewDirectory => self.request_new_directory(state),
             FileBrowserAction::Cancel => {
                 self.is_open = false;
                 self.submit_handler = None;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_extension_appends_missing_extension() {
+        assert_eq!(with_extension("song".into(), "*.mtrak"), "song.mtrak");
+        assert_eq!(with_extension("song.mtrak".into(), "*.mtrak"), "song.mtrak");
+        assert_eq!(with_extension("song".into(), "*"), "song");
+    }
+
+    #[test]
+    fn matches_filter_checks_every_extension() {
+        let filters = vec!["*.mtrak".to_owned(), "*.mid".to_owned()];
+        assert!(matches_filter(OsStr::new("song.mtrak"), &filters));
+        assert!(matches_filter(OsStr::new("SONG.MTRAK"), &filters));
+        assert!(matches_filter(OsStr::new("song.mid"), &filters));
+        assert!(!matches_filter(OsStr::new("song.wav"), &filters));
+        assert!(matches_filter(
+            OsStr::new("song.wav"),
+            &[ALL_EXTENSIONS_FILTER.to_owned()]
+        ));
     }
 }
