@@ -14,7 +14,7 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, PopupLevel},
-            keymap::{Key, KeyActions, KeyHint, Keymap},
+            keymap::{HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
             widgets::{container::Container, footer::Footer},
         },
@@ -30,6 +30,7 @@ pub enum MainAction {
     SaveAs,
     PlayPattern,
     PlaySong,
+    Help,
 }
 
 pub struct MainView {
@@ -61,7 +62,8 @@ impl MainView {
                     Key::new(constants::EXIT_KEY, KeyModifiers::CONTROL),
                     MainAction::Quit,
                     "Quit",
-                ),
+                )
+                .bind(Key::char('?'), MainAction::Help, "Keys"),
         };
     }
 }
@@ -82,8 +84,20 @@ impl KeyActions for MainView {
             MainAction::SaveAs => request_save_as(state),
             MainAction::PlayPattern => state.play_pattern(state.active_pattern),
             MainAction::PlaySong => state.play_song(state.active_sequence_index),
+            MainAction::Help => state.request_help(),
         }
         return Ok(());
+    }
+
+    fn describe(action: MainAction) -> &'static str {
+        return match action {
+            MainAction::Quit => "Quit",
+            MainAction::Save => "Save project",
+            MainAction::SaveAs => "Save project as",
+            MainAction::PlayPattern => "Play the current pattern",
+            MainAction::PlaySong => "Play the song from the current sequence position",
+            MainAction::Help => "Show all keybindings",
+        };
     }
 }
 fn request_save_as(state: &mut AppState) {
@@ -124,13 +138,16 @@ impl MtrakWidget for MainView {
             || self.header.handle_event(state, event);
     }
 
+    fn help(&self, sections: &mut Vec<HelpSection>) {
+        sections.push(self.help_section("Global"));
+        self.content.help(sections);
+        self.header.help(sections);
+    }
+
     fn key_hints(&self, state: &AppState, hints: &mut Vec<KeyHint>) {
-        hints.extend(self.keys.hint_for(MainAction::PlaySong));
-        hints.extend(self.keys.hint_for(MainAction::PlayPattern));
+        hints.extend(self.keys.hint_for(MainAction::Help));
         self.content.key_hints(state, hints);
-        self.header.key_hints(state, hints);
         hints.extend(self.keys.hint_for(MainAction::Save));
-        hints.extend(self.keys.hint_for(MainAction::SaveAs));
         hints.extend(self.keys.hint_for(MainAction::Quit));
     }
 

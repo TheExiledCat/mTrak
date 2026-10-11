@@ -15,7 +15,7 @@ use crate::{
         app::AppState,
         framework::{
             core_extensions::Boxed,
-            keymap::{Key, KeyActions, KeyHint, Keymap},
+            keymap::{HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
             widgets::footer::Footer,
         },
@@ -177,6 +177,17 @@ impl Dialog {
         return self;
     }
 
+    pub fn help(sections: &mut Vec<HelpSection>) {
+        let dialog = Dialog::new("", Vec::new());
+        let select = Select::new("", Vec::new());
+        sections.push(
+            dialog
+                .help_section("Dialogs")
+                .entries(select.keys.help_entries(Select::describe))
+                .entry("Bksp", "Delete the last character of a text field"),
+        );
+    }
+
     pub fn is_closed(&self) -> bool {
         return self.closed;
     }
@@ -242,6 +253,15 @@ impl KeyActions for Dialog {
             DialogAction::PrevField => self.move_focus(false),
         }
         return Ok(());
+    }
+
+    fn describe(action: DialogAction) -> &'static str {
+        return match action {
+            DialogAction::Submit => "Confirm",
+            DialogAction::Cancel => "Cancel",
+            DialogAction::NextField => "Next field",
+            DialogAction::PrevField => "Previous field",
+        };
     }
 }
 
@@ -479,6 +499,13 @@ impl KeyActions for Select {
             SelectAction::Down => (self.selected + 1).min(last),
         };
         return Ok(());
+    }
+
+    fn describe(action: SelectAction) -> &'static str {
+        return match action {
+            SelectAction::Up => "Previous option",
+            SelectAction::Down => "Next option",
+        };
     }
 }
 

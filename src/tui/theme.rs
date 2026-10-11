@@ -12,6 +12,7 @@ const FT2_PATTERN_TEXT: Color = Color::Rgb(196, 214, 236);
 const FT2_TEXT: Color = Color::Rgb(255, 255, 255);
 const FT2_EDIT: Color = Color::Rgb(214, 82, 82);
 const FT2_WARNING: Color = Color::Rgb(230, 190, 80);
+const FT2_MARK: Color = Color::Rgb(38, 56, 80);
 
 /// Named styles for everything the views draw, so they never hard-code colors.
 /// The monochrome variant relies only on text modifiers, so every state stays visible
@@ -38,6 +39,7 @@ pub struct Theme {
     pub selected_cell: Style,
     /// `selected_cell` while in edit mode, so it's obvious that typing changes the pattern
     pub editing_cell: Style,
+    pub marked_block: Style,
     /// the mode indicator while recording
     pub recording: Style,
     /// the column being edited inside the selected cell, patched on top of `selected_cell`
@@ -106,6 +108,7 @@ impl Theme {
             selected_row: Style::new().fg(FT2_TEXT).bg(FT2_DESKTOP),
             selected_cell: Style::new().fg(FT2_PATTERN_BG).bg(FT2_DESKTOP_LIGHT),
             editing_cell: Style::new().fg(FT2_PATTERN_BG).bg(FT2_EDIT),
+            marked_block: Style::new().fg(FT2_TEXT).bg(FT2_MARK),
             recording: Style::new().fg(FT2_PATTERN_BG).bg(FT2_EDIT),
             cursor: Style::new().fg(FT2_PATTERN_BG).bg(FT2_TEXT),
             pattern_border: Style::new().fg(FT2_DESKTOP_LIGHT),
@@ -135,6 +138,7 @@ impl Theme {
             selected_row: Style::new().fg(Color::White).bg(Color::Blue),
             selected_cell: Style::new().fg(Color::Black).bg(Color::Gray),
             editing_cell: Style::new().fg(Color::Black).bg(Color::Red),
+            marked_block: Style::new().fg(Color::White).bg(Color::DarkGray),
             recording: Style::new().fg(Color::Black).bg(Color::Red),
             cursor: Style::new().fg(Color::Black).bg(Color::White),
             pattern_border: Style::new().fg(Color::Gray),
@@ -164,6 +168,7 @@ impl Theme {
             selected_row: Style::new().underlined(),
             selected_cell: Style::new().reversed(),
             editing_cell: Style::new().reversed().bold(),
+            marked_block: Style::new().reversed().dim(),
             recording: Style::new().reversed().bold(),
             // undo the cell's reverse so the edited column stands out from the rest of the cell
             cursor: Style::new().not_reversed().bold().underlined(),

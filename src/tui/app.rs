@@ -26,6 +26,7 @@ use crate::{
     engine::{engine::PlayMode, handle::EngineHandle},
     error::{MTrakError, Result},
     tui::{
+        copy_buffers::CopyBuffers,
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, PopupLevel},
@@ -34,6 +35,7 @@ use crate::{
         },
         glyphs,
         theme::Theme,
+        views::keybindings,
         views::{
             file_browser::{FileBrowser, Submit},
             main_view::MainView,
@@ -163,6 +165,18 @@ impl App {
                 error.to_string(),
             ));
         }
+        if std::mem::take(&mut self.state.help_requested) {
+            let mut sections = Vec::new();
+            self.root.help(&mut sections);
+            self.file_browser.help(&mut sections);
+            Dialog::help(&mut sections);
+            let terminal_height = self.terminal.size().map(|s| s.height).unwrap_or(24);
+            let height = (terminal_height * 3 / 5)
+                .saturating_sub(4)
+                .min(u8::MAX as u16);
+            self.dialogs
+                .push(keybindings::keybindings_dialog(sections, height as u8));
+        }
         if let Some(on_submit) = self.state.save_file_request.take() {
             self.file_browser
                 .save_file(on_submit.0, on_submit.1, on_submit.2, on_submit.3);
@@ -197,7 +211,9 @@ pub struct AppState {
     pub recording: bool,
     /// Where the project was last loaded from or saved to, so saving again skips the browser.
     pub project_path: Option<PathBuf>,
+    pub copy_buffers: CopyBuffers,
     pending_dialogs: Vec<Dialog>,
+    help_requested: bool,
     save_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
     changed_patterns: HashSet<PatternId>,
     sequence_changed: bool,
@@ -238,6 +254,8 @@ impl AppState {
             sequence_changed: true,
             save_file_request: None,
             errors,
+            copy_buffers: CopyBuffers::new(),
+            help_requested: false,
         };
         for (channel, instrument) in state.project.instruments.iter().enumerate() {
             state
@@ -312,6 +330,15 @@ impl AppState {
             .get_pattern_by_id_mut(self.active_pattern)
             .unwrap();
     }
+    pub fn copy_buffers_and_active_pattern_mut(&mut self) -> (&mut CopyBuffers, &mut Pattern) {
+        self.changed_patterns.insert(self.active_pattern);
+        let pattern = self
+            .project
+            .patterns
+            .get_pattern_by_id_mut(self.active_pattern)
+            .unwrap();
+        return (&mut self.copy_buffers, pattern);
+    }
     pub fn open_dialog(&mut self, dialog: Dialog) {
         self.pending_dialogs.push(dialog);
     }
@@ -338,6 +365,9 @@ impl AppState {
     /// Hands an error to the app, which shows it in a warning dialog.
     pub fn report_error(&mut self, error: MTrakError) {
         self.errors.push(error);
+    }
+    pub fn request_help(&mut self) {
+        self.help_requested = true;
     }
     pub fn request_exit(&mut self) {
         self.exit_requested = true;
