@@ -19,8 +19,11 @@ any hardware or software synth.
   (see [docs/COMMANDS.md](docs/COMMANDS.md))
 - Pattern and song playback, looping or once through for recording
 - Per-channel activity meters, channel muting and a MIDI event monitor
-- Context-aware key hints in the footer
-- FT2 color theme on truecolor terminals, with a monochrome fallback
+- Built-in file browser for saving projects, with Save As and folder creation
+- Context-aware key hints in the footer, dialogs and file browser
+- FT2 color theme on truecolor terminals, a 16-color theme on Windows consoles and macOS
+  terminals without truecolor, and a monochrome fallback
+- ASCII mode for terminals or fonts without Unicode box drawing and symbols
 
 ## Installation
 
@@ -57,10 +60,35 @@ mtrak song.mtrak       # open a project
 
 Pick a MIDI output port with `Ctrl+O`. mTrak makes no sound on its own, so connect it to a physical (or virtual) midi device to make music.
 
+### Options
+
+| Option                         | Description                                                    |
+| ------------------------------ | -------------------------------------------------------------- |
+| `--color <mono\|ansi16\|full>` | Force a color theme instead of detecting one from the terminal |
+| `--ascii-mode`                 | Draw with ASCII characters only                                |
+
+Setting `NO_COLOR` or `TERM=dumb` also selects the monochrome theme.
+
+## Config
+
+Projects are saved to an `mtrak` folder in your music folder by default, but you can save
+and open them from any folder. Global settings live in an `mtrak` folder in your config
+folder. Both are created on startup if they don't exist yet.
+
+| Platform | Projects                    | Config                                |
+| -------- | --------------------------- | ------------------------------------- |
+| Linux    | `~/Music/mtrak`             | `~/.config/mtrak`                     |
+| macOS    | `~/Music/mtrak`             | `~/Library/Application Support/mtrak` |
+| Windows  | `%USERPROFILE%\Music\mtrak` | `%LOCALAPPDATA%\mtrak`                |
+
+On Linux the music folder follows `XDG_MUSIC_DIR` and the config folder follows
+`XDG_CONFIG_HOME`, if they're set.
+
 ## Roadmap
 
 Planned features, in no particular order:
 
+- [x] **File browser and global saving**
 - [ ] **Undo system**
 - [ ] **MIDI file import/export**
 - [ ] **MIDI input**
@@ -91,4 +119,6 @@ Have an idea? Feel free to open an issue.
 ## Contributing
 
 Bug reports, feature requests and pull requests are welcome. See
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to get started and
+[docs/CONVENTIONS.md](docs/CONVENTIONS.md) for the code style. Run `./fmt.sh` before
+committing to format the code and apply lint fixes.
