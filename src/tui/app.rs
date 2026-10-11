@@ -35,9 +35,9 @@ use crate::{
         },
         glyphs,
         theme::Theme,
-        views::keybindings,
         views::{
             file_browser::{FileBrowser, Submit},
+            keybindings,
             main_view::MainView,
         },
     },

@@ -620,7 +620,7 @@ impl MtrakEngine {
     }
     /// Sends the events queued by the UI.
     fn dispatch_pending(&mut self) {
-        let pending: Vec<MidiEvent> = self.pending_events.drain(..).collect();
+        let pending: Vec<MidiEvent> = std::mem::take(&mut self.pending_events);
         for event in pending {
             self.dispatch(event);
         }

@@ -47,7 +47,7 @@ falls back to plain `cargo fmt`.
 
 ### Code style
 
-The full set of conventions is in [docs/CONVENTIONS.md](docs/CONVENTIONS.md). In short:
+The full set of conventions is in [CONVENTIONS.md](CONVENTIONS.md). In short:
 
 - Format with `rustfmt` (`cargo fmt`) and keep `cargo clippy` free of warnings.
 - Use explicit `return` statements, like the rest of the codebase.
@@ -57,4 +57,4 @@ The full set of conventions is in [docs/CONVENTIONS.md](docs/CONVENTIONS.md). In
 - Take colors and styles from `Theme` instead of hard-coding them, so the monochrome theme
   keeps working.
 - Add tests for engine and data changes where you can.
-- If you add or change a pattern command, update [docs/COMMANDS.md](docs/COMMANDS.md).
+- If you add or change a pattern command, update [COMMANDS.md](COMMANDS.md).

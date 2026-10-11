@@ -1,9 +1,10 @@
-use crate::data::{
-    note::Note,
-    pattern::{Pattern, PatternRow},
+use crate::{
+    data::{
+        note::Note,
+        pattern::{Pattern, PatternRow},
+    },
+    error::Result,
 };
-
-use crate::error::Result;
 pub struct CopyBuffers {
     track_buffer: Option<CopyBuffer>,
     pattern_buffer: Option<CopyBuffer>,
@@ -173,6 +174,12 @@ impl CopyBuffers {
                 pattern.set_event(target_row, target_track, *event);
             }
         }
+    }
+}
+
+impl Default for CopyBuffers {
+    fn default() -> Self {
+        return Self::new();
     }
 }
 

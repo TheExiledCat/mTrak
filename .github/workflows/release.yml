@@ -87,7 +87,7 @@ jobs:
           awk -v tag="$GITHUB_REF_NAME" '
             /^## / { if (found) exit; found = ($2 == tag) ; next }
             found { print }
-          ' CHANGELOG.md 2>/dev/null > notes.md || true
+          ' docs/CHANGELOG.md 2>/dev/null > notes.md || true
           if [ -s notes.md ] && grep -q '[^[:space:]]' notes.md; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
