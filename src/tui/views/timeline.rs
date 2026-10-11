@@ -995,7 +995,13 @@ impl MtrakWidget for TimeLineView {
 
     fn key_hints(&self, _state: &AppState, hints: &mut Vec<KeyHint>) {
         use TimelineAction::*;
-        for action in [ToggleEdit, ToggleRecord, NoteOff, DeleteAtCursor, InsertNote] {
+        for action in [
+            ToggleEdit,
+            ToggleRecord,
+            NoteOff,
+            DeleteAtCursor,
+            InsertNote,
+        ] {
             hints.extend(self.keymap().hint_for(action));
         }
     }

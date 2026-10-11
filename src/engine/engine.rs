@@ -76,6 +76,7 @@ pub struct MtrakEngine {
     patterns: Vec<Pattern>,
     sequence: Vec<SequenceRow>,
     bpm: u8,
+    send_midi_clock: bool,
     output_connection: Option<MidiOutputConnection>,
     pending_events: Vec<MidiEvent>,
     mode: PlayMode,
@@ -100,6 +101,7 @@ impl MtrakEngine {
             patterns: Vec::new(),
             sequence: Vec::new(),
             bpm: DEFAULT_BPM,
+            send_midi_clock: false,
             output_connection: None,
             mode: PlayMode::Paused,
             position: Position {
@@ -170,6 +172,7 @@ impl MtrakEngine {
                 self.voices.set_global_volume(channel as usize, volume)
             }
             EngineCommand::SetGlobalVelocity(velocity) => self.voices.set_global_velocity(velocity),
+            EngineCommand::SetMidiClock(enabled) => self.send_midi_clock = enabled,
         }
     }
 
@@ -262,6 +265,7 @@ impl MtrakEngine {
         self.status.set_play_mode(mode);
         self.publish_position();
         self.dispatch(MidiEvent::Message(Message::Start));
+        self.send_clock();
         self.play_row();
         self.time_next_pulse(now);
     }
@@ -343,9 +347,14 @@ impl MtrakEngine {
         let pulse_time = clock.next_pulse;
         clock.next_pulse += pulse_duration;
         clock.pulse_in_row += 1;
-        if clock.pulse_in_row < PULSES_PER_LINE {
+        let row_done = clock.pulse_in_row >= PULSES_PER_LINE;
+        self.send_clock();
+        if !row_done {
             return;
         }
+        let Some(clock) = &mut self.clock else {
+            return;
+        };
         clock.pulse_in_row = 0;
         clock.row_start = pulse_time;
         clock.tick = 0;
@@ -354,6 +363,12 @@ impl MtrakEngine {
         if self.clock.is_some() {
             self.play_row();
             self.time_next_pulse(pulse_time);
+        }
+    }
+
+    fn send_clock(&mut self) {
+        if self.send_midi_clock {
+            self.dispatch(MidiEvent::Message(Message::TimingClock));
         }
     }
 
@@ -773,6 +788,36 @@ mod tests {
             harness.messages(),
             vec![Message::Start, Message::NoteOn(Channel::Ch3, 60, 0x40)]
         );
+    }
+
+    #[test]
+    fn midi_clock_is_off_by_default() {
+        let mut harness = Harness::new(vec![pattern(2, &[])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.next_row();
+        assert!(!harness.messages().contains(&Message::TimingClock));
+    }
+
+    #[test]
+    fn midi_clock_sends_a_pulse_on_start_and_every_pulse() {
+        let mut harness = Harness::new(vec![pattern(2, &[])]);
+        harness.engine.apply(EngineCommand::SetMidiClock(true));
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        assert_eq!(
+            harness.messages(),
+            vec![Message::Start, Message::TimingClock]
+        );
+        harness.next_row();
+        let clocks = harness
+            .messages()
+            .into_iter()
+            .filter(|m| *m == Message::TimingClock)
+            .count();
+        assert_eq!(clocks, PULSES_PER_LINE as usize);
     }
 
     #[test]

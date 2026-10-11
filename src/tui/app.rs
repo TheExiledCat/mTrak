@@ -232,7 +232,7 @@ impl AppState {
         let changed_patterns = (0..project.patterns.get_patterns().len() as u8)
             .map(PatternId)
             .collect();
-        let state = Self {
+        let mut state = Self {
             config: Config::default(),
             project,
             engine: EngineHandle::spawn()?,
@@ -266,12 +266,18 @@ impl AppState {
         state
             .engine
             .set_global_velocity(state.project.global_velocity);
+        state.engine.set_midi_clock(state.project.send_midi_clock);
+        state.restore_midi_output();
         return Ok(state);
     }
     pub fn update(&mut self) {
         let now = Instant::now();
         let events: Vec<MidiEvent> = self.engine.drain_events().collect();
         for event in events {
+            //ignore midi clock messages to avoid UI clutter
+            if matches!(event, MidiEvent::Message(Message::TimingClock)) {
+                continue;
+            }
             self.record_hits(&event, now);
             if self.event_history.len() == EVENT_HISTORY_MAX {
                 self.event_history.pop_front();
@@ -303,6 +309,32 @@ impl AppState {
             }
             _ => {}
         }
+    }
+    fn restore_midi_output(&mut self) {
+        let Some(name) = self.project.midi_output.clone() else {
+            return;
+        };
+        let port = self.midi_client.as_ref().and_then(|client| {
+            client
+                .ports()
+                .into_iter()
+                .find(|p| client.port_name(p).is_ok_and(|n| n == name))
+        });
+        if port.is_none() {
+            self.project.midi_output = None;
+        }
+        self.set_midi_output(port);
+    }
+    pub fn set_midi_output(&mut self, port: Option<MidiOutputPort>) {
+        if let Some(client) = &self.midi_client {
+            self.project.midi_output = port.as_ref().and_then(|p| client.port_name(p).ok());
+        }
+        self.engine.set_output_port(port.clone());
+        self.active_port = port;
+    }
+    pub fn set_midi_clock(&mut self, enabled: bool) {
+        self.project.send_midi_clock = enabled;
+        self.engine.set_midi_clock(enabled);
     }
     pub fn get_midi_port_names(&self) -> Vec<String> {
         let Some(client) = &self.midi_client else {
