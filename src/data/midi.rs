@@ -51,12 +51,12 @@ pub fn midi_to_string(event: &MidiEvent) -> String {
             Message::TimingClock => "Clock Pulse".into(),
             Message::Continue => "Continue".into(),
             Message::Stop => "Stop".into(),
-            Message::ActiveSensing => todo!(),
-            Message::SystemReset => todo!(),
-            Message::AllSoundOff(_) => todo!(),
-            Message::ResetAllControllers(_) => todo!(),
-            Message::LocalControlOff(_) => todo!(),
-            Message::LocalControlOn(_) => todo!(),
+            Message::ActiveSensing => "Active Sensing".into(),
+            Message::SystemReset => "System Reset".into(),
+            Message::AllSoundOff(channel) => format!("{:?} All Sound Off", channel),
+            Message::ResetAllControllers(channel) => format!("{:?} Reset Controllers", channel),
+            Message::LocalControlOff(channel) => format!("{:?} Local Control Off", channel),
+            Message::LocalControlOn(channel) => format!("{:?} Local Control On", channel),
             Message::AllNotesOff(channel) => format!("{:?} Note Off All", channel),
             Message::NoteOff(channel, note, vel) => {
                 format!("{:?} Note Off ({}, {})", channel, note, vel)
@@ -65,18 +65,20 @@ pub fn midi_to_string(event: &MidiEvent) -> String {
                 format!("{:?} Program Change ({})", channel, num)
             }
             Message::ControlChange(channel, cc, val) => format!("{:?} CC{} {}", channel, cc, val),
-            Message::RPN7(_, _, _) => todo!(),
-            Message::RPN14(_, _, _) => todo!(),
-            Message::NRPN7(_, _, _) => todo!(),
-            Message::NRPN14(_, _, _) => todo!(),
-            Message::SysEx(_, _) => todo!(),
+            Message::RPN7(channel, param, val) => format!("{:?} RPN{} {}", channel, param, val),
+            Message::RPN14(channel, param, val) => format!("{:?} RPN{} {}", channel, param, val),
+            Message::NRPN7(channel, param, val) => format!("{:?} NRPN{} {}", channel, param, val),
+            Message::NRPN14(channel, param, val) => format!("{:?} NRPN{} {}", channel, param, val),
+            Message::SysEx(_, data) => format!("SysEx ({} bytes)", data.len()),
             Message::NoteOn(channel, note, vel) => {
                 format!("{:?} Note On ({}, {})", channel, note, vel)
             }
             Message::PitchBend(channel, bend) => {
                 format!("{:?} Bend ({})", channel, *bend as i16)
             }
-            Message::PolyphonicPressure(_, _, _) => todo!(),
+            Message::PolyphonicPressure(channel, note, pressure) => {
+                format!("{:?} Poly Pressure ({}, {})", channel, note, pressure)
+            }
             Message::ChannelPressure(channel, pressure) => {
                 format!("{:?} Pressure ({})", channel, pressure)
             }

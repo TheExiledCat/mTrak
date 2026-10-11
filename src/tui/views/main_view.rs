@@ -6,17 +6,20 @@ use ratatui::{
     widgets::Padding,
 };
 
-use crate::tui::{
-    app::AppState,
-    constants, files,
-    framework::{
-        core_extensions::Boxed,
-        dialog::{Dialog, PopupLevel},
-        keymap::{Key, KeyActions, KeyHint, Keymap},
-        widget::MtrakWidget,
-        widgets::{container::Container, footer::Footer},
+use crate::{
+    error::Result,
+    tui::{
+        app::AppState,
+        constants, files,
+        framework::{
+            core_extensions::Boxed,
+            dialog::{Dialog, PopupLevel},
+            keymap::{Key, KeyActions, KeyHint, Keymap},
+            widget::MtrakWidget,
+            widgets::{container::Container, footer::Footer},
+        },
+        views::{file_browser, header::Header, timeline::TimeLineView},
     },
-    views::{file_browser, header::Header, timeline::TimeLineView},
 };
 
 /// Actions available everywhere in the main view, regardless of which child has focus.
@@ -69,19 +72,18 @@ impl KeyActions for MainView {
         return &self.keys;
     }
 
-    fn perform(&mut self, action: MainAction, state: &mut AppState) {
+    fn perform(&mut self, action: MainAction, state: &mut AppState) -> Result<()> {
         match action {
             MainAction::Quit => state.request_exit(),
             MainAction::Save => match state.project_path.clone() {
-                Some(path) => {
-                    state.save_project(path);
-                }
+                Some(path) => state.save_project(path)?,
                 None => request_save_as(state),
             },
             MainAction::SaveAs => request_save_as(state),
             MainAction::PlayPattern => state.play_pattern(state.active_pattern),
             MainAction::PlaySong => state.play_song(state.active_sequence_index),
         }
+        return Ok(());
     }
 }
 fn request_save_as(state: &mut AppState) {
@@ -96,9 +98,9 @@ fn request_save_as(state: &mut AppState) {
         |state, file_path| {
             let name = file_path.file_name().unwrap_or_default().to_string_lossy();
             let message = format!("Saved {}", name);
-            if state.save_project(file_path) {
-                state.open_dialog(Dialog::popup(PopupLevel::Info, "Saved", message));
-            }
+            state.save_project(file_path)?;
+            state.open_dialog(Dialog::popup(PopupLevel::Info, "Saved", message));
+            return Ok(());
         },
         start_directory,
         "Save project",

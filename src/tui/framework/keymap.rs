@@ -2,7 +2,10 @@ use std::fmt::{self, Display};
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::tui::{app::AppState, glyphs};
+use crate::{
+    error::Result,
+    tui::{app::AppState, glyphs},
+};
 
 #[cfg(target_os = "macos")]
 pub const CONTROL_SYMBOL: &str = "⌃";
@@ -236,7 +239,8 @@ pub trait KeyActions {
     /// The keymap that is currently active, e.g. a different one per mode.
     fn keymap(&self) -> &Keymap<Self::Action>;
 
-    fn perform(&mut self, action: Self::Action, state: &mut AppState);
+    /// Runs `action`. Errors are shown to the user in a warning dialog.
+    fn perform(&mut self, action: Self::Action, state: &mut AppState) -> Result<()>;
 
     /// Runs the action bound to `event`, returning whether it was handled.
     fn dispatch(&mut self, state: &mut AppState, event: &Event) -> bool {
@@ -246,7 +250,9 @@ pub trait KeyActions {
         let Some(action) = self.keymap().lookup(key) else {
             return false;
         };
-        self.perform(action, state);
+        if let Err(e) = self.perform(action, state) {
+            state.report_error(e);
+        }
         return true;
     }
 }

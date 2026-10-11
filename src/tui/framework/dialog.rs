@@ -9,13 +9,16 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Widget},
 };
 
-use crate::tui::{
-    app::AppState,
-    framework::{
-        core_extensions::Boxed,
-        keymap::{Key, KeyActions, KeyHint, Keymap},
-        widget::MtrakWidget,
-        widgets::footer::Footer,
+use crate::{
+    error::Result,
+    tui::{
+        app::AppState,
+        framework::{
+            core_extensions::Boxed,
+            keymap::{Key, KeyActions, KeyHint, Keymap},
+            widget::MtrakWidget,
+            widgets::footer::Footer,
+        },
     },
 };
 
@@ -74,7 +77,7 @@ pub trait DialogComponent: MtrakWidget {
     }
 }
 
-type OnSubmit = Box<dyn FnOnce(&mut AppState, DialogResult)>;
+type OnSubmit = Box<dyn FnOnce(&mut AppState, DialogResult) -> Result<()>>;
 type OnCancel = Box<dyn FnOnce(&mut AppState)>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -160,7 +163,10 @@ impl Dialog {
     }
 
     /// Runs when the user confirms the dialog, receiving the values of its input components.
-    pub fn on_submit(mut self, f: impl FnOnce(&mut AppState, DialogResult) + 'static) -> Self {
+    pub fn on_submit(
+        mut self,
+        f: impl FnOnce(&mut AppState, DialogResult) -> Result<()> + 'static,
+    ) -> Self {
         self.on_submit = Some(Box::new(f));
         return self;
     }
@@ -175,12 +181,13 @@ impl Dialog {
         return self.closed;
     }
 
-    fn submit(&mut self, state: &mut AppState) {
+    fn submit(&mut self, state: &mut AppState) -> Result<()> {
         let values = self.components.iter().filter_map(|c| c.value()).collect();
         self.closed = true;
-        if let Some(f) = self.on_submit.take() {
-            f(state, DialogResult { values });
-        }
+        let Some(f) = self.on_submit.take() else {
+            return Ok(());
+        };
+        return f(state, DialogResult { values });
     }
 
     fn cancel(&mut self, state: &mut AppState) {
@@ -226,14 +233,15 @@ impl KeyActions for Dialog {
         return &self.keys;
     }
 
-    fn perform(&mut self, action: DialogAction, state: &mut AppState) {
+    fn perform(&mut self, action: DialogAction, state: &mut AppState) -> Result<()> {
         match action {
-            DialogAction::Submit => self.submit(state),
+            DialogAction::Submit => self.submit(state)?,
             DialogAction::Cancel if self.is_cancellable => self.cancel(state),
             DialogAction::Cancel => {}
             DialogAction::NextField => self.move_focus(true),
             DialogAction::PrevField => self.move_focus(false),
         }
+        return Ok(());
     }
 }
 
@@ -464,12 +472,13 @@ impl KeyActions for Select {
         return &self.keys;
     }
 
-    fn perform(&mut self, action: SelectAction, _state: &mut AppState) {
+    fn perform(&mut self, action: SelectAction, _state: &mut AppState) -> Result<()> {
         let last = self.options.len().saturating_sub(1);
         self.selected = match action {
             SelectAction::Up => self.selected.saturating_sub(1),
             SelectAction::Down => (self.selected + 1).min(last),
         };
+        return Ok(());
     }
 }
 

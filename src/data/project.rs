@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{Error, Read, Write},
+    io::{Read, Write},
     path::PathBuf,
 };
 
@@ -10,9 +10,12 @@ use super::{
     instrument::Instrument,
     pattern::{Pattern, PatternStore},
 };
-use crate::data::{
-    midi::{DEFAULT_BPM, MIDI_CHANNEL_MAX},
-    pattern::PatternId,
+use crate::{
+    data::{
+        midi::{DEFAULT_BPM, MIDI_CHANNEL_MAX},
+        pattern::PatternId,
+    },
+    error::{MTrakError, Result},
 };
 const PROJECT_HEADER: [u8; 4] = *b"MTRK";
 const PROJECT_VERSION: u16 = 1;
@@ -64,35 +67,30 @@ impl Project {
             patterns: PatternStore::new(vec![Pattern::default()]),
         };
     }
-    pub fn load(project_file_path: PathBuf) -> Self {
-        if project_file_path.is_file() {
-            // load file and create project like that
-            let mut file = File::open(&project_file_path).unwrap();
-            let mut magic = [0u8; 4];
-            if file.metadata().unwrap().len() < 4 {
-                panic!("Empty file");
-            }
-            file.read_exact(&mut magic).unwrap();
-            if magic != PROJECT_HEADER {
-                panic!("Not a real mtrak file");
-            }
-
-            let mut project_content: Vec<u8> = Vec::new();
-            file.read_to_end(&mut project_content).unwrap();
-            let project: Project =
-                bincode::serde::decode_from_slice(&project_content, bincode::config::standard())
-                    .unwrap()
-                    .0;
-            if project.version > PROJECT_VERSION {
-                panic!(
-                    "Cant open a version v{} file in version v{} of mtrak",
-                    project.version, PROJECT_VERSION
-                )
-            }
-            return project;
+    pub fn load(project_file_path: PathBuf) -> Result<Self> {
+        let mut file = File::open(&project_file_path)?;
+        if file.metadata()?.len() < PROJECT_HEADER.len() as u64 {
+            return Err(MTrakError::InvalidProject("the file is empty".into()));
+        }
+        let mut magic = [0u8; 4];
+        file.read_exact(&mut magic)?;
+        if magic != PROJECT_HEADER {
+            return Err(MTrakError::InvalidProject(
+                "the file has no mTrak header".into(),
+            ));
         }
 
-        panic!("File not found");
+        let mut project_content: Vec<u8> = Vec::new();
+        file.read_to_end(&mut project_content)?;
+        let (project, _): (Project, usize) =
+            bincode::serde::decode_from_slice(&project_content, bincode::config::standard())?;
+        if project.version > PROJECT_VERSION {
+            return Err(MTrakError::UnsupportedProjectVersion {
+                found: project.version,
+                supported: PROJECT_VERSION,
+            });
+        }
+        return Ok(project);
     }
     pub fn song_length(&self) -> usize {
         return self.sequence.iter().map(|s| s.repeats as usize).sum();
@@ -106,13 +104,10 @@ impl Project {
             },
         );
     }
-    pub fn save(&mut self, file_path: PathBuf) -> Result<(), Error> {
+    pub fn save(&mut self, file_path: PathBuf) -> Result<()> {
         let mut file = File::create(file_path)?;
         file.write_all(&PROJECT_HEADER)?;
-        let _bin =
-            bincode::serde::encode_into_std_write(self, &mut file, bincode::config::standard())
-                .unwrap();
-
+        bincode::serde::encode_into_std_write(self, &mut file, bincode::config::standard())?;
         return Ok(());
     }
 
@@ -128,6 +123,47 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_file(name: &str, contents: &[u8]) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("mtrak-test-{}-{}", std::process::id(), name));
+        std::fs::write(&path, contents).unwrap();
+        return path;
+    }
+
+    #[test]
+    fn save_then_load_round_trips() {
+        let path = temp_file("round-trip.mtrak", b"");
+        let mut project = Project::empty();
+        project.bpm = 140;
+        project.save(path.clone()).unwrap();
+        let loaded = Project::load(path.clone()).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(loaded.bpm, 140);
+    }
+
+    #[test]
+    fn load_rejects_files_that_are_not_projects() {
+        let empty = temp_file("empty.mtrak", b"");
+        let wrong_header = temp_file("wrong-header.mtrak", b"RIFF1234");
+        let truncated = temp_file("truncated.mtrak", b"MTRK\x01");
+        let results = [
+            Project::load(empty.clone()),
+            Project::load(wrong_header.clone()),
+            Project::load(truncated.clone()),
+        ];
+        for path in [empty, wrong_header, truncated] {
+            std::fs::remove_file(path).unwrap();
+        }
+        assert!(matches!(results[0], Err(MTrakError::InvalidProject(_))));
+        assert!(matches!(results[1], Err(MTrakError::InvalidProject(_))));
+        assert!(matches!(results[2], Err(MTrakError::Decode(_))));
+    }
+
+    #[test]
+    fn load_reports_missing_files_as_io_errors() {
+        let path = std::env::temp_dir().join("mtrak-test-does-not-exist.mtrak");
+        assert!(matches!(Project::load(path), Err(MTrakError::Io(_))));
+    }
 
     #[test]
     fn song_length_sums_repeats() {
