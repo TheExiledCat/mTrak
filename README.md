@@ -60,6 +60,11 @@ mtrak song.mtrak       # open a project
 
 Pick a MIDI output port with `Ctrl+O`. mTrak makes no sound on its own, so connect it to a physical (or virtual) midi device to make music.
 
+### Keybindings
+
+Press `?` to see every key in mTrak, grouped by section. The footer only shows the most
+common ones.
+
 ### Options
 
 | Option                         | Description                                                    |
@@ -84,7 +89,10 @@ folder. Both are created on startup if they don't exist yet.
 On Linux the music folder follows `XDG_MUSIC_DIR` and the config folder follows
 `XDG_CONFIG_HOME`, if they're set.
 
-**NOTE** Currently the project file format is non stable as its still being developed. This can mean depending on your mtrak version u might not yet be able to open older project formats, mtrak will give you an error when trying. When release v1.0.0 is finished, the file format will be stabilized and backwards compatability will be added.
+**Note:** the project file format is still changing between releases. Until v1.0.0, mTrak
+can only open projects saved with the same version of mTrak; opening a project from another
+version shows an error and starts an empty project instead. From v1.0.0 the format will be
+stable and newer versions will open older projects.
 
 ## Roadmap
 
