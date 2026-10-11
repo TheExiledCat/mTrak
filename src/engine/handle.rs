@@ -41,6 +41,7 @@ pub enum EngineCommand {
         volume: u8,
     },
     SetGlobalVelocity(u8),
+    SetMidiClock(bool),
 }
 
 #[derive(Default)]
@@ -107,6 +108,9 @@ impl EngineHandle {
 
     pub fn status(&self) -> &EngineStatus {
         return &self.status;
+    }
+    pub fn set_midi_clock(&self, enabled: bool) {
+        self.send(EngineCommand::SetMidiClock(enabled));
     }
     pub fn set_output_port(&self, port: Option<MidiOutputPort>) {
         self.send(EngineCommand::SetOutputPort(port));

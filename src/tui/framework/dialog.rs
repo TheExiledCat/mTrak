@@ -180,10 +180,12 @@ impl Dialog {
     pub fn help(sections: &mut Vec<HelpSection>) {
         let dialog = Dialog::new("", Vec::new());
         let select = Select::new("", Vec::new());
+        let checkbox = Checkbox::new("", "");
         sections.push(
             dialog
                 .help_section("Dialogs")
                 .entries(select.keys.help_entries(Select::describe))
+                .entries(checkbox.keys.help_entries(Checkbox::describe))
                 .entry("Bksp", "Delete the last character of a text field"),
         );
     }
@@ -432,6 +434,93 @@ impl DialogComponent for TextPrompt {
     }
     fn value(&self) -> Option<(&'static str, DialogValue)> {
         return Some((self.id, DialogValue::Text(self.text.clone())));
+    }
+}
+
+pub struct Checkbox {
+    id: &'static str,
+    label: String,
+    checked: bool,
+    focused: bool,
+    keys: Keymap<CheckboxAction>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CheckboxAction {
+    Toggle,
+}
+
+impl Checkbox {
+    pub fn new(id: &'static str, label: impl Into<String>) -> Self {
+        return Self {
+            id,
+            label: label.into(),
+            checked: false,
+            focused: false,
+            keys: Keymap::new().bind(Key::char(' '), CheckboxAction::Toggle, "Toggle"),
+        };
+    }
+
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.checked = checked;
+        return self;
+    }
+}
+
+impl KeyActions for Checkbox {
+    type Action = CheckboxAction;
+
+    fn keymap(&self) -> &Keymap<CheckboxAction> {
+        return &self.keys;
+    }
+
+    fn perform(&mut self, action: CheckboxAction, _state: &mut AppState) -> Result<()> {
+        match action {
+            CheckboxAction::Toggle => self.checked = !self.checked,
+        }
+        return Ok(());
+    }
+
+    fn describe(action: CheckboxAction) -> &'static str {
+        return match action {
+            CheckboxAction::Toggle => "Check or uncheck a checkbox",
+        };
+    }
+}
+
+impl MtrakWidget for Checkbox {
+    fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
+        return self.dispatch(state, event);
+    }
+
+    fn key_hints(&self, _state: &AppState, hints: &mut Vec<KeyHint>) {
+        self.keys.hints(hints);
+    }
+
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
+        let mark = if self.checked { "X" } else { " " };
+        let style = if self.focused {
+            state.theme.selected_cell
+        } else {
+            Style::new()
+        };
+        Line::from(vec![
+            Span::raw(format!("{}: ", self.label)),
+            Span::styled(format!("[{mark}]"), style),
+        ])
+        .render(area, buf);
+    }
+}
+
+impl DialogComponent for Checkbox {
+    fn focusable(&self) -> bool {
+        return true;
+    }
+    fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+    }
+    fn value(&self) -> Option<(&'static str, DialogValue)> {
+        return Some((self.id, DialogValue::Bool(self.checked)));
     }
 }
 
