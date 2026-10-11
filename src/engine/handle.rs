@@ -10,11 +10,14 @@ use std::{
 use midir::MidiOutputPort;
 
 use super::engine::{MtrakEngine, PlayMode};
-use crate::data::{
-    midi::MidiEvent,
-    note::NotePitch,
-    pattern::{Pattern, PatternId},
-    project::SequenceRow,
+use crate::{
+    data::{
+        midi::MidiEvent,
+        note::NotePitch,
+        pattern::{Pattern, PatternId},
+        project::SequenceRow,
+    },
+    error::Result,
 };
 
 pub enum EngineCommand {
@@ -86,21 +89,20 @@ pub struct EngineHandle {
 }
 
 impl EngineHandle {
-    pub fn spawn() -> Self {
+    pub fn spawn() -> Result<Self> {
         let (commands, receiver) = mpsc::channel();
         let (event_sender, events) = mpsc::channel();
         let status = Arc::new(EngineStatus::default());
         let engine = MtrakEngine::new(receiver, event_sender, status.clone());
         let thread = thread::Builder::new()
             .name("mtrak-engine".into())
-            .spawn(move || engine.run())
-            .expect("failed to spawn the engine thread");
-        return Self {
+            .spawn(move || engine.run())?;
+        return Ok(Self {
             commands: Some(commands),
             events,
             status,
             thread: Some(thread),
-        };
+        });
     }
 
     pub fn status(&self) -> &EngineStatus {

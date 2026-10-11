@@ -2,13 +2,10 @@ use std::{iter::repeat_n, time::Instant};
 
 use figlet_rs::FIGlet;
 use ratatui::{
-    crossterm::{
-        event::{
-            Event::{self},
-            KeyCode::{self, Char},
-            KeyModifiers,
-        },
-        terminal,
+    crossterm::event::{
+        Event::{self},
+        KeyCode::{self, Char},
+        KeyModifiers,
     },
     layout::{Constraint, Layout, Rect},
     style::{Style, Stylize},
@@ -21,6 +18,7 @@ use crate::{
         config::TITLE,
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, midi_to_string},
     },
+    error::Result,
     tui::{
         app::AppState,
         framework::{
@@ -373,7 +371,7 @@ impl KeyActions for SequenceList {
         return &self.keymap;
     }
 
-    fn perform(&mut self, action: SequenceAction, state: &mut AppState) {
+    fn perform(&mut self, action: SequenceAction, state: &mut AppState) -> Result<()> {
         let sequence_length = state.project.sequence.len();
         match action {
             NextPattern => {
@@ -403,6 +401,7 @@ impl KeyActions for SequenceList {
             IncPattern => state.change_sequence_pattern(state.active_sequence_index, true),
             DecPattern => state.change_sequence_pattern(state.active_sequence_index, false),
         }
+        return Ok(());
     }
 }
 impl MtrakWidget for SequenceList {
@@ -511,10 +510,11 @@ impl MtrakWidget for PatternInfo {
         let vertical_layout =
             Layout::vertical([Constraint::Fill(1), Constraint::Max(3)]).split(area);
 
-        let font = FIGlet::small().unwrap();
-        let figlet = font.convert(TITLE).unwrap();
-        let _terminal_size = terminal::size().unwrap();
-        Paragraph::new(figlet.as_str())
+        let title = FIGlet::small()
+            .ok()
+            .and_then(|font| font.convert(TITLE).map(|figure| figure.to_string()))
+            .unwrap_or_else(|| TITLE.to_owned());
+        Paragraph::new(title)
             .centered()
             .bold()
             .block(
@@ -608,7 +608,7 @@ impl KeyActions for PatternInfo {
         return &self.keymap;
     }
 
-    fn perform(&mut self, action: Self::Action, state: &mut AppState) {
+    fn perform(&mut self, action: Self::Action, state: &mut AppState) -> Result<()> {
         match action {
             PatternInfoActions::BpmUp => state.increase_bpm(),
             PatternInfoActions::BpmDown => state.decrease_bpm(),
@@ -621,6 +621,7 @@ impl KeyActions for PatternInfo {
             PatternInfoActions::PatternLengthUp => state.active_pattern_mut().increase_length(),
             PatternInfoActions::PatternLengthDown => state.active_pattern_mut().decrease_length(),
         }
+        return Ok(());
     }
 }
 
@@ -660,7 +661,7 @@ impl KeyActions for InstrumentList {
         return &self.keymap;
     }
 
-    fn perform(&mut self, action: InstrumentListAction, state: &mut AppState) {
+    fn perform(&mut self, action: InstrumentListAction, state: &mut AppState) -> Result<()> {
         match action {
             InstrumentListAction::PrevInstrument => {
                 state.prev_instrument();
@@ -669,6 +670,7 @@ impl KeyActions for InstrumentList {
                 state.next_instrument();
             }
         };
+        return Ok(());
     }
 }
 fn open_config_dialog(state: &mut AppState) {
@@ -689,7 +691,7 @@ fn open_config_dialog(state: &mut AppState) {
     )
     .on_submit(|state, result| {
         let Some(index) = result.choice("port") else {
-            return;
+            return Ok(());
         };
         let port = state
             .midi_client
@@ -697,6 +699,7 @@ fn open_config_dialog(state: &mut AppState) {
             .and_then(|client| client.ports().get(index).cloned());
         state.engine.set_output_port(port.clone());
         state.active_port = port;
+        return Ok(());
     });
     state.open_dialog(dialog);
 }
@@ -729,6 +732,7 @@ fn open_instrument_dialog(state: &mut AppState) {
             state.project.instruments[instrument as usize].pitch_wheel_range =
                 range.parse().unwrap_or(pitch_wheel_range);
         }
+        return Ok(());
     });
     state.open_dialog(dialog);
 }
@@ -747,6 +751,7 @@ fn open_velocity_dialog(state: &mut AppState) {
             let velocity = u8::from_str_radix(text, 16).unwrap_or(velocity);
             state.set_global_velocity(velocity);
         }
+        return Ok(());
     });
     state.open_dialog(dialog);
 }
@@ -941,11 +946,12 @@ impl KeyActions for UtilList {
         return &self.keymap;
     }
 
-    fn perform(&mut self, action: Self::Action, state: &mut AppState) {
+    fn perform(&mut self, action: Self::Action, state: &mut AppState) -> Result<()> {
         match action {
             UtilListAction::Instruments => open_instrument_dialog(state),
             UtilListAction::Velocity => open_velocity_dialog(state),
             UtilListAction::Config => open_config_dialog(state),
         }
+        return Ok(());
     }
 }

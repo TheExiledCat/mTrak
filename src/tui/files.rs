@@ -1,17 +1,14 @@
-use std::{
-    fs::{self},
-    path::PathBuf,
-};
+use std::{fs, path::PathBuf};
+
+use crate::error::{MTrakError, Result};
 
 const FOLDER_ROOT_NAME: &str = "mtrak";
-type Result<T> = std::io::Result<T>;
-pub fn initialize_directories() -> Result<()> {
-    fn create_error() -> std::io::Error {
-        return std::io::Error::other("failed to create default directory");
-    }
 
-    fs::create_dir_all(get_config_directory_root().ok_or_else(create_error)?)?;
-    fs::create_dir_all(get_projects_directory_root().ok_or_else(create_error)?)?;
+pub fn initialize_directories() -> Result<()> {
+    let config = get_config_directory_root().ok_or(MTrakError::MissingDirectory("config"))?;
+    fs::create_dir_all(config)?;
+    let projects = get_projects_directory_root().ok_or(MTrakError::MissingDirectory("music"))?;
+    fs::create_dir_all(projects)?;
     return Ok(());
 }
 
