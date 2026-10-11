@@ -1,6 +1,6 @@
 ---
 name: create-release
-description: Create a new mTrak release for a given version (e.g. "0.0.2" or "v0.0.2"). Bumps the crate version, writes a detailed changelog entry in CHANGELOG.md covering everything since the previous release, commits, tags and pushes so the release workflow builds and publishes it. Use when asked to "create a release", "release vX.Y.Z", "cut a release" or "publish a new version".
+description: Create a new mTrak release for a given version (e.g. "0.0.2" or "v0.0.2"). Bumps the crate version, writes a detailed changelog entry in docs/CHANGELOG.md covering everything since the previous release, commits, tags and pushes so the release workflow builds and publishes it. Use when asked to "create a release", "release vX.Y.Z", "cut a release" or "publish a new version".
 argument-hint: <version>
 ---
 
@@ -49,7 +49,7 @@ run into it (a `todo!()` reached during playback crashes the app).
 
 ## 3. Write the changelog entry
 
-`CHANGELOG.md` at the repo root, newest release first. Create it if missing with a
+`docs/CHANGELOG.md`, newest release first. Create it if missing with a
 `# Changelog` heading. The release workflow takes the release notes from this file by finding
 the line `## vX.Y.Z` and reading up to the next `## ` heading, so the entry heading must be
 exactly:
@@ -86,7 +86,7 @@ they ask for.
   `Cargo.lock` picks up the new version (CI builds with `--locked`, which fails on a stale
   lock), then `cargo build --release --locked` to make sure it builds. If it doesn't build,
   stop and report; don't tag broken code.
-- Stage `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md` and whatever the user agreed to include.
+- Stage `Cargo.toml`, `Cargo.lock`, `docs/CHANGELOG.md` and whatever the user agreed to include.
 - Commit with the single-line message `vX.Y.Z` and nothing else: no body, no co-author
   trailer. The author is the repo's configured git user.
 - `git tag vX.Y.Z`, then `git push origin main` and `git push origin vX.Y.Z`.

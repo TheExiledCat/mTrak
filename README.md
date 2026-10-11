@@ -131,6 +131,6 @@ Have an idea? Feel free to open an issue.
 ## Contributing
 
 Bug reports, feature requests and pull requests are welcome. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for how to get started and
+[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for how to get started and
 [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for the code style. Run `./fmt.sh` before
 committing to format the code and apply lint fixes.
