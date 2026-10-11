@@ -27,7 +27,9 @@ use crate::{
     engine::{engine::PlayMode, handle::EngineHandle},
     tui::{
         framework::{
-            core_extensions::Boxed, dialog::Dialog, widget::MtrakWidget,
+            core_extensions::Boxed,
+            dialog::{Dialog, PopupLevel},
+            widget::MtrakWidget,
             widgets::container::Container,
         },
         glyphs,
@@ -152,7 +154,7 @@ impl App {
         self.dialogs.append(&mut self.state.pending_dialogs);
         if let Some(on_submit) = self.state.save_file_request.take() {
             self.file_browser
-                .save_file(on_submit.0, on_submit.1, on_submit.2);
+                .save_file(on_submit.0, on_submit.1, on_submit.2, on_submit.3);
         }
     }
 }
@@ -182,8 +184,10 @@ pub struct AppState {
     pub channel_hits: [Option<ChannelHit>; MIDI_CHANNEL_MAX as usize + 1],
     pub current_octave: u8,
     pub recording: bool,
+    /// Where the project was last loaded from or saved to, so saving again skips the browser.
+    pub project_path: Option<PathBuf>,
     pending_dialogs: Vec<Dialog>,
-    save_file_request: Option<(Box<Submit>, String, String)>,
+    save_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
     changed_patterns: HashSet<PatternId>,
     sequence_changed: bool,
 }
@@ -205,6 +209,7 @@ impl AppState {
             active_pattern: PatternId(0),
             current_octave: 4,
             recording: false,
+            project_path: None,
             line_add: 1,
             pending_dialogs: Vec::new(),
             changed_patterns,
@@ -293,10 +298,29 @@ impl AppState {
     pub fn request_save_file(
         &mut self,
         on_submit: impl FnOnce(&mut AppState, PathBuf) + 'static,
+        start_directory: PathBuf,
         title: impl Into<String>,
-        file_filter: impl Into<String>,
+        extensions: Vec<String>,
     ) {
-        self.save_file_request = Some((Box::new(on_submit), title.into(), file_filter.into()));
+        self.save_file_request = Some((
+            Box::new(on_submit),
+            start_directory,
+            title.into(),
+            extensions,
+        ));
+    }
+    /// Saves the project to `path`, showing an error popup on failure. Returns whether it saved.
+    pub fn save_project(&mut self, path: PathBuf) -> bool {
+        if let Err(e) = self.project.save(path.clone()) {
+            self.open_dialog(Dialog::popup(
+                PopupLevel::Error,
+                "Save failed",
+                e.to_string(),
+            ));
+            return false;
+        }
+        self.project_path = Some(path);
+        return true;
     }
     pub fn request_exit(&mut self) {
         self.exit_requested = true;

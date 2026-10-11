@@ -7,7 +7,6 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    config::Config,
     instrument::Instrument,
     pattern::{Pattern, PatternStore},
 };
@@ -65,7 +64,7 @@ impl Project {
             patterns: PatternStore::new(vec![Pattern::default()]),
         };
     }
-    pub fn new(project_file_path: PathBuf) -> Self {
+    pub fn load(project_file_path: PathBuf) -> Self {
         if project_file_path.is_file() {
             // load file and create project like that
             let mut file = File::open(&project_file_path).unwrap();
@@ -107,13 +106,7 @@ impl Project {
             },
         );
     }
-    pub fn save(&mut self, config: &Config, name: Option<String>) -> Result<(), Error> {
-        if let Some(name) = name {
-            self.name = Some(name);
-        } else if self.name.is_none() {
-            panic!("No name set for project");
-        }
-        let file_path = config.project_dir.join(self.name.clone().unwrap());
+    pub fn save(&mut self, file_path: PathBuf) -> Result<(), Error> {
         let mut file = File::create(file_path)?;
         file.write_all(&PROJECT_HEADER)?;
         let _bin =

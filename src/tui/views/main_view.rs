@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use ratatui::{
     crossterm::event::{KeyCode, KeyModifiers},
     layout::{Constraint, Layout},
@@ -6,14 +8,15 @@ use ratatui::{
 
 use crate::tui::{
     app::AppState,
-    constants,
+    constants, files,
     framework::{
         core_extensions::Boxed,
+        dialog::{Dialog, PopupLevel},
         keymap::{Key, KeyActions, KeyHint, Keymap},
         widget::MtrakWidget,
-        widgets::container::Container,
+        widgets::{container::Container, footer::Footer},
     },
-    views::{file_browser, footer::Footer, header::Header, timeline::TimeLineView},
+    views::{file_browser, header::Header, timeline::TimeLineView},
 };
 
 /// Actions available everywhere in the main view, regardless of which child has focus.
@@ -21,6 +24,7 @@ use crate::tui::{
 pub enum MainAction {
     Quit,
     Save,
+    SaveAs,
     PlayPattern,
     PlaySong,
 }
@@ -46,6 +50,11 @@ impl MainView {
                 )
                 .bind(Key::ctrl('s'), MainAction::Save, "Save")
                 .bind(
+                    Key::new(KeyCode::Char('s'), KeyModifiers::ALT),
+                    MainAction::SaveAs,
+                    "Save As",
+                )
+                .bind(
                     Key::new(constants::EXIT_KEY, KeyModifiers::CONTROL),
                     MainAction::Quit,
                     "Quit",
@@ -63,16 +72,40 @@ impl KeyActions for MainView {
     fn perform(&mut self, action: MainAction, state: &mut AppState) {
         match action {
             MainAction::Quit => state.request_exit(),
-            MainAction::Save => state.request_save_file(
-                |_, _| {},
-                "Save project",
-                "*".to_owned() + file_browser::MTRAK_FILE_EXTENSION,
-            ),
+            MainAction::Save => match state.project_path.clone() {
+                Some(path) => {
+                    state.save_project(path);
+                }
+                None => request_save_as(state),
+            },
+            MainAction::SaveAs => request_save_as(state),
             MainAction::PlayPattern => state.play_pattern(state.active_pattern),
             MainAction::PlaySong => state.play_song(state.active_sequence_index),
         }
     }
 }
+fn request_save_as(state: &mut AppState) {
+    let start_directory = state
+        .project_path
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map(PathBuf::from)
+        .or_else(files::get_projects_directory_root)
+        .unwrap_or_else(|| PathBuf::from("."));
+    state.request_save_file(
+        |state, file_path| {
+            let name = file_path.file_name().unwrap_or_default().to_string_lossy();
+            let message = format!("Saved {}", name);
+            if state.save_project(file_path) {
+                state.open_dialog(Dialog::popup(PopupLevel::Info, "Saved", message));
+            }
+        },
+        start_directory,
+        "Save project",
+        vec!["*".to_owned() + file_browser::MTRAK_FILE_EXTENSION],
+    );
+}
+
 impl MtrakWidget for MainView {
     fn update(&mut self, state: &mut AppState) {
         self.header.update(state);
@@ -95,6 +128,7 @@ impl MtrakWidget for MainView {
         self.content.key_hints(state, hints);
         self.header.key_hints(state, hints);
         hints.extend(self.keys.hint_for(MainAction::Save));
+        hints.extend(self.keys.hint_for(MainAction::SaveAs));
         hints.extend(self.keys.hint_for(MainAction::Quit));
     }
 
