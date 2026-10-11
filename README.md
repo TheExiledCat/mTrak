@@ -84,6 +84,8 @@ folder. Both are created on startup if they don't exist yet.
 On Linux the music folder follows `XDG_MUSIC_DIR` and the config folder follows
 `XDG_CONFIG_HOME`, if they're set.
 
+**NOTE** Currently the project file format is non stable as its still being developed. This can mean depending on your mtrak version u might not yet be able to open older project formats, mtrak will give you an error when trying. When release v1.0.0 is finished, the file format will be stabilized and backwards compatability will be added.
+
 ## Roadmap
 
 Planned features, in no particular order:
@@ -102,12 +104,12 @@ Planned features, in no particular order:
 - [ ] **Swing/groove**, per pattern or global
 - [x] **Prebuilt binaries** for Linux, Windows and macOS on every release
 - [ ] **More commands**
-  - [ ] Roll
-  - [ ] Roll with volume glide
-  - [x] Tempo (BPM) and speed change (`F`)
-  - [ ] Note delay
-  - [ ] Note probability
-  - [ ] Shorthand commands for common CCs (mod wheel, filter cutoff, etc.)
+    - [ ] Roll
+    - [ ] Roll with volume glide
+    - [x] Tempo (BPM) and speed change (`F`)
+    - [ ] Note delay
+    - [ ] Note probability
+    - [ ] Shorthand commands for common CCs (mod wheel, filter cutoff, etc.)
 - [ ] **Autosave and crash recovery**
 - [ ] **Custom themes**
 - [ ] **Keyboard remapping**, with default layouts per OS/shell
