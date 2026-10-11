@@ -2,7 +2,7 @@ use std::{fmt::Display, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::note::NoteError;
+use crate::error::MTrakError;
 pub const COMMAND_VALUE_MAX: u8 = u8::MAX;
 use MidiCommand::*;
 pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 8] = [
@@ -23,7 +23,7 @@ pub enum CommandKind {
     Effect(EffectCommand),
 }
 impl CommandKind {
-    fn from_char(char: char) -> Result<Self, NoteError> {
+    fn from_char(char: char) -> Result<Self, MTrakError> {
         return Ok(match char {
             '0' => CommandKind::None,
 
@@ -31,7 +31,7 @@ impl CommandKind {
                 return MidiCommand::from_char(char)
                     .map(|c| c.as_command_kind())
                     .or_else(|_| EffectCommand::from_char(char).map(|c| c.as_command_kind()))
-                    .map_err(|_| NoteError::ParseFailure("Command type invalid".into()));
+                    .map_err(|_| MTrakError::Parse("Command type invalid".into()));
             }
         });
     }
@@ -62,12 +62,12 @@ impl MidiCommand {
         return matches!(self, CCSlide | CCVelocitySlide);
     }
 
-    fn from_char(char: char) -> Result<Self, NoteError> {
+    fn from_char(char: char) -> Result<Self, MTrakError> {
         return MIDI_COMMAND_LOOKUP
             .iter()
             .position(|c| c.0 == char)
             .map(|p| MIDI_COMMAND_LOOKUP[p].1)
-            .ok_or(NoteError::ParseFailure("Not a midi command".into()));
+            .ok_or(MTrakError::Parse("Not a midi command".into()));
     }
     fn as_command_kind(&self) -> CommandKind {
         return CommandKind::MidiCommand(*self);
@@ -91,12 +91,12 @@ pub enum EffectCommand {
     SetTempo, // Sets the BPM from 20 up, the speed below that, and 00 goes back to the song's own
 }
 impl EffectCommand {
-    fn from_char(char: char) -> Result<Self, NoteError> {
+    fn from_char(char: char) -> Result<Self, MTrakError> {
         return EFFECT_COMMAND_LOOKUP
             .iter()
             .position(|c| c.0 == char)
             .map(|p| EFFECT_COMMAND_LOOKUP[p].1)
-            .ok_or(NoteError::ParseFailure("Not an effect command".into()));
+            .ok_or(MTrakError::Parse("Not an effect command".into()));
     }
     fn as_command_kind(&self) -> CommandKind {
         return CommandKind::Effect(*self);
@@ -116,19 +116,19 @@ impl Command {
 }
 
 impl FromStr for Command {
-    type Err = NoteError;
+    type Err = MTrakError;
 
-    fn from_str(text: &str) -> Result<Self, NoteError> {
+    fn from_str(text: &str) -> Result<Self, MTrakError> {
         let chars = text.chars();
         let chars: Vec<char> = chars.collect();
-        let err = NoteError::ParseFailure("Command should be 3 digits".into());
+        let err = MTrakError::Parse("Command should be 3 digits".into());
         if chars.len() != 3 {
             return Err(err);
         }
 
         let kind = CommandKind::from_char(chars[0])?;
         let value = u8::from_str_radix(&chars[1..=2].iter().collect::<String>(), 16)
-            .map_err(|_| NoteError::ParseFailure("Invalid value".into()))?;
+            .map_err(|_| MTrakError::Parse("Invalid value".into()))?;
 
         return Ok(Command::new(kind, value));
     }

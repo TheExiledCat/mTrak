@@ -4,13 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     data::effect::Command,
+    error::MTrakError,
     tui::constants::{self},
 };
-
-#[derive(Debug)]
-pub enum NoteError {
-    ParseFailure(String),
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum NoteKind {
@@ -20,7 +16,7 @@ pub enum NoteKind {
 }
 
 impl NoteKind {
-    pub fn from_string(string: &str) -> Result<NoteKind, NoteError> {
+    pub fn from_string(string: &str) -> Result<NoteKind, MTrakError> {
         return match string {
             "---" => Ok(NoteKind::Empty),
             "===" => Ok(NoteKind::Off),
@@ -63,23 +59,21 @@ impl Note {
     pub fn empty() -> Self {
         return Self::new(NoteKind::Empty, None, None, Command::default());
     }
-    pub fn from_string(string: &str) -> Result<Note, NoteError> {
+    pub fn from_string(string: &str) -> Result<Note, MTrakError> {
         let chunks = string.split("|").collect::<Vec<&str>>();
         if chunks.len() != 4 {
-            return Err(NoteError::ParseFailure(string.to_owned()));
+            return Err(MTrakError::Parse(string.to_owned()));
         }
 
         let kind = NoteKind::from_string(chunks[0])?;
         let instrument_id = match chunks[1] {
             "-" => None,
-            s => Some(
-                u8::from_str_radix(s, 16).map_err(|e| NoteError::ParseFailure(e.to_string()))?,
-            ),
+            s => Some(u8::from_str_radix(s, 16).map_err(|e| MTrakError::Parse(e.to_string()))?),
         };
         let velocity = u8::from_str_radix(chunks[2], 16).ok();
         let command = chunks[3]
             .parse::<Command>()
-            .map_err(|_| NoteError::ParseFailure("Invalid Command String".into()))?;
+            .map_err(|_| MTrakError::Parse("Invalid Command String".into()))?;
         return Ok(Note::new(kind, instrument_id, velocity, command));
     }
     /// Clears the note and the instrument that goes with it.
@@ -124,24 +118,24 @@ impl NotePitch {
         let pitch = pitch.clamp(Self::MIN, Self::MAX);
         return Self(pitch);
     }
-    pub fn from_string(string: &str) -> Result<NotePitch, NoteError> {
+    pub fn from_string(string: &str) -> Result<NotePitch, MTrakError> {
         if !string.is_char_boundary(2) {
-            return Err(NoteError::ParseFailure(string.to_owned()));
+            return Err(MTrakError::Parse(string.to_owned()));
         }
         let (note_name, octave) = string.split_at(2);
         let octave: u8 = octave
             .parse()
-            .map_err(|_| NoteError::ParseFailure(string.to_owned()))?;
+            .map_err(|_| MTrakError::Parse(string.to_owned()))?;
         let note_index = constants::NOTE_NAMES
             .iter()
             .position(|s| *s == note_name)
-            .ok_or(NoteError::ParseFailure(string.to_owned()))?;
+            .ok_or(MTrakError::Parse(string.to_owned()))?;
         let pitch = octave
             .checked_add(1)
             .and_then(|o| o.checked_mul(12))
             .and_then(|p| p.checked_add(note_index as u8))
             .filter(|p| *p <= Self::MAX)
-            .ok_or(NoteError::ParseFailure(string.to_owned()))?;
+            .ok_or(MTrakError::Parse(string.to_owned()))?;
         return Ok(NotePitch(pitch));
     }
 }

@@ -14,16 +14,19 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
-use crate::tui::{
-    app::AppState,
-    framework::{
-        core_extensions::Boxed,
-        dialog::{Dialog, PopupLevel, Select, TextPrompt},
-        keymap::{Key, KeyActions, Keymap},
-        widget::MtrakWidget,
-        widgets::footer::Footer,
+use crate::{
+    error::{MTrakError, Result},
+    tui::{
+        app::AppState,
+        framework::{
+            core_extensions::Boxed,
+            dialog::{Dialog, PopupLevel, Select, TextPrompt},
+            keymap::{Key, KeyActions, Keymap},
+            widget::MtrakWidget,
+            widgets::footer::Footer,
+        },
+        views::file_browser::FileBrowserMode::{OpenFile, SaveFile},
     },
-    views::file_browser::FileBrowserMode::{OpenFile, SaveFile},
 };
 pub const MTRAK_FILE_EXTENSION: &str = ".mtrak";
 const ALL_EXTENSIONS_FILTER: &str = "*";
@@ -50,7 +53,7 @@ impl FileBrowserMode {
         };
     }
 }
-pub type Submit = dyn FnOnce(&mut AppState, PathBuf);
+pub type Submit = dyn FnOnce(&mut AppState, PathBuf) -> Result<()>;
 pub struct FileBrowser {
     keymap: Keymap<FileBrowserAction>,
     title: String,
@@ -90,7 +93,7 @@ impl FileBrowser {
                 Confirm,
                 "Confirm",
             );
-        let default_path = dirs::home_dir().unwrap();
+        let default_path = dirs::home_dir().unwrap_or_default();
         return Self {
             keymap,
             default_path: default_path.clone(),
@@ -136,7 +139,7 @@ impl FileBrowser {
     }
     fn load_contents(&mut self) {
         let mut entries: Vec<DirEntry> = fs::read_dir(&self.current_folder)
-            .map(|entries| entries.filter_map(Result::ok).collect())
+            .map(|entries| entries.filter_map(|e| e.ok()).collect())
             .unwrap_or_default();
         let extensions = self.mode.extensions();
         entries.retain(|e| e.path().is_dir() || matches_filter(&e.file_name(), extensions));
@@ -148,12 +151,11 @@ impl FileBrowser {
         });
         self.current_folder_contents = entries;
     }
-    fn submit(&mut self, state: &mut AppState) {
+    fn submit(&mut self, state: &mut AppState) -> Result<()> {
         match &self.mode {
             SaveFile { extensions } => {
                 if let Some(file) = self.selected_file.clone() {
-                    self.finish(state, file);
-                    return;
+                    return self.finish(state, file);
                 }
                 let options = extensions
                     .iter()
@@ -175,16 +177,46 @@ impl FileBrowser {
                         name: result.text("name").unwrap_or_default().to_owned(),
                         extension: result.choice("extension").unwrap_or(0),
                     }));
+                    return Ok(());
                 });
                 state.open_dialog(dialog);
+                return Ok(());
             }
-            OpenFile { .. } => todo!(),
+            OpenFile { .. } => return Err(MTrakError::Unsupported("Opening files")),
         };
     }
-    fn finish(&mut self, state: &mut AppState, path: PathBuf) {
+    fn finish(&mut self, state: &mut AppState, path: PathBuf) -> Result<()> {
         self.is_open = false;
-        if let Some(on_submit) = self.submit_handler.take() {
-            on_submit(state, path);
+        let Some(on_submit) = self.submit_handler.take() else {
+            return Ok(());
+        };
+        return on_submit(state, path);
+    }
+    fn handle_input(&mut self, state: &mut AppState, input: PendingInput) -> Result<()> {
+        match input {
+            PendingInput::FileName { name, extension } => {
+                let name = name.trim();
+                if name.is_empty() {
+                    return Ok(());
+                }
+                let filter = self
+                    .mode
+                    .extensions()
+                    .get(extension)
+                    .map(String::as_str)
+                    .unwrap_or(ALL_EXTENSIONS_FILTER);
+                let path = self
+                    .current_folder
+                    .join(with_extension(name.to_owned(), filter));
+                return self.finish(state, path);
+            }
+            PendingInput::NewDirectory(name) => {
+                let name = name.trim();
+                if name.is_empty() {
+                    return Ok(());
+                }
+                return self.create_directory(name);
+            }
         }
     }
     fn request_new_directory(&self, state: &mut AppState) {
@@ -193,20 +225,14 @@ impl FileBrowser {
             move |_, result| {
                 let name = result.text("name").unwrap_or_default().to_owned();
                 pending.replace(Some(PendingInput::NewDirectory(name)));
+                return Ok(());
             },
         );
         state.open_dialog(dialog);
     }
-    fn create_directory(&mut self, state: &mut AppState, name: &str) {
+    fn create_directory(&mut self, name: &str) -> Result<()> {
         let path = self.current_folder.join(name);
-        if let Err(e) = fs::create_dir(&path) {
-            state.open_dialog(Dialog::popup(
-                PopupLevel::Error,
-                "New directory",
-                e.to_string(),
-            ));
-            return;
-        }
+        fs::create_dir(&path)?;
         self.load_contents();
         if let Some(i) = self
             .current_folder_contents
@@ -215,6 +241,7 @@ impl FileBrowser {
         {
             self.selected_index = i + 1;
         }
+        return Ok(());
     }
 }
 
@@ -256,29 +283,8 @@ impl MtrakWidget for FileBrowser {
         let Some(input) = self.pending_input.take() else {
             return;
         };
-        match input {
-            PendingInput::FileName { name, extension } => {
-                let name = name.trim();
-                if name.is_empty() {
-                    return;
-                }
-                let filter = self
-                    .mode
-                    .extensions()
-                    .get(extension)
-                    .map(String::as_str)
-                    .unwrap_or(ALL_EXTENSIONS_FILTER);
-                let path = self
-                    .current_folder
-                    .join(with_extension(name.to_owned(), filter));
-                self.finish(state, path);
-            }
-            PendingInput::NewDirectory(name) => {
-                let name = name.trim();
-                if !name.is_empty() {
-                    self.create_directory(state, name);
-                }
-            }
+        if let Err(e) = self.handle_input(state, input) {
+            state.report_error(e);
         }
     }
     fn key_hints(
@@ -392,7 +398,11 @@ impl KeyActions for FileBrowser {
         return &self.keymap;
     }
 
-    fn perform(&mut self, action: Self::Action, state: &mut crate::tui::app::AppState) {
+    fn perform(
+        &mut self,
+        action: Self::Action,
+        state: &mut crate::tui::app::AppState,
+    ) -> Result<()> {
         match action {
             FileBrowserAction::Up => self.selected_index = self.selected_index.saturating_sub(1),
             FileBrowserAction::Down => {
@@ -423,7 +433,7 @@ impl KeyActions for FileBrowser {
             }
             FileBrowserAction::Confirm => {
                 if matches!(self.mode, SaveFile { .. }) || self.selected_file.is_some() {
-                    self.submit(state);
+                    self.submit(state)?;
                 } else {
                     state.open_dialog(Dialog::popup(
                         PopupLevel::Warning,
@@ -438,6 +448,7 @@ impl KeyActions for FileBrowser {
                 self.submit_handler = None;
             }
         }
+        return Ok(());
     }
 }
 

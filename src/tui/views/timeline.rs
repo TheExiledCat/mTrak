@@ -20,6 +20,7 @@ use crate::{
         pattern::PatternId,
     },
     engine::engine::PlayMode,
+    error::Result,
     tui::{
         app::{AppState, TrackCache, column_index_to_note_string_index},
         constants::{self, NOTE_OFF_KEY},
@@ -249,7 +250,7 @@ impl KeyActions for TimeLineView {
         return &self.normal_keys;
     }
 
-    fn perform(&mut self, action: TimelineAction, state: &mut AppState) {
+    fn perform(&mut self, action: TimelineAction, state: &mut AppState) -> Result<()> {
         match action {
             TimelineAction::RowUp => {
                 let row_count = state.active_pattern().row_count;
@@ -315,13 +316,13 @@ impl KeyActions for TimeLineView {
             TimelineAction::NoteOff => {
                 if !self.is_editing {
                     state.engine.release_note(self.track_index as usize);
-                    return;
+                    return Ok(());
                 }
                 let row = self.row_index as usize;
                 let track = self.track_index as usize;
                 let pattern = state.active_pattern_mut();
                 let Some(mut note) = pattern.get_event(row, track).copied() else {
-                    return;
+                    return Ok(());
                 };
                 note.kind = NoteKind::Off;
                 pattern.set_event(row, track, note);
@@ -354,7 +355,7 @@ impl KeyActions for TimeLineView {
             }
             TimelineAction::DeletePreviousNote => {
                 let Some(row) = self.row_index.checked_sub(1) else {
-                    return;
+                    return Ok(());
                 };
                 let track = self.track_index as usize;
                 state.active_pattern_mut().delete_event(row as usize, track);
@@ -363,7 +364,7 @@ impl KeyActions for TimeLineView {
             }
             TimelineAction::DeletePreviousLine => {
                 let Some(row) = self.row_index.checked_sub(1) else {
-                    return;
+                    return Ok(());
                 };
                 state.active_pattern_mut().delete_line(row as usize);
                 self.refresh_rows_from(state, row as usize);
@@ -380,6 +381,7 @@ impl KeyActions for TimeLineView {
                 self.refresh_rows_from(state, row);
             }
         }
+        return Ok(());
     }
 }
 impl TimeLineView {

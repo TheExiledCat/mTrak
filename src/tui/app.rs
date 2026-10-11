@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    io,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -25,6 +24,7 @@ use crate::{
         project::{Project, SequenceRow},
     },
     engine::{engine::PlayMode, handle::EngineHandle},
+    error::{MTrakError, Result},
     tui::{
         framework::{
             core_extensions::Boxed,
@@ -41,7 +41,6 @@ use crate::{
     },
 };
 
-pub type Result<T> = io::Result<T>;
 pub fn column_index_to_note_string_index(column_index: usize) -> Option<usize> {
     if column_index == 0 {
         return Some(0);
@@ -67,9 +66,14 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(terminal: DefaultTerminal, fps: u16, theme: Theme, project: Project) -> Self {
-        let state = AppState::new(project, theme);
-        return Self {
+    pub fn new(
+        terminal: DefaultTerminal,
+        fps: u16,
+        theme: Theme,
+        project: Project,
+    ) -> Result<Self> {
+        let state = AppState::new(project, theme)?;
+        return Ok(Self {
             terminal,
             fps,
             root: Container::new(MainView::new(&state).boxed(), Padding::ZERO),
@@ -78,7 +82,7 @@ impl App {
             held_keys: HashSet::new(),
             reports_releases: false,
             state,
-        };
+        });
     }
     pub fn run(&mut self) -> Result<bool> {
         let frame_time = Duration::from_secs_f64(1.0 / self.fps as f64);
@@ -152,6 +156,13 @@ impl App {
     fn sync_dialogs(&mut self) {
         self.dialogs.retain(|d| !d.is_closed());
         self.dialogs.append(&mut self.state.pending_dialogs);
+        for error in self.state.errors.drain(..) {
+            self.dialogs.push(Dialog::popup(
+                PopupLevel::Warning,
+                error.title(),
+                error.to_string(),
+            ));
+        }
         if let Some(on_submit) = self.state.save_file_request.take() {
             self.file_browser
                 .save_file(on_submit.0, on_submit.1, on_submit.2, on_submit.3);
@@ -190,21 +201,30 @@ pub struct AppState {
     save_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
     changed_patterns: HashSet<PatternId>,
     sequence_changed: bool,
+    errors: Vec<MTrakError>,
 }
 impl AppState {
-    pub fn new(project: Project, theme: Theme) -> Self {
+    pub fn new(project: Project, theme: Theme) -> Result<Self> {
+        let mut errors = Vec::new();
+        let midi_client = match MidiOutput::new(TITLE) {
+            Ok(client) => Some(client),
+            Err(e) => {
+                errors.push(e.into());
+                None
+            }
+        };
         let changed_patterns = (0..project.patterns.get_patterns().len() as u8)
             .map(PatternId)
             .collect();
         let state = Self {
             config: Config::default(),
             project,
-            engine: EngineHandle::spawn(),
+            engine: EngineHandle::spawn()?,
             theme,
             exit_requested: false,
             active_sequence_index: 0,
             active_port: None,
-            midi_client: MidiOutput::new(TITLE).ok(),
+            midi_client,
             active_instrument: 0,
             active_pattern: PatternId(0),
             current_octave: 4,
@@ -217,6 +237,7 @@ impl AppState {
             channel_hits: [None; MIDI_CHANNEL_MAX as usize + 1],
             sequence_changed: true,
             save_file_request: None,
+            errors,
         };
         for (channel, instrument) in state.project.instruments.iter().enumerate() {
             state
@@ -227,7 +248,7 @@ impl AppState {
         state
             .engine
             .set_global_velocity(state.project.global_velocity);
-        return state;
+        return Ok(state);
     }
     pub fn update(&mut self) {
         let now = Instant::now();
@@ -297,7 +318,7 @@ impl AppState {
 
     pub fn request_save_file(
         &mut self,
-        on_submit: impl FnOnce(&mut AppState, PathBuf) + 'static,
+        on_submit: impl FnOnce(&mut AppState, PathBuf) -> Result<()> + 'static,
         start_directory: PathBuf,
         title: impl Into<String>,
         extensions: Vec<String>,
@@ -309,18 +330,14 @@ impl AppState {
             extensions,
         ));
     }
-    /// Saves the project to `path`, showing an error popup on failure. Returns whether it saved.
-    pub fn save_project(&mut self, path: PathBuf) -> bool {
-        if let Err(e) = self.project.save(path.clone()) {
-            self.open_dialog(Dialog::popup(
-                PopupLevel::Error,
-                "Save failed",
-                e.to_string(),
-            ));
-            return false;
-        }
+    pub fn save_project(&mut self, path: PathBuf) -> Result<()> {
+        self.project.save(path.clone())?;
         self.project_path = Some(path);
-        return true;
+        return Ok(());
+    }
+    /// Hands an error to the app, which shows it in a warning dialog.
+    pub fn report_error(&mut self, error: MTrakError) {
+        self.errors.push(error);
     }
     pub fn request_exit(&mut self) {
         self.exit_requested = true;
