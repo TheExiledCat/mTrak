@@ -15,6 +15,7 @@ use crate::tui::{
         core_extensions::Boxed,
         keymap::{Key, KeyActions, KeyHint, Keymap},
         widget::MtrakWidget,
+        widgets::footer::Footer,
     },
 };
 
@@ -104,6 +105,7 @@ pub struct Dialog {
     on_cancel: Option<OnCancel>,
     closed: bool,
     keys: Keymap<DialogAction>,
+    footer: Footer,
 }
 
 impl Dialog {
@@ -118,6 +120,7 @@ impl Dialog {
             on_submit: None,
             on_cancel: None,
             closed: false,
+            footer: Footer::new(),
             keys: Keymap::new()
                 .bind(Key::plain(KeyCode::Enter), DialogAction::Submit, "OK")
                 .bind(Key::plain(KeyCode::Esc), DialogAction::Cancel, "Cancel")
@@ -308,13 +311,8 @@ impl MtrakWidget for Dialog {
 
         let mut hints = Vec::new();
         self.key_hints(state, &mut hints);
-        let spans = hints.iter().flat_map(|hint| {
-            [
-                Span::styled(format!(" {} ", hint.key), state.theme.key_hint_key),
-                Span::styled(format!(" {}  ", hint.label), state.theme.key_hint_label),
-            ]
-        });
-        Line::from_iter(spans).render(hint_area, buf);
+        self.footer.set_hints(hints);
+        self.footer.render(state, hint_area, buf);
     }
 }
 
