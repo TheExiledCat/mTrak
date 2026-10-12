@@ -61,9 +61,6 @@ impl Key {
     pub fn char(c: char) -> Self {
         return Self::plain(KeyCode::Char(c));
     }
-    pub fn shift(c: KeyCode) -> Self {
-        return Self::new(c, KeyModifiers::SHIFT);
-    }
     pub fn alt(c: char) -> Self {
         return Self::new(KeyCode::Char(c), KeyModifiers::ALT);
     }
