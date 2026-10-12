@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.1.2 - 2026-10-12
+
+### Added
+
+- Shrink and expand patterns, as in FT2. `Alt+-` (SRNK) halves the current pattern by
+  removing every odd row, and `Alt+=` (EXPD) doubles it by inserting an empty row after every
+  row. Both are shown as buttons in the pattern panel of the header.
+  - Shrinking can't be undone, so it asks for confirmation first, and it only works while
+    playback is stopped.
+  - Expanding works on patterns up to `80` rows long; a `80`-row pattern expands to the full
+    `100` rows.
+- Transpose notes up or down a semitone, for the current instrument or for all instruments:
+
+  | Area    | Current instrument (down / up) | All instruments (down / up)   |
+  |---------|--------------------------------|-------------------------------|
+  | Track   | `Alt+G` / `Alt+H`              | `Alt+Shift+G` / `Alt+Shift+H` |
+  | Pattern | `Alt+J` / `Alt+K`              | `Alt+Shift+J` / `Alt+Shift+K` |
+  | Block   | `Alt+L` / `Alt+;`              | `Alt+Shift+L` / `Alt+:`       |
+
+  With no block marked, the block keys transpose just the note under the cursor and play
+  it, so you can tune a single note by ear. Notes stop at `C-0` and `G-9`.
+- A play timer under the sequence list shows how long playback has been running
+  (`hh:mm:ss`), as in FT2.
+- Unsaved work protection: the Save key hint shows `*Save` while the project has unsaved
+  changes, and quitting with unsaved changes asks for confirmation first.
+
+### Changed
+
+- Patterns can now be up to `100` (256) rows long, numbered `00`–`FF` like in FT2. Before,
+  the maximum was `FF` (255) rows.
+- Notifications at the bottom of the Util panel (like `PTN COPY` or `SAVED`) now disappear
+  after 5 seconds.
+- The instrument list only scrolls when it doesn't fit in the window, and then follows the
+  selected instrument. On small terminals it used to show only the first instruments.
+
+### Known issues
+
+- Projects saved with an earlier version that contain a pattern of `FB`–`FF` (251–255) rows
+  can't be opened. Projects with shorter patterns open normally.
+
 ## v0.1.1 - 2026-10-11
 
 ### Changed
