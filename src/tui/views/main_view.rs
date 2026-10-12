@@ -66,6 +66,23 @@ impl MainView {
                 .bind(Key::char('?'), MainAction::Help, "Keys"),
         };
     }
+
+    fn request_exit(&self, state: &mut AppState) {
+        if state.is_saved() {
+            state.request_exit();
+            return;
+        }
+        let dialog = Dialog::confirm(
+            PopupLevel::Warning,
+            "Quit?",
+            "Unsaved progress will be lost",
+        )
+        .on_submit(|state, _| {
+            state.request_exit();
+            return Ok(());
+        });
+        state.open_dialog(dialog);
+    }
 }
 impl KeyActions for MainView {
     type Action = MainAction;
@@ -76,7 +93,7 @@ impl KeyActions for MainView {
 
     fn perform(&mut self, action: MainAction, state: &mut AppState) -> Result<()> {
         match action {
-            MainAction::Quit => state.request_exit(),
+            MainAction::Quit => self.request_exit(state),
             MainAction::Save => match state.project_path.clone() {
                 Some(path) => state.save_project(path)?,
                 None => request_save_as(state),
@@ -124,6 +141,14 @@ fn request_save_as(state: &mut AppState) {
 
 impl MtrakWidget for MainView {
     fn update(&mut self, state: &mut AppState) {
+        let save_key = self.keymap().key_for(MainAction::Save).unwrap();
+        let save_binding = self
+            .keys
+            .bindings_mut()
+            .iter_mut()
+            .find(|b| b.key == save_key)
+            .unwrap();
+        save_binding.label = if state.is_saved() { "Save" } else { "*Save" };
         self.header.update(state);
         self.content.update(state);
     }

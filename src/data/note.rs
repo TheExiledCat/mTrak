@@ -87,6 +87,13 @@ impl Note {
     pub fn clear_command(&mut self) {
         self.command = Command::default();
     }
+
+    pub fn transpose(mut self, delta: i8) -> Note {
+        if let NoteKind::On(p) = &mut self.kind {
+            *p = NotePitch::new(p.0.saturating_add_signed(delta));
+        }
+        return self;
+    }
 }
 
 impl Display for Note {
