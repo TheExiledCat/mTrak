@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.5 - 2026-10-12
+
+### Added
+
+- The bottom-right corner of the screen shows which version of mTrak you're running, e.g.
+  `mTrak v0.1.5`, next to the key hints.
+
 ## v0.1.4 - 2026-10-12
 
 ### Changed

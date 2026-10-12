@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::{
+    data::config::TITLE,
     error::Result,
     tui::{
         app::AppState,
@@ -194,7 +195,7 @@ impl MtrakWidget for MainView {
             Constraint::Length(1),
         ])
         .areas(area);
-        let version_text = format!("mTrak v{}", VERSION);
+        let version_text = format!("{} v{}", TITLE, VERSION);
         let [footer_area, version_area] = Layout::horizontal([
             Constraint::Fill(1),
             Constraint::Length(version_text.chars().count() as u16),
