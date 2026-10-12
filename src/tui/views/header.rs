@@ -18,18 +18,20 @@ use crate::{
         config::TITLE,
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, midi_to_string},
     },
+    engine::engine::PlayMode,
     error::Result,
     tui::{
         app::AppState,
         framework::{
             core_extensions::Boxed,
-            dialog::{Checkbox, Dialog, Select, TextPrompt},
+            dialog::{Checkbox, Dialog, PopupLevel, Select, TextPrompt},
             keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::{MtrakWidget, clicked_in},
         },
         glyphs,
         views::header::SequenceAction::*,
     },
+    util::time::duration_to_hh_mm_ss_string,
 };
 
 pub struct Header {
@@ -358,7 +360,7 @@ impl SequenceList {
                 format!("{}/{}", key(DecRepeats), key(IncRepeats)),
                 "REP".to_string(),
             ),
-            ("LEN".to_string(), state.project.song_length().to_string()),
+            ("LEN".to_string(), state.project().song_length().to_string()),
         ];
     }
 
@@ -384,7 +386,7 @@ impl KeyActions for SequenceList {
     }
 
     fn perform(&mut self, action: SequenceAction, state: &mut AppState) -> Result<()> {
-        let sequence_length = state.project.sequence.len();
+        let sequence_length = state.project().sequence.len();
         match action {
             NextPattern => {
                 state.active_sequence_index = state
@@ -446,9 +448,9 @@ impl MtrakWidget for SequenceList {
         let layout =
             Layout::horizontal([Constraint::Length(SEQUENCE_LIST_WIDTH), Constraint::Fill(1)])
                 .split(area);
-        let lines = (0..state.project.sequence.len())
+        let lines = (0..state.project().sequence.len())
             .map(|i| {
-                let row = &state.project.sequence[i];
+                let row = &state.project().sequence[i];
                 let mut line = Line::raw(format!(
                     "{:02X} {:02X} {}",
                     i, row.pattern_id.0, row.repeats
@@ -469,12 +471,14 @@ impl MtrakWidget for SequenceList {
         list.render(list_area, buf);
         let rows = self.keybind_rows(state);
         let (key_width, label_width) = Self::keybind_widths(&rows);
+        let time_layout =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).split(layout[1]);
         let [keys_area, colon_area, labels_area] = Layout::horizontal([
             Constraint::Length(key_width),
             Constraint::Length(1),
             Constraint::Length(label_width),
         ])
-        .areas(layout[1]);
+        .areas(time_layout[0]);
         let (keys, labels): (Vec<Line>, Vec<Line>) = rows
             .into_iter()
             .map(|(key, label)| (Line::raw(key), Line::raw(format!(" {label}"))))
@@ -483,6 +487,12 @@ impl MtrakWidget for SequenceList {
         Paragraph::new(keys).right_aligned().render(keys_area, buf);
         Paragraph::new(colons).render(colon_area, buf);
         Paragraph::new(labels).render(labels_area, buf);
+
+        let time = state.time();
+
+        Paragraph::new(duration_to_hh_mm_ss_string(&time))
+            .centered()
+            .render(time_layout[1], buf);
     }
 }
 struct PatternInfo {
@@ -498,6 +508,8 @@ impl PatternInfo {
             .bind(Key::char('_'), SpeedDown, "SPD DN")
             .bind(Key::char(']'), LineAddUp, "ADD UP")
             .bind(Key::char('['), LineAddDown, "ADD DN")
+            .bind(Key::alt('-'), PatternShrink, "SRNK")
+            .bind(Key::alt('='), PatternExpand, "EXPD")
             .bind(
                 Key::new(KeyCode::Left, KeyModifiers::CONTROL),
                 PatternDown,
@@ -519,6 +531,25 @@ impl PatternInfo {
                 "LEN DN",
             );
         return Self { keymap };
+    }
+
+    fn shrink_pattern(&self, state: &mut AppState) {
+        if state.engine.status().play_mode() != PlayMode::Paused {
+            state.notify("CANT SRNK");
+            return;
+        }
+        let dialog = Dialog::confirm(
+            PopupLevel::Warning,
+            "Confirm shrink?",
+            "Shrinking the pattern can not be undone",
+        )
+        .on_submit(|state, _| {
+            if !state.active_pattern_mut().shrink() {
+                state.notify("PTN TOO SHORT");
+            }
+            return Ok(());
+        });
+        state.open_dialog(dialog);
     }
 }
 impl MtrakWidget for PatternInfo {
@@ -551,7 +582,7 @@ impl MtrakWidget for PatternInfo {
             .render(vertical_layout[0], buf);
 
         let active_pattern = state
-            .project
+            .project()
             .patterns
             .get_pattern_by_id(state.active_pattern)
             .unwrap();
@@ -561,7 +592,7 @@ impl MtrakWidget for PatternInfo {
             [
                 format!(
                     "BPM {:03} {}/{}: DN/UP",
-                    state.project.bpm,
+                    state.project().bpm,
                     bindings.key_for(BpmDown).unwrap(),
                     bindings.key_for(BpmUp).unwrap()
                 ),
@@ -586,7 +617,12 @@ impl MtrakWidget for PatternInfo {
             .collect::<Vec<Line>>(),
         )
         .block(Block::bordered().borders(Borders::RIGHT));
-        let right_content = Paragraph::new(
+        let horizontal_layout = Layout::horizontal([Constraint::Max(width), Constraint::Fill(1)])
+            .split(vertical_layout[1]);
+        let right_layout = Layout::vertical([Constraint::Length(2), Constraint::Length(1)])
+            .split(horizontal_layout[1]);
+
+        let right_content_top = Paragraph::new(
             [
                 format!(
                     "PTN: {:02X} {}/{} DN/UP",
@@ -605,10 +641,28 @@ impl MtrakWidget for PatternInfo {
             .map(Line::raw)
             .collect::<Vec<Line>>(),
         );
-        let horizontal_layout = Layout::horizontal([Constraint::Max(width), Constraint::Fill(1)])
-            .split(vertical_layout[1]);
+        let buttons_layout = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .split(right_layout[1]);
+
+        let buttons_block = Block::new().reversed();
+        let buttons_style = Style::new().reversed();
+        let hint = bindings.hint_for(PatternExpand).unwrap();
+        Paragraph::new(format!("{}: {}", hint.key, hint.label))
+            .style(buttons_style)
+            .block(buttons_block.clone())
+            .render(buttons_layout[2], buf);
+
+        let hint = bindings.hint_for(PatternShrink).unwrap();
+        Paragraph::new(format!("{}: {}", hint.key, hint.label))
+            .style(buttons_style)
+            .block(buttons_block)
+            .render(buttons_layout[0], buf);
         left_content.render(horizontal_layout[0], buf);
-        right_content.render(horizontal_layout[1], buf);
+        right_content_top.render(right_layout[0], buf);
     }
 }
 
@@ -625,6 +679,9 @@ enum PatternInfoActions {
     PatternDown,
     PatternLengthUp,
     PatternLengthDown,
+
+    PatternShrink,
+    PatternExpand,
 }
 impl KeyActions for PatternInfo {
     type Action = PatternInfoActions;
@@ -645,6 +702,12 @@ impl KeyActions for PatternInfo {
             PatternInfoActions::PatternDown => state.prev_pattern(),
             PatternInfoActions::PatternLengthUp => state.active_pattern_mut().increase_length(),
             PatternInfoActions::PatternLengthDown => state.active_pattern_mut().decrease_length(),
+            PatternInfoActions::PatternShrink => self.shrink_pattern(state),
+            PatternInfoActions::PatternExpand => {
+                if !state.active_pattern_mut().expand() {
+                    state.notify("PTN TOO LONG");
+                }
+            }
         }
         return Ok(());
     }
@@ -661,6 +724,10 @@ impl KeyActions for PatternInfo {
             PatternInfoActions::PatternDown => "Previous pattern",
             PatternInfoActions::PatternLengthUp => "Make the pattern a row longer",
             PatternInfoActions::PatternLengthDown => "Make the pattern a row shorter",
+            PatternInfoActions::PatternShrink => "Halve the pattern by removing every odd row",
+            PatternInfoActions::PatternExpand => {
+                "Double the pattern by inserting a blank row after each row"
+            }
         };
     }
 }
@@ -675,11 +742,13 @@ struct InstrumentList {
     keymap: Keymap<InstrumentListAction>,
     /// Where the instrument rows were last drawn, for mouse hit-testing.
     rows_area: Rect,
+    scroll: usize,
 }
 impl InstrumentList {
     fn new() -> Self {
         return Self {
             rows_area: Rect::default(),
+            scroll: 0,
             keymap: Keymap::new()
                 .bind(
                     Key::new(KeyCode::Up, KeyModifiers::SHIFT),
@@ -735,7 +804,7 @@ fn open_config_dialog(state: &mut AppState) {
                 .selected(current)
                 .boxed(),
             Checkbox::new("midi_clock", "Send MIDI clock")
-                .checked(state.project.send_midi_clock)
+                .checked(state.project().send_midi_clock)
                 .boxed(),
         ],
     )
@@ -757,9 +826,9 @@ fn open_config_dialog(state: &mut AppState) {
 }
 fn open_instrument_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
-    let name = &state.project.instruments[instrument as usize].name;
-    let volume = state.project.instruments[instrument as usize].volume;
-    let pitch_wheel_range = state.project.instruments[instrument as usize].pitch_wheel_range;
+    let name = &state.project().instruments[instrument as usize].name;
+    let volume = state.project().instruments[instrument as usize].volume;
+    let pitch_wheel_range = state.project().instruments[instrument as usize].pitch_wheel_range;
     let dialog = Dialog::new(
         format!("Instrument {:1X}", instrument),
         vec![
@@ -774,14 +843,14 @@ fn open_instrument_dialog(state: &mut AppState) {
     )
     .on_submit(move |state, result| {
         if let Some(name) = result.text("name") {
-            state.project.instruments[instrument as usize].name = name.into();
+            state.project_mut().instruments[instrument as usize].name = name.into();
         }
         if let Some(vol) = result.text("volume") {
             let vol = u8::from_str_radix(vol, 16).unwrap_or(volume);
             state.set_global_volume(instrument, vol);
         }
         if let Some(range) = result.text("pitch_wheel_range") {
-            state.project.instruments[instrument as usize].pitch_wheel_range =
+            state.project_mut().instruments[instrument as usize].pitch_wheel_range =
                 range.parse().unwrap_or(pitch_wheel_range);
         }
         return Ok(());
@@ -789,7 +858,7 @@ fn open_instrument_dialog(state: &mut AppState) {
     state.open_dialog(dialog);
 }
 fn open_velocity_dialog(state: &mut AppState) {
-    let velocity = state.project.global_velocity;
+    let velocity = state.project().global_velocity;
     let dialog = Dialog::new(
         "Velocity",
         vec![
@@ -810,8 +879,8 @@ fn open_velocity_dialog(state: &mut AppState) {
 impl MtrakWidget for InstrumentList {
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
         if let Some(pos) = clicked_in(event, self.rows_area) {
-            let index = pos.y as usize;
-            if index < state.project.instruments.len() {
+            let index = self.scroll + pos.y as usize;
+            if index < state.project().instruments.len() {
                 state.active_instrument = index as u8;
             }
             return true;
@@ -858,7 +927,7 @@ impl MtrakWidget for InstrumentList {
             .render(layout[0], buf);
         let selected_instrument = state.active_instrument;
         let lines = state
-            .project
+            .project()
             .instruments
             .iter()
             .enumerate()
@@ -875,12 +944,22 @@ impl MtrakWidget for InstrumentList {
                 ])
             })
             .collect::<Vec<Line>>();
+        let height = layout[1].height as usize;
+        let selected = selected_instrument as usize;
+        let max_scroll = lines.len().saturating_sub(height);
+        self.scroll = self
+            .scroll
+            .clamp(selected.saturating_sub(height.saturating_sub(1)), selected)
+            .min(max_scroll);
         self.rows_area = layout[1];
-        Paragraph::new(lines).render(layout[1], buf);
+        Paragraph::new(lines)
+            .scroll((self.scroll as u16, 0))
+            .render(layout[1], buf);
 
         Paragraph::new(format!(
             "OCT: {}, GLB VEL: {:02X}",
-            state.current_octave, state.project.global_velocity
+            state.current_octave,
+            state.project().global_velocity
         ))
         .render(layout[2], buf);
     }
@@ -996,7 +1075,7 @@ impl MtrakWidget for UtilList {
             .render(layout[0], buf);
         if let Some(notification) = &state.notification {
             Paragraph::new(notification.as_str())
-                .left_aligned()
+                .centered()
                 .block(Block::bordered().borders(Borders::TOP))
                 .render(*layout.last().unwrap(), buf);
         }

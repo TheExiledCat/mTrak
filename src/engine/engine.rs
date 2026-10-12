@@ -770,7 +770,7 @@ mod tests {
     }
 
     /// A pattern built from (row, track, note) cells.
-    fn pattern(rows: u8, cells: &[(usize, usize, Note)]) -> Pattern {
+    fn pattern(rows: u16, cells: &[(usize, usize, Note)]) -> Pattern {
         let mut pattern = Pattern::new(rows);
         for (row, track, note) in cells {
             pattern.set_event(*row, *track, *note);

@@ -1,13 +1,35 @@
+use std::ops::Range;
+
 use serde::{Deserialize, Serialize};
 
 use super::note::Note;
-use crate::{data::midi::MIDI_CHANNEL_MAX, tui::constants};
+use crate::{
+    data::{midi::MIDI_CHANNEL_MAX, note::NoteKind},
+    tui::constants,
+};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PatternId(pub u8);
+pub const MAX_ROWS: u16 = 0x100;
+
+#[derive(Clone, Copy)]
+pub struct Block {
+    pub track: u8,
+    pub width: u8,
+    pub row: u8,
+    pub height: u16,
+}
+impl Block {
+    pub fn tracks(&self) -> Range<usize> {
+        return self.track as usize..self.track as usize + self.width as usize;
+    }
+    pub fn rows(&self) -> Range<usize> {
+        return self.row as usize..self.row as usize + self.height as usize;
+    }
+}
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Pattern {
     pub ticks_per_line: u8,
-    pub row_count: u8,
+    pub row_count: u16,
     pub track_count: u8,
     pub rows: Vec<PatternRow>,
     pub name: Option<String>,
@@ -40,7 +62,7 @@ impl PatternRow {
 }
 
 impl Pattern {
-    pub fn new(row_count: u8) -> Self {
+    pub fn new(row_count: u16) -> Self {
         let mut pattern = Pattern {
             row_count,
             track_count: constants::TRACK_COUNT,
@@ -52,6 +74,10 @@ impl Pattern {
         };
         pattern.initialize_rows();
         return pattern;
+    }
+
+    pub fn last_row(&self) -> u8 {
+        return self.row_count.saturating_sub(1) as u8;
     }
 
     fn initialize_rows(&mut self) {
@@ -84,7 +110,36 @@ impl Pattern {
         }
         self.set_event(row, track, Note::empty());
     }
-
+    pub fn block(&self) -> Block {
+        return Block {
+            track: 0,
+            width: self.track_count,
+            row: 0,
+            height: self.row_count,
+        };
+    }
+    pub fn track_block(&self, track: u8) -> Block {
+        return Block {
+            track,
+            width: 1,
+            ..self.block()
+        };
+    }
+    pub fn transpose(&mut self, block: Block, instrument: Option<u8>, delta: i8) {
+        for row in block.rows() {
+            for track in block.tracks() {
+                let Some(&note) = self.get_event(row, track) else {
+                    continue;
+                };
+                if !matches!(note.kind, NoteKind::On(_))
+                    || instrument.is_some_and(|i| note.instrument_id != Some(i))
+                {
+                    continue;
+                }
+                self.set_event(row, track, note.transpose(delta));
+            }
+        }
+    }
     /// Shifts every track down one row from `row`, leaving an empty row at `row`.
     /// The last row falls off the end of the pattern.
     pub fn insert_line(&mut self, row: usize) {
@@ -133,20 +188,49 @@ impl Pattern {
     }
 
     pub fn increase_length(&mut self) {
-        self.row_count = self.row_count.saturating_add(1);
+        self.row_count = (self.row_count + 1).min(MAX_ROWS);
         self.rows
             .resize_with(self.row_count as usize, PatternRow::new);
     }
 
-    pub fn set_length(&mut self, row_count: u8) {
-        self.row_count = row_count.max(1);
+    pub fn set_length(&mut self, row_count: u16) {
+        self.row_count = row_count.clamp(1, MAX_ROWS);
         self.rows
             .resize_with(self.row_count as usize, PatternRow::new);
     }
 
     pub fn decrease_length(&mut self) {
-        self.row_count = self.row_count.saturating_sub(1).clamp(1, u8::MAX);
+        self.row_count = self.row_count.saturating_sub(1).max(1);
         self.rows.truncate(self.row_count as usize);
+    }
+
+    pub fn shrink(&mut self) -> bool {
+        if self.row_count < 2 {
+            return false;
+        }
+        let mut i = 0;
+        self.rows.retain(|_| {
+            let keep = i % 2 == 0;
+            i += 1;
+            keep
+        });
+        self.set_length(self.rows.len() as u16);
+        return true;
+    }
+
+    pub fn expand(&mut self) -> bool {
+        if self.row_count > 0x80 {
+            return false;
+        }
+        let row_count = self.row_count * 2;
+        let mut rows = Vec::with_capacity(row_count as usize);
+        for row in self.rows.drain(..) {
+            rows.push(row);
+            rows.push(PatternRow::new());
+        }
+        self.rows = rows;
+        self.row_count = row_count;
+        return true;
     }
 }
 
@@ -343,5 +427,94 @@ mod tests {
         let store = PatternStore::new(vec![Pattern::new(1), named]);
         assert_eq!(store.get_pattern_by_name("verse").unwrap().row_count, 1);
         assert!(store.get_pattern_by_name("chorus").is_none());
+    }
+
+    #[test]
+    fn expand_doubles_up_to_max_rows() {
+        let mut pattern = Pattern::new(0x80);
+        pattern.set_event(0x7F, 0, note());
+        assert!(pattern.expand());
+        assert_eq!(pattern.row_count, MAX_ROWS);
+        assert_eq!(pattern.rows.len(), MAX_ROWS as usize);
+        assert_eq!(pattern.get_event(0xFE, 0), Some(&note()));
+        assert_eq!(pattern.last_row(), 0xFF);
+        assert!(!pattern.expand());
+    }
+
+    #[test]
+    fn shrink_keeps_even_rows() {
+        let mut pattern = Pattern::new(MAX_ROWS);
+        pattern.set_event(0xFE, 0, note());
+        assert!(pattern.shrink());
+        assert_eq!(pattern.row_count, 0x80);
+        assert_eq!(pattern.rows.len(), 0x80);
+        assert_eq!(pattern.get_event(0x7F, 0), Some(&note()));
+        let mut single = Pattern::new(1);
+        assert!(!single.shrink());
+    }
+
+    #[test]
+    fn length_is_capped_at_max_rows() {
+        let mut pattern = Pattern::new(MAX_ROWS);
+        pattern.increase_length();
+        assert_eq!(pattern.row_count, MAX_ROWS);
+        pattern.set_length(0x200);
+        assert_eq!(pattern.rows.len(), MAX_ROWS as usize);
+    }
+
+    fn instrument_note(pitch: u8, instrument: u8) -> Note {
+        let mut note = Note::empty();
+        note.kind = NoteKind::On(NotePitch(pitch));
+        note.instrument_id = Some(instrument);
+        return note;
+    }
+
+    #[test]
+    fn transpose_filters_by_instrument() {
+        let mut pattern = Pattern::new(2);
+        pattern.set_event(0, 0, instrument_note(60, 1));
+        pattern.set_event(1, 0, instrument_note(60, 2));
+        pattern.transpose(pattern.block(), Some(1), 1);
+        assert_eq!(pattern.get_event(0, 0), Some(&instrument_note(61, 1)));
+        assert_eq!(pattern.get_event(1, 0), Some(&instrument_note(60, 2)));
+        pattern.transpose(pattern.block(), None, -1);
+        assert_eq!(pattern.get_event(0, 0), Some(&instrument_note(60, 1)));
+        assert_eq!(pattern.get_event(1, 0), Some(&instrument_note(59, 2)));
+    }
+
+    #[test]
+    fn transpose_stays_inside_the_block() {
+        let mut pattern = Pattern::new(0x40);
+        pattern.set_event(0x30, 1, instrument_note(60, 0));
+        pattern.set_event(0x3F, 1, instrument_note(60, 0));
+        pattern.set_event(0x30, 2, instrument_note(60, 0));
+        let block = Block {
+            track: 1,
+            width: 1,
+            row: 0x30,
+            height: 0x20,
+        };
+        pattern.transpose(block, None, 1);
+        assert_eq!(pattern.get_event(0x30, 1), Some(&instrument_note(61, 0)));
+        assert_eq!(pattern.get_event(0x3F, 1), Some(&instrument_note(61, 0)));
+        assert_eq!(pattern.get_event(0x30, 2), Some(&instrument_note(60, 0)));
+    }
+
+    #[test]
+    fn transpose_clamps_to_the_note_range() {
+        let mut pattern = Pattern::new(2);
+        pattern.set_event(0, 0, instrument_note(NotePitch::MAX, 0));
+        pattern.set_event(1, 0, instrument_note(NotePitch::MIN, 0));
+        pattern.transpose(pattern.track_block(0), None, 1);
+        pattern.transpose(pattern.track_block(0), None, -1);
+        assert_eq!(
+            pattern.get_event(0, 0),
+            Some(&instrument_note(NotePitch::MAX - 1, 0))
+        );
+        pattern.transpose(pattern.track_block(0), None, -1);
+        assert_eq!(
+            pattern.get_event(1, 0),
+            Some(&instrument_note(NotePitch::MIN, 0))
+        );
     }
 }

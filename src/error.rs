@@ -28,7 +28,7 @@ pub enum MTrakError {
     Unsupported(&'static str),
     /// When pasting patterns only, if the pattern buffer is larger than the current patterns length. Not thrown for track or block buffers as those are truncated.
     PatternPasteOverflow {
-        overflow_length: u8,
+        overflow_length: u16,
     },
 }
 

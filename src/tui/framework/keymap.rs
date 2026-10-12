@@ -61,6 +61,9 @@ impl Key {
     pub fn char(c: char) -> Self {
         return Self::plain(KeyCode::Char(c));
     }
+    pub fn alt(c: char) -> Self {
+        return Self::new(KeyCode::Char(c), KeyModifiers::ALT);
+    }
 
     pub fn ctrl(c: char) -> Self {
         return Self::new(KeyCode::Char(c), KeyModifiers::CONTROL);
@@ -188,6 +191,10 @@ impl<A: Copy + PartialEq> Keymap<A> {
     /// Every binding, in the order they were added.
     pub fn bindings(&self) -> &[Binding<A>] {
         return &self.bindings;
+    }
+
+    pub fn bindings_mut(&mut self) -> &mut [Binding<A>] {
+        return &mut self.bindings;
     }
 
     /// The action bound to the pressed key, if any.
