@@ -12,17 +12,26 @@ use ratatui::{
     },
 };
 use tui::{app::App, files, glyphs, theme::Theme};
+use updater::UpdateOutcome;
 
 pub mod cli;
 pub mod data;
 pub mod engine;
 pub mod error;
 pub mod tui;
+pub mod updater;
 pub mod util;
 
 fn main() -> ExitCode {
     let args = Cli::parse();
     glyphs::set_ascii_mode(args.ascii_mode);
+
+    if !args.no_update_check {
+        if let UpdateOutcome::Updated(version) = updater::check_for_update() {
+            println!("mTrak was updated to v{}. Start it again to use the new version.", version);
+            return ExitCode::SUCCESS;
+        }
+    }
     let terminal = ratatui::init();
     let result = run(terminal, args);
     let _ = execute!(io::stdout(), DisableMouseCapture);

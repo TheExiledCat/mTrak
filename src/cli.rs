@@ -9,6 +9,8 @@ pub struct Cli {
     pub ascii_mode: bool,
     #[arg(long, value_enum)]
     pub color: Option<ColorMode>,
+    #[arg(long)]
+    pub no_update_check: bool,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
