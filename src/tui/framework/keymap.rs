@@ -62,6 +62,10 @@ impl Key {
         return Self::plain(KeyCode::Char(c));
     }
 
+    pub fn alt(c: char) -> Self {
+        return Self::new(KeyCode::Char(c), KeyModifiers::ALT);
+    }
+
     pub fn ctrl(c: char) -> Self {
         return Self::new(KeyCode::Char(c), KeyModifiers::CONTROL);
     }

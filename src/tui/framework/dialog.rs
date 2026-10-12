@@ -147,6 +147,14 @@ impl Dialog {
             vec![TextPrompt::new(id, "").initial(placeholder).boxed()],
         );
     }
+    pub fn confirm(level: PopupLevel, title: impl Into<String>, text: impl Into<String>) -> Self {
+        let mut dialog = Self::new(title, vec![Label::new(text).boxed()]);
+        dialog.keys = Keymap::new()
+            .bind(Key::plain(KeyCode::Enter), DialogAction::Submit, "Confirm")
+            .bind(Key::plain(KeyCode::Esc), DialogAction::Cancel, "Cancel");
+        dialog.level = level;
+        return dialog;
+    }
     pub fn popup(level: PopupLevel, title: impl Into<String>, text: impl Into<String>) -> Self {
         let mut dialog = Dialog::new(title, vec![Label::new(text).boxed()]).is_cancellable(false);
         dialog.level = level;

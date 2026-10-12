@@ -220,7 +220,7 @@ fn edit_keymap() -> Keymap<TimelineAction> {
     ));
 }
 
-fn open_paste_overflow_dialog(state: &mut AppState, row_count: u8, overflow_length: u8) {
+fn open_paste_overflow_dialog(state: &mut AppState, row_count: u16, overflow_length: u16) {
     let buffer_length = row_count.saturating_add(overflow_length);
     let options = vec![
         format!("Resize pattern to {:02X} rows", buffer_length),
@@ -267,7 +267,7 @@ fn track_jump(key: &KeyEvent) -> Option<u8> {
     return (index < constants::TRACK_COUNT).then_some(index);
 }
 
-fn wrap_step(index: u8, step: i32, count: u8) -> u8 {
+fn wrap_step(index: u8, step: i32, count: u16) -> u8 {
     if count == 0 {
         return 0;
     }
@@ -365,18 +365,19 @@ impl KeyActions for TimeLineView {
                 self.row_index = wrap_step(self.row_index, 1, row_count);
             }
             TimelineAction::PrevTrack => {
-                self.track_index = wrap_step(self.track_index, -1, constants::TRACK_COUNT);
+                self.track_index = wrap_step(self.track_index, -1, constants::TRACK_COUNT as u16);
                 self.column_index = 0;
             }
             TimelineAction::NextTrack => {
-                self.track_index = wrap_step(self.track_index, 1, constants::TRACK_COUNT);
+                self.track_index = wrap_step(self.track_index, 1, constants::TRACK_COUNT as u16);
                 self.column_index = 0;
             }
             TimelineAction::PrevColumn => {
                 if self.column_index > 0 {
                     self.column_index -= 1;
                 } else {
-                    self.track_index = wrap_step(self.track_index, -1, constants::TRACK_COUNT);
+                    self.track_index =
+                        wrap_step(self.track_index, -1, constants::TRACK_COUNT as u16);
                     self.column_index = constants::TRACK_COLUMN_COUNT - 1;
                 }
             }
@@ -384,7 +385,8 @@ impl KeyActions for TimeLineView {
                 if self.column_index + 1 < constants::TRACK_COLUMN_COUNT {
                     self.column_index += 1;
                 } else {
-                    self.track_index = wrap_step(self.track_index, 1, constants::TRACK_COUNT);
+                    self.track_index =
+                        wrap_step(self.track_index, 1, constants::TRACK_COUNT as u16);
                     self.column_index = 0;
                 }
             }
@@ -401,7 +403,7 @@ impl KeyActions for TimeLineView {
                 }
             }
             TimelineAction::Jump16Down => {
-                let last_row = state.active_pattern().row_count.saturating_sub(1);
+                let last_row = state.active_pattern().last_row();
                 self.row_index = self.row_index.saturating_add(16).min(last_row);
             }
             TimelineAction::Jump16Up => {
@@ -411,10 +413,10 @@ impl KeyActions for TimeLineView {
                 self.row_index = 0;
             }
             TimelineAction::JumpToLastRow => {
-                self.row_index = state.active_pattern().row_count.saturating_sub(1);
+                self.row_index = state.active_pattern().last_row();
             }
             TimelineAction::JumpToMarker(i) => {
-                let last_row = state.active_pattern().row_count.saturating_sub(1);
+                let last_row = state.active_pattern().last_row();
                 self.row_index = JUMP_ROWS[i as usize].min(last_row);
             }
             TimelineAction::NoteOff => {
@@ -621,18 +623,18 @@ impl KeyActions for TimeLineView {
     }
 }
 impl TimeLineView {
-    fn marked_block(&self, state: &AppState) -> Option<(u8, u8, u8, u8)> {
+    fn marked_block(&self, state: &AppState) -> Option<(u8, u8, u8, u16)> {
         let (pattern, anchor_track, anchor_row) = self.block_anchor?;
         if pattern != state.active_pattern {
             return None;
         }
-        let last_row = state.active_pattern().row_count.saturating_sub(1);
+        let last_row = state.active_pattern().last_row();
         let anchor_row = anchor_row.min(last_row);
         let cursor_row = self.row_index.min(last_row);
         let start_track = anchor_track.min(self.track_index);
         let start_row = anchor_row.min(cursor_row);
         let width = anchor_track.abs_diff(self.track_index) + 1;
-        let height = anchor_row.abs_diff(cursor_row) + 1;
+        let height = anchor_row.abs_diff(cursor_row) as u16 + 1;
         return Some((start_track, width, start_row, height));
     }
     fn refresh_row_and_advance(&mut self, state: &mut AppState, row: usize) {
@@ -757,9 +759,9 @@ impl TimeLineView {
     }
 
     /// The screen row just below the last row, or `None` when it has scrolled out of view.
-    fn pattern_end_y(&self, row_count: u8, rows_top: u16, rows_height: u16) -> Option<u16> {
+    fn pattern_end_y(&self, row_count: u16, rows_top: u16, rows_height: u16) -> Option<u16> {
         let middle = middle_line(rows_height);
-        let offset = middle + (row_count - self.row_index) as usize;
+        let offset = middle + (row_count - self.row_index as u16) as usize;
         return (offset < rows_height as usize).then(|| rows_top + offset as u16);
     }
 
@@ -799,7 +801,7 @@ impl TimeLineView {
     fn render_line_numbers(
         &self,
         state: &AppState,
-        row_count: u8,
+        row_count: u16,
         rows_height: u16,
         area: Rect,
         buf: &mut Buffer,
@@ -810,7 +812,7 @@ impl TimeLineView {
                 if i % 4 == 0 {
                     style = style.patch(state.theme.beat_row_number);
                 }
-                if i == self.row_index {
+                if i == self.row_index as u16 {
                     style = style.patch(state.theme.selected_row_number);
                 }
                 Line::raw(format!("{:02X}", i)).style(style)
@@ -850,7 +852,7 @@ impl TimeLineView {
         let mut rows = cache.get_all_rows_for_track(state.active_pattern, track_index as usize);
         if let Some((start_track, width, start_row, height)) = self.marked_block(state) {
             if (start_track..start_track + width).contains(&track_index) {
-                let marked = start_row as usize..(start_row + height) as usize;
+                let marked = start_row as usize..start_row as usize + height as usize;
                 for row in rows.iter_mut().take(marked.end).skip(marked.start) {
                     *row = row.clone().patch_style(state.theme.marked_block);
                 }
@@ -1030,7 +1032,7 @@ impl MtrakWidget for TimeLineView {
         self.track_cache
             .borrow_mut()
             .sync_pattern(state.active_pattern, pattern);
-        self.row_index = self.row_index.min(pattern.row_count.saturating_sub(1));
+        self.row_index = self.row_index.min(pattern.last_row());
         buf.set_style(area, state.theme.pattern_area);
         let top_bottom = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
         self.render_mode_indicator(state, top_bottom[0], buf);

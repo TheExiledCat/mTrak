@@ -4,10 +4,11 @@ use super::note::Note;
 use crate::{data::midi::MIDI_CHANNEL_MAX, tui::constants};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PatternId(pub u8);
+pub const MAX_ROWS: u16 = 0x100;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Pattern {
     pub ticks_per_line: u8,
-    pub row_count: u8,
+    pub row_count: u16,
     pub track_count: u8,
     pub rows: Vec<PatternRow>,
     pub name: Option<String>,
@@ -40,7 +41,7 @@ impl PatternRow {
 }
 
 impl Pattern {
-    pub fn new(row_count: u8) -> Self {
+    pub fn new(row_count: u16) -> Self {
         let mut pattern = Pattern {
             row_count,
             track_count: constants::TRACK_COUNT,
@@ -52,6 +53,10 @@ impl Pattern {
         };
         pattern.initialize_rows();
         return pattern;
+    }
+
+    pub fn last_row(&self) -> u8 {
+        return self.row_count.saturating_sub(1) as u8;
     }
 
     fn initialize_rows(&mut self) {
@@ -133,20 +138,49 @@ impl Pattern {
     }
 
     pub fn increase_length(&mut self) {
-        self.row_count = self.row_count.saturating_add(1);
+        self.row_count = (self.row_count + 1).min(MAX_ROWS);
         self.rows
             .resize_with(self.row_count as usize, PatternRow::new);
     }
 
-    pub fn set_length(&mut self, row_count: u8) {
-        self.row_count = row_count.max(1);
+    pub fn set_length(&mut self, row_count: u16) {
+        self.row_count = row_count.clamp(1, MAX_ROWS);
         self.rows
             .resize_with(self.row_count as usize, PatternRow::new);
     }
 
     pub fn decrease_length(&mut self) {
-        self.row_count = self.row_count.saturating_sub(1).clamp(1, u8::MAX);
+        self.row_count = self.row_count.saturating_sub(1).max(1);
         self.rows.truncate(self.row_count as usize);
+    }
+
+    pub fn shrink(&mut self) -> bool {
+        if self.row_count < 2 {
+            return false;
+        }
+        let mut i = 0;
+        self.rows.retain(|_| {
+            let keep = i % 2 == 0;
+            i += 1;
+            keep
+        });
+        self.set_length(self.rows.len() as u16);
+        return true;
+    }
+
+    pub fn expand(&mut self) -> bool {
+        if self.row_count > 0x80 {
+            return false;
+        }
+        let row_count = self.row_count * 2;
+        let mut rows = Vec::with_capacity(row_count as usize);
+        for row in self.rows.drain(..) {
+            rows.push(row);
+            rows.push(PatternRow::new());
+        }
+        self.rows = rows;
+        self.row_count = row_count;
+        return true;
     }
 }
 
@@ -343,5 +377,38 @@ mod tests {
         let store = PatternStore::new(vec![Pattern::new(1), named]);
         assert_eq!(store.get_pattern_by_name("verse").unwrap().row_count, 1);
         assert!(store.get_pattern_by_name("chorus").is_none());
+    }
+
+    #[test]
+    fn expand_doubles_up_to_max_rows() {
+        let mut pattern = Pattern::new(0x80);
+        pattern.set_event(0x7F, 0, note());
+        assert!(pattern.expand());
+        assert_eq!(pattern.row_count, MAX_ROWS);
+        assert_eq!(pattern.rows.len(), MAX_ROWS as usize);
+        assert_eq!(pattern.get_event(0xFE, 0), Some(&note()));
+        assert_eq!(pattern.last_row(), 0xFF);
+        assert!(!pattern.expand());
+    }
+
+    #[test]
+    fn shrink_keeps_even_rows() {
+        let mut pattern = Pattern::new(MAX_ROWS);
+        pattern.set_event(0xFE, 0, note());
+        assert!(pattern.shrink());
+        assert_eq!(pattern.row_count, 0x80);
+        assert_eq!(pattern.rows.len(), 0x80);
+        assert_eq!(pattern.get_event(0x7F, 0), Some(&note()));
+        let mut single = Pattern::new(1);
+        assert!(!single.shrink());
+    }
+
+    #[test]
+    fn length_is_capped_at_max_rows() {
+        let mut pattern = Pattern::new(MAX_ROWS);
+        pattern.increase_length();
+        assert_eq!(pattern.row_count, MAX_ROWS);
+        pattern.set_length(0x200);
+        assert_eq!(pattern.rows.len(), MAX_ROWS as usize);
     }
 }

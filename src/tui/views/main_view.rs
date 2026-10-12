@@ -66,6 +66,19 @@ impl MainView {
                 .bind(Key::char('?'), MainAction::Help, "Keys"),
         };
     }
+
+    fn request_exit(&self, state: &mut AppState) {
+        let dialog = Dialog::confirm(
+            PopupLevel::Warning,
+            "Quit?",
+            "Are you sure you want to quit?",
+        )
+        .on_submit(|state, _| {
+            state.request_exit();
+            return Ok(());
+        });
+        state.open_dialog(dialog);
+    }
 }
 impl KeyActions for MainView {
     type Action = MainAction;
@@ -76,7 +89,7 @@ impl KeyActions for MainView {
 
     fn perform(&mut self, action: MainAction, state: &mut AppState) -> Result<()> {
         match action {
-            MainAction::Quit => state.request_exit(),
+            MainAction::Quit => self.request_exit(state),
             MainAction::Save => match state.project_path.clone() {
                 Some(path) => state.save_project(path)?,
                 None => request_save_as(state),

@@ -44,7 +44,7 @@ impl CopyBuffers {
         start_track: u8,
         width: u8,
         start_row: u8,
-        height: u8,
+        height: u16,
     ) {
         let start_row = start_row as usize;
         let start_track = start_track as usize;
@@ -86,7 +86,7 @@ impl CopyBuffers {
         start_track: u8,
         width: u8,
         start_row: u8,
-        height: u8,
+        height: u16,
     ) {
         let previous = self.block_buffer.take();
         self.copy_block(pattern, start_track, width, start_row, height);
@@ -193,12 +193,12 @@ fn clear(pattern: &mut Pattern, start_track: usize, width: usize, start_row: usi
 
 pub struct CopyBuffer {
     width: u8,
-    height: u8,
+    height: u16,
     rows: Vec<PatternRow>,
 }
 
 impl CopyBuffer {
-    fn new(width: u8, height: u8, rows: Vec<PatternRow>) -> Self {
+    fn new(width: u8, height: u16, rows: Vec<PatternRow>) -> Self {
         return Self {
             width,
             height,

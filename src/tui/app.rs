@@ -185,6 +185,7 @@ impl App {
     }
 }
 const EVENT_HISTORY_MAX: usize = 256;
+const NOTIFICATION_DURATION: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy)]
 pub struct ChannelHit {
@@ -214,12 +215,15 @@ pub struct AppState {
     pub project_path: Option<PathBuf>,
     pub copy_buffers: CopyBuffers,
     pub notification: Option<String>,
+    notified_at: Instant,
+    time: Duration,
     pending_dialogs: Vec<Dialog>,
     help_requested: bool,
     save_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
     changed_patterns: HashSet<PatternId>,
     sequence_changed: bool,
     errors: Vec<MTrakError>,
+    playback_start_time: Option<Instant>,
 }
 impl AppState {
     pub fn new(project: Project, theme: Theme) -> Result<Self> {
@@ -239,11 +243,14 @@ impl AppState {
             project,
             engine: EngineHandle::spawn()?,
             notification: None,
+            notified_at: Instant::now(),
             theme,
             exit_requested: false,
             active_sequence_index: 0,
             active_port: None,
             midi_client,
+            time: Duration::ZERO,
+            playback_start_time: None,
             active_instrument: 0,
             active_pattern: PatternId(0),
             current_octave: 4,
@@ -275,6 +282,15 @@ impl AppState {
     }
     pub fn update(&mut self) {
         let now = Instant::now();
+        if let Some(p) = self.playback_start_time
+            && self.engine.status().play_mode() != PlayMode::Paused
+        {
+            let time = p.elapsed();
+            self.time = time;
+        }
+        if self.notified_at.elapsed() >= NOTIFICATION_DURATION {
+            self.notification = None;
+        }
         let events: Vec<MidiEvent> = self.engine.drain_events().collect();
         for event in events {
             //ignore midi clock messages to avoid UI clutter
@@ -379,8 +395,11 @@ impl AppState {
     }
     pub fn notify(&mut self, notification: impl Into<String>) {
         self.notification = Some(notification.into());
+        self.notified_at = Instant::now();
     }
-
+    pub fn time(&self) -> Duration {
+        return self.time;
+    }
     pub fn request_save_file(
         &mut self,
         on_submit: impl FnOnce(&mut AppState, PathBuf) -> Result<()> + 'static,
@@ -398,6 +417,7 @@ impl AppState {
     pub fn save_project(&mut self, path: PathBuf) -> Result<()> {
         self.project.save(path.clone())?;
         self.project_path = Some(path);
+        self.notify("SAVED");
         return Ok(());
     }
     /// Hands an error to the app, which shows it in a warning dialog.
@@ -471,11 +491,13 @@ impl AppState {
     pub fn play_song(&mut self, sequence_index: usize) {
         self.send_all_to_engine();
         self.engine.play_song(sequence_index, !self.recording);
+        self.playback_start_time = Some(Instant::now());
     }
 
     pub fn play_pattern(&mut self, id: PatternId) {
         self.send_all_to_engine();
         self.engine.play_pattern(id, !self.recording);
+        self.playback_start_time = Some(Instant::now());
     }
     pub fn set_octave(&mut self, octave: u8) {
         self.current_octave = octave.clamp(0, 7);
