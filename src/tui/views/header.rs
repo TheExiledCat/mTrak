@@ -360,7 +360,7 @@ impl SequenceList {
                 format!("{}/{}", key(DecRepeats), key(IncRepeats)),
                 "REP".to_string(),
             ),
-            ("LEN".to_string(), state.project.song_length().to_string()),
+            ("LEN".to_string(), state.project().song_length().to_string()),
         ];
     }
 
@@ -386,7 +386,7 @@ impl KeyActions for SequenceList {
     }
 
     fn perform(&mut self, action: SequenceAction, state: &mut AppState) -> Result<()> {
-        let sequence_length = state.project.sequence.len();
+        let sequence_length = state.project().sequence.len();
         match action {
             NextPattern => {
                 state.active_sequence_index = state
@@ -448,9 +448,9 @@ impl MtrakWidget for SequenceList {
         let layout =
             Layout::horizontal([Constraint::Length(SEQUENCE_LIST_WIDTH), Constraint::Fill(1)])
                 .split(area);
-        let lines = (0..state.project.sequence.len())
+        let lines = (0..state.project().sequence.len())
             .map(|i| {
-                let row = &state.project.sequence[i];
+                let row = &state.project().sequence[i];
                 let mut line = Line::raw(format!(
                     "{:02X} {:02X} {}",
                     i, row.pattern_id.0, row.repeats
@@ -582,7 +582,7 @@ impl MtrakWidget for PatternInfo {
             .render(vertical_layout[0], buf);
 
         let active_pattern = state
-            .project
+            .project()
             .patterns
             .get_pattern_by_id(state.active_pattern)
             .unwrap();
@@ -592,7 +592,7 @@ impl MtrakWidget for PatternInfo {
             [
                 format!(
                     "BPM {:03} {}/{}: DN/UP",
-                    state.project.bpm,
+                    state.project().bpm,
                     bindings.key_for(BpmDown).unwrap(),
                     bindings.key_for(BpmUp).unwrap()
                 ),
@@ -804,7 +804,7 @@ fn open_config_dialog(state: &mut AppState) {
                 .selected(current)
                 .boxed(),
             Checkbox::new("midi_clock", "Send MIDI clock")
-                .checked(state.project.send_midi_clock)
+                .checked(state.project().send_midi_clock)
                 .boxed(),
         ],
     )
@@ -826,9 +826,9 @@ fn open_config_dialog(state: &mut AppState) {
 }
 fn open_instrument_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
-    let name = &state.project.instruments[instrument as usize].name;
-    let volume = state.project.instruments[instrument as usize].volume;
-    let pitch_wheel_range = state.project.instruments[instrument as usize].pitch_wheel_range;
+    let name = &state.project().instruments[instrument as usize].name;
+    let volume = state.project().instruments[instrument as usize].volume;
+    let pitch_wheel_range = state.project().instruments[instrument as usize].pitch_wheel_range;
     let dialog = Dialog::new(
         format!("Instrument {:1X}", instrument),
         vec![
@@ -843,14 +843,14 @@ fn open_instrument_dialog(state: &mut AppState) {
     )
     .on_submit(move |state, result| {
         if let Some(name) = result.text("name") {
-            state.project.instruments[instrument as usize].name = name.into();
+            state.project_mut().instruments[instrument as usize].name = name.into();
         }
         if let Some(vol) = result.text("volume") {
             let vol = u8::from_str_radix(vol, 16).unwrap_or(volume);
             state.set_global_volume(instrument, vol);
         }
         if let Some(range) = result.text("pitch_wheel_range") {
-            state.project.instruments[instrument as usize].pitch_wheel_range =
+            state.project_mut().instruments[instrument as usize].pitch_wheel_range =
                 range.parse().unwrap_or(pitch_wheel_range);
         }
         return Ok(());
@@ -858,7 +858,7 @@ fn open_instrument_dialog(state: &mut AppState) {
     state.open_dialog(dialog);
 }
 fn open_velocity_dialog(state: &mut AppState) {
-    let velocity = state.project.global_velocity;
+    let velocity = state.project().global_velocity;
     let dialog = Dialog::new(
         "Velocity",
         vec![
@@ -880,7 +880,7 @@ impl MtrakWidget for InstrumentList {
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
         if let Some(pos) = clicked_in(event, self.rows_area) {
             let index = self.scroll + pos.y as usize;
-            if index < state.project.instruments.len() {
+            if index < state.project().instruments.len() {
                 state.active_instrument = index as u8;
             }
             return true;
@@ -927,7 +927,7 @@ impl MtrakWidget for InstrumentList {
             .render(layout[0], buf);
         let selected_instrument = state.active_instrument;
         let lines = state
-            .project
+            .project()
             .instruments
             .iter()
             .enumerate()
@@ -958,7 +958,8 @@ impl MtrakWidget for InstrumentList {
 
         Paragraph::new(format!(
             "OCT: {}, GLB VEL: {:02X}",
-            state.current_octave, state.project.global_velocity
+            state.current_octave,
+            state.project().global_velocity
         ))
         .render(layout[2], buf);
     }

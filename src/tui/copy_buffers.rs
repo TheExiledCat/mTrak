@@ -1,7 +1,7 @@
 use crate::{
     data::{
         note::Note,
-        pattern::{Pattern, PatternRow},
+        pattern::{Block, Pattern, PatternRow},
     },
     error::Result,
 };
@@ -38,69 +38,38 @@ impl CopyBuffers {
         let rows = pattern.rows.clone();
         self.pattern_buffer = Some(CopyBuffer::new(width, height, rows))
     }
-    pub fn copy_block(
-        &mut self,
-        pattern: &Pattern,
-        start_track: u8,
-        width: u8,
-        start_row: u8,
-        height: u16,
-    ) {
-        let start_row = start_row as usize;
-        let start_track = start_track as usize;
-        if width == 0
-            || height == 0
-            || start_track + width as usize > pattern.track_count as usize
-            || start_row + height as usize > pattern.row_count as usize
+    pub fn copy_block(&mut self, pattern: &Pattern, block: Block) {
+        let (rows, tracks) = (block.rows(), block.tracks());
+        if rows.is_empty()
+            || tracks.is_empty()
+            || tracks.end > pattern.track_count as usize
+            || rows.end > pattern.row_count as usize
         {
             return;
         }
-        let rows = pattern.rows[start_row..start_row + height as usize]
+        let rows = pattern.rows[rows]
             .iter()
-            .map(|r| {
-                PatternRow::with_tracks(
-                    r.tracks[start_track..start_track + width as usize].to_vec(),
-                )
-            })
+            .map(|r| PatternRow::with_tracks(r.tracks[tracks.clone()].to_vec()))
             .collect();
-        self.block_buffer = Some(CopyBuffer::new(width, height, rows));
+        self.block_buffer = Some(CopyBuffer::new(block.width, block.height, rows));
     }
 
     pub fn cut_track(&mut self, pattern: &mut Pattern, track: u8) {
         self.copy_track(pattern, track);
-        clear(pattern, track as usize, 1, 0, pattern.row_count as usize);
+        clear(pattern, pattern.track_block(track));
     }
     pub fn cut_pattern(&mut self, pattern: &mut Pattern) {
         self.copy_pattern(pattern);
-        clear(
-            pattern,
-            0,
-            pattern.track_count as usize,
-            0,
-            pattern.row_count as usize,
-        );
+        clear(pattern, pattern.block());
     }
-    pub fn cut_block(
-        &mut self,
-        pattern: &mut Pattern,
-        start_track: u8,
-        width: u8,
-        start_row: u8,
-        height: u16,
-    ) {
+    pub fn cut_block(&mut self, pattern: &mut Pattern, block: Block) {
         let previous = self.block_buffer.take();
-        self.copy_block(pattern, start_track, width, start_row, height);
+        self.copy_block(pattern, block);
         if self.block_buffer.is_none() {
             self.block_buffer = previous;
             return;
         }
-        clear(
-            pattern,
-            start_track as usize,
-            width as usize,
-            start_row as usize,
-            height as usize,
-        );
+        clear(pattern, block);
     }
 
     /// paste the buffered track into the pattern at a certain track offset. Truncates the rows to the pattern row length
@@ -183,9 +152,9 @@ impl Default for CopyBuffers {
     }
 }
 
-fn clear(pattern: &mut Pattern, start_track: usize, width: usize, start_row: usize, height: usize) {
-    for row in start_row..start_row + height {
-        for track in start_track..start_track + width {
+fn clear(pattern: &mut Pattern, block: Block) {
+    for row in block.rows() {
+        for track in block.tracks() {
             pattern.set_event(row, track, Note::empty());
         }
     }
@@ -224,7 +193,15 @@ mod tests {
         pattern.set_event(0, 0, note(60));
         pattern.set_event(1, 1, note(61));
         let mut buffers = CopyBuffers::new();
-        buffers.copy_block(&pattern, 0, 2, 0, 2);
+        buffers.copy_block(
+            &pattern,
+            Block {
+                track: 0,
+                width: 2,
+                row: 0,
+                height: 2,
+            },
+        );
         let last_track = pattern.track_count - 1;
         buffers.paste_block(&mut pattern, last_track, 3);
         assert_eq!(pattern.get_event(3, last_track as usize), Some(&note(60)));
@@ -235,7 +212,15 @@ mod tests {
     fn block_reaching_the_last_row_and_track_can_be_copied() {
         let pattern = Pattern::new(4);
         let mut buffers = CopyBuffers::new();
-        buffers.copy_block(&pattern, pattern.track_count - 1, 1, 3, 1);
+        buffers.copy_block(
+            &pattern,
+            Block {
+                track: pattern.track_count - 1,
+                width: 1,
+                row: 3,
+                height: 1,
+            },
+        );
         assert!(buffers.block_buffer.is_some());
     }
 
@@ -244,8 +229,24 @@ mod tests {
         let mut pattern = Pattern::new(4);
         pattern.set_event(0, 0, note(60));
         let mut buffers = CopyBuffers::new();
-        buffers.copy_block(&pattern, 0, 1, 0, 1);
-        buffers.cut_block(&mut pattern, 0, 1, 3, 2);
+        buffers.copy_block(
+            &pattern,
+            Block {
+                track: 0,
+                width: 1,
+                row: 0,
+                height: 1,
+            },
+        );
+        buffers.cut_block(
+            &mut pattern,
+            Block {
+                track: 0,
+                width: 1,
+                row: 3,
+                height: 2,
+            },
+        );
         buffers.paste_block(&mut pattern, 1, 0);
         assert_eq!(pattern.get_event(0, 1), Some(&note(60)));
     }

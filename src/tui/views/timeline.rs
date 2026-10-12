@@ -17,7 +17,7 @@ use crate::{
         effect::Command,
         midi::{MIDI_CHANNEL_MAX, VOLUME_MAX},
         note::{Note, NoteKind},
-        pattern::PatternId,
+        pattern::{self, PatternId},
     },
     engine::engine::PlayMode,
     error::{MTrakError, Result},
@@ -78,6 +78,19 @@ pub enum TimelineAction {
     CutBlock,
     CopyBlock,
     PasteBlock,
+
+    Transpose {
+        area: TransposeArea,
+        all_instruments: bool,
+        delta: i8,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TransposeArea {
+    Track,
+    Pattern,
+    Block,
 }
 
 /// Rows F9..F12 jump to, as in FT2. Clamped to the last row for shorter patterns.
@@ -117,6 +130,29 @@ fn movement_keys(keymap: Keymap<TimelineAction>) -> Keymap<TimelineAction> {
     });
 }
 
+const TRANSPOSE_KEYS: [(TransposeArea, bool, char, char); 6] = [
+    (TransposeArea::Track, false, 'g', 'h'),
+    (TransposeArea::Pattern, false, 'j', 'k'),
+    (TransposeArea::Block, false, 'l', ';'),
+    (TransposeArea::Track, true, 'G', 'H'),
+    (TransposeArea::Pattern, true, 'J', 'K'),
+    (TransposeArea::Block, true, 'L', ':'),
+];
+
+fn transpose_keys(keymap: Keymap<TimelineAction>) -> Keymap<TimelineAction> {
+    return TRANSPOSE_KEYS
+        .iter()
+        .fold(keymap, |keymap, &(area, all_instruments, down, up)| {
+            let transpose = |delta| TimelineAction::Transpose {
+                area,
+                all_instruments,
+                delta,
+            };
+            keymap
+                .bind(Key::alt(down), transpose(-1), "Transpose down")
+                .bind(Key::alt(up), transpose(1), "Transpose up")
+        });
+}
 fn clipboard_keys(keymap: Keymap<TimelineAction>) -> Keymap<TimelineAction> {
     use TimelineAction::*;
     return keymap
@@ -174,17 +210,17 @@ fn clipboard_keys(keymap: Keymap<TimelineAction>) -> Keymap<TimelineAction> {
 
 fn normal_keymap() -> Keymap<TimelineAction> {
     use TimelineAction::*;
-    return clipboard_keys(movement_keys(
+    return transpose_keys(clipboard_keys(movement_keys(
         Keymap::new()
             .bind(Key::char(' '), ToggleEdit, "Edit")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
             .bind(Key::char(NOTE_OFF_KEY), NoteOff, "Off"),
-    ));
+    )));
 }
 
 fn edit_keymap() -> Keymap<TimelineAction> {
     use TimelineAction::*;
-    return clipboard_keys(movement_keys(
+    return transpose_keys(clipboard_keys(movement_keys(
         Keymap::new()
             .bind(Key::char(' '), ToggleEdit, "Edit")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
@@ -217,7 +253,7 @@ fn edit_keymap() -> Keymap<TimelineAction> {
                 InsertLine,
                 "Ins",
             ),
-    ));
+    )));
 }
 
 fn open_paste_overflow_dialog(state: &mut AppState, row_count: u16, overflow_length: u16) {
@@ -329,7 +365,7 @@ pub struct TimeLineView {
 }
 impl TimeLineView {
     pub fn new(state: &AppState) -> Self {
-        let patterns = &state.project.patterns;
+        let patterns = &state.project().patterns;
         let track_cache = TrackCache::new(patterns.get_patterns());
         return Self {
             track_cache: RefCell::new(track_cache),
@@ -342,6 +378,53 @@ impl TimeLineView {
             normal_keys: normal_keymap(),
             edit_keys: edit_keymap(),
         };
+    }
+
+    fn transpose(
+        &mut self,
+        state: &mut AppState,
+        area: TransposeArea,
+        all_instruments: bool,
+        delta: i8,
+    ) {
+        let pattern = state.active_pattern();
+        let marked_block = self.marked_block(state);
+        let cell_only = matches!(area, TransposeArea::Block) && marked_block.is_none();
+        let block = match area {
+            TransposeArea::Track => pattern.track_block(self.track_index),
+            TransposeArea::Pattern => pattern.block(),
+            TransposeArea::Block => marked_block.unwrap_or(pattern::Block {
+                track: self.track_index,
+                width: 1,
+                row: self.row_index,
+                height: 1,
+            }),
+        };
+        let instrument = (!all_instruments).then_some(state.active_instrument);
+        state
+            .active_pattern_mut()
+            .transpose(block, instrument, delta);
+        for row in block.rows() {
+            self.refresh_row(state, row);
+        }
+        if cell_only {
+            self.play_cell(state, instrument);
+        }
+    }
+    fn play_cell(&self, state: &AppState, instrument: Option<u8>) {
+        let track = self.track_index as usize;
+        let cell = state
+            .active_pattern()
+            .get_event(self.row_index as usize, track);
+        if let Some(Note {
+            kind: NoteKind::On(pitch),
+            instrument_id: Some(channel),
+            ..
+        }) = cell
+            && instrument.is_none_or(|i| i == *channel)
+        {
+            state.engine.play_note(track, *channel, *pitch);
+        }
     }
 }
 impl KeyActions for TimeLineView {
@@ -494,14 +577,9 @@ impl KeyActions for TimeLineView {
                 state.notify("TRCK CUT");
             }
             TimelineAction::CopyTrack => {
-                let pattern = state
-                    .project
-                    .patterns
-                    .get_pattern_by_id(state.active_pattern);
-                if let Some(pattern) = pattern {
-                    state.copy_buffers.copy_track(pattern, self.track_index);
-                    state.notify("TRCK COPY");
-                }
+                let (buffers, pattern) = state.copy_buffers_and_active_pattern();
+                buffers.copy_track(pattern, self.track_index);
+                state.notify("TRCK COPY");
             }
             TimelineAction::PasteTrack => {
                 let track = self.track_index;
@@ -517,14 +595,9 @@ impl KeyActions for TimeLineView {
                 state.notify("PTN CUT");
             }
             TimelineAction::CopyPattern => {
-                let pattern = state
-                    .project
-                    .patterns
-                    .get_pattern_by_id(state.active_pattern);
-                if let Some(pattern) = pattern {
-                    state.copy_buffers.copy_pattern(pattern);
-                    state.notify("PTN COPY");
-                }
+                let (buffers, pattern) = state.copy_buffers_and_active_pattern();
+                buffers.copy_pattern(pattern);
+                state.notify("PTN COPY");
             }
             TimelineAction::PastePattern => {
                 let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
@@ -547,30 +620,23 @@ impl KeyActions for TimeLineView {
                 };
             }
             TimelineAction::CutBlock => {
-                let Some((start_track, width, start_row, height)) = self.marked_block(state) else {
+                let Some(block) = self.marked_block(state) else {
                     return Ok(());
                 };
                 let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                buffers.cut_block(pattern, start_track, width, start_row, height);
+                buffers.cut_block(pattern, block);
                 self.block_anchor = None;
                 self.refresh_rows_from(state, 0);
 
                 state.notify("BLCK CUT");
             }
             TimelineAction::CopyBlock => {
-                let Some((start_track, width, start_row, height)) = self.marked_block(state) else {
+                let Some(block) = self.marked_block(state) else {
                     return Ok(());
                 };
-                let pattern = state
-                    .project
-                    .patterns
-                    .get_pattern_by_id(state.active_pattern);
-                if let Some(pattern) = pattern {
-                    state
-                        .copy_buffers
-                        .copy_block(pattern, start_track, width, start_row, height);
-                    state.notify("BLCK COPY");
-                }
+                let (buffers, pattern) = state.copy_buffers_and_active_pattern();
+                buffers.copy_block(pattern, block);
+                state.notify("BLCK COPY");
             }
             TimelineAction::PasteBlock => {
                 let (track, row) = (self.track_index, self.row_index);
@@ -580,6 +646,11 @@ impl KeyActions for TimeLineView {
                 self.refresh_rows_from(state, 0);
                 state.notify("BLCK PASTE");
             }
+            TimelineAction::Transpose {
+                area,
+                all_instruments,
+                delta,
+            } => self.transpose(state, area, all_instruments, delta),
         }
         return Ok(());
     }
@@ -619,11 +690,30 @@ impl KeyActions for TimeLineView {
             CutBlock => "Cut the marked block",
             CopyBlock => "Copy the marked block",
             PasteBlock => "Paste block at the cursor",
+            Transpose {
+                area,
+                all_instruments,
+                delta,
+            } => match (area, all_instruments, delta > 0) {
+                (TransposeArea::Track, false, true) => "Transpose INST in TRCK up",
+                (TransposeArea::Track, false, false) => "Transpose INST in TRCK down",
+                (TransposeArea::Pattern, false, true) => "Transpose INST in PTN up",
+                (TransposeArea::Pattern, false, false) => "Transpose INST in PTN down",
+                (TransposeArea::Block, false, true) => "Transpose INST in BLCK up",
+                (TransposeArea::Block, false, false) => "Transpose INST in BLCK down",
+                (TransposeArea::Track, true, true) => "Transpose ALL INST in TRCK up",
+                (TransposeArea::Track, true, false) => "Transpose ALL INST in TRCK down",
+                (TransposeArea::Pattern, true, true) => "Transpose ALL INST in PTN up",
+                (TransposeArea::Pattern, true, false) => "Transpose ALL INST in PTN down",
+                (TransposeArea::Block, true, true) => "Transpose ALL INST in BLCK up",
+                (TransposeArea::Block, true, false) => "Transpose ALL INST in BLCK down",
+            },
         };
     }
 }
 impl TimeLineView {
-    fn marked_block(&self, state: &AppState) -> Option<(u8, u8, u8, u16)> {
+    //returns the marked block area, if any
+    fn marked_block(&self, state: &AppState) -> Option<pattern::Block> {
         let (pattern, anchor_track, anchor_row) = self.block_anchor?;
         if pattern != state.active_pattern {
             return None;
@@ -631,11 +721,12 @@ impl TimeLineView {
         let last_row = state.active_pattern().last_row();
         let anchor_row = anchor_row.min(last_row);
         let cursor_row = self.row_index.min(last_row);
-        let start_track = anchor_track.min(self.track_index);
-        let start_row = anchor_row.min(cursor_row);
-        let width = anchor_track.abs_diff(self.track_index) + 1;
-        let height = anchor_row.abs_diff(cursor_row) as u16 + 1;
-        return Some((start_track, width, start_row, height));
+        return Some(pattern::Block {
+            track: anchor_track.min(self.track_index),
+            width: anchor_track.abs_diff(self.track_index) + 1,
+            row: anchor_row.min(cursor_row),
+            height: anchor_row.abs_diff(cursor_row) as u16 + 1,
+        });
     }
     fn refresh_row_and_advance(&mut self, state: &mut AppState, row: usize) {
         self.refresh_row(state, row);
@@ -654,9 +745,7 @@ impl TimeLineView {
         }
     }
     fn refresh_row(&mut self, state: &mut AppState, row: usize) {
-        self.track_cache
-            .borrow_mut()
-            .update_dirty(&mut state.project, state.active_pattern, row);
+        state.refresh_track_cache_row(&mut self.track_cache.borrow_mut(), row);
     }
 
     fn enter_note(&mut self, state: &mut AppState, key: KeyEvent) -> bool {
@@ -850,9 +939,9 @@ impl TimeLineView {
 
         let cache = self.track_cache.borrow();
         let mut rows = cache.get_all_rows_for_track(state.active_pattern, track_index as usize);
-        if let Some((start_track, width, start_row, height)) = self.marked_block(state) {
-            if (start_track..start_track + width).contains(&track_index) {
-                let marked = start_row as usize..start_row as usize + height as usize;
+        if let Some(block) = self.marked_block(state) {
+            if block.tracks().contains(&(track_index as usize)) {
+                let marked = block.rows();
                 for row in rows.iter_mut().take(marked.end).skip(marked.start) {
                     *row = row.clone().patch_style(state.theme.marked_block);
                 }
@@ -1025,7 +1114,7 @@ impl MtrakWidget for TimeLineView {
         area: ratatui::prelude::Rect,
         buf: &mut ratatui::prelude::Buffer,
     ) {
-        let pattern_store = &state.project.patterns;
+        let pattern_store = &state.project().patterns;
         let pattern = pattern_store
             .get_pattern_by_id(state.active_pattern)
             .unwrap();

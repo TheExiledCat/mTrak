@@ -68,10 +68,14 @@ impl MainView {
     }
 
     fn request_exit(&self, state: &mut AppState) {
+        if state.is_saved() {
+            state.request_exit();
+            return;
+        }
         let dialog = Dialog::confirm(
             PopupLevel::Warning,
             "Quit?",
-            "Are you sure you want to quit?",
+            "Unsaved progress will be lost",
         )
         .on_submit(|state, _| {
             state.request_exit();
@@ -137,6 +141,14 @@ fn request_save_as(state: &mut AppState) {
 
 impl MtrakWidget for MainView {
     fn update(&mut self, state: &mut AppState) {
+        let save_key = self.keymap().key_for(MainAction::Save).unwrap();
+        let save_binding = self
+            .keys
+            .bindings_mut()
+            .iter_mut()
+            .find(|b| b.key == save_key)
+            .unwrap();
+        save_binding.label = if state.is_saved() { "Save" } else { "*Save" }.into();
         self.header.update(state);
         self.content.update(state);
     }

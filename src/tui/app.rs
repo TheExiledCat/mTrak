@@ -195,7 +195,7 @@ pub struct ChannelHit {
 
 pub struct AppState {
     pub config: Config,
-    pub project: Project,
+    project: Project,
     pub engine: EngineHandle,
 
     pub midi_client: Option<MidiOutput>,
@@ -215,6 +215,7 @@ pub struct AppState {
     pub project_path: Option<PathBuf>,
     pub copy_buffers: CopyBuffers,
     pub notification: Option<String>,
+    has_changes: bool,
     notified_at: Instant,
     time: Duration,
     pending_dialogs: Vec<Dialog>,
@@ -245,6 +246,7 @@ impl AppState {
             notification: None,
             notified_at: Instant::now(),
             theme,
+            has_changes: false,
             exit_requested: false,
             active_sequence_index: 0,
             active_port: None,
@@ -345,14 +347,20 @@ impl AppState {
         self.set_midi_output(port);
     }
     pub fn set_midi_output(&mut self, port: Option<MidiOutputPort>) {
-        if let Some(client) = &self.midi_client {
-            self.project.midi_output = port.as_ref().and_then(|p| client.port_name(p).ok());
+        let name = self
+            .midi_client
+            .as_ref()
+            .map(|client| port.as_ref().and_then(|p| client.port_name(p).ok()));
+        if let Some(name) = name
+            && name != self.project.midi_output
+        {
+            self.project_mut().midi_output = name;
         }
         self.engine.set_output_port(port.clone());
         self.active_port = port;
     }
     pub fn set_midi_clock(&mut self, enabled: bool) {
-        self.project.send_midi_clock = enabled;
+        self.project_mut().send_midi_clock = enabled;
         self.engine.set_midi_clock(enabled);
     }
     pub fn get_midi_port_names(&self) -> Vec<String> {
@@ -366,6 +374,16 @@ impl AppState {
             .collect::<Vec<String>>();
     }
 
+    pub fn project(&self) -> &Project {
+        return &self.project;
+    }
+    pub fn project_mut(&mut self) -> &mut Project {
+        self.has_changes = true;
+        return &mut self.project;
+    }
+    pub fn refresh_track_cache_row(&mut self, cache: &mut TrackCache, row: usize) {
+        cache.update_dirty(&mut self.project, self.active_pattern, row);
+    }
     pub fn active_pattern(&self) -> &Pattern {
         return self
             .project
@@ -375,14 +393,24 @@ impl AppState {
     }
     pub fn active_pattern_mut(&mut self) -> &mut Pattern {
         self.changed_patterns.insert(self.active_pattern);
+        let id = self.active_pattern;
         return self
+            .project_mut()
+            .patterns
+            .get_pattern_by_id_mut(id)
+            .unwrap();
+    }
+    pub fn copy_buffers_and_active_pattern(&mut self) -> (&mut CopyBuffers, &Pattern) {
+        let pattern = self
             .project
             .patterns
-            .get_pattern_by_id_mut(self.active_pattern)
+            .get_pattern_by_id(self.active_pattern)
             .unwrap();
+        return (&mut self.copy_buffers, pattern);
     }
     pub fn copy_buffers_and_active_pattern_mut(&mut self) -> (&mut CopyBuffers, &mut Pattern) {
         self.changed_patterns.insert(self.active_pattern);
+        self.has_changes = true;
         let pattern = self
             .project
             .patterns
@@ -416,6 +444,7 @@ impl AppState {
     }
     pub fn save_project(&mut self, path: PathBuf) -> Result<()> {
         self.project.save(path.clone())?;
+        self.has_changes = false;
         self.project_path = Some(path);
         self.notify("SAVED");
         return Ok(());
@@ -461,7 +490,9 @@ impl AppState {
     }
 
     fn ensure_pattern(&mut self, id: PatternId) {
-        self.project.patterns.create_pattern_id_if_not_exists(id);
+        self.project_mut()
+            .patterns
+            .create_pattern_id_if_not_exists(id);
         self.changed_patterns.insert(id);
     }
 
@@ -477,15 +508,15 @@ impl AppState {
 
     pub fn insert_sequence(&mut self, index: usize, pattern_id: PatternId) {
         self.sequence_changed = true;
-        self.project.insert_sequence(index, pattern_id);
+        self.project_mut().insert_sequence(index, pattern_id);
     }
     pub fn delete_sequence(&mut self, index: usize) -> usize {
         self.sequence_changed = true;
-        return self.project.delete_sequence(index);
+        return self.project_mut().delete_sequence(index);
     }
     pub fn sequence_row_mut(&mut self, index: usize) -> &mut SequenceRow {
         self.sequence_changed = true;
-        return &mut self.project.sequence[index];
+        return &mut self.project_mut().sequence[index];
     }
 
     pub fn play_song(&mut self, sequence_index: usize) {
@@ -621,23 +652,26 @@ impl AppState {
     }
 
     pub fn increase_bpm(&mut self) {
-        self.project.bpm = self.project.bpm.saturating_add(1);
+        self.project_mut().bpm = self.project.bpm.saturating_add(1);
         self.engine.set_bpm(self.project.bpm);
     }
 
     pub fn decrease_bpm(&mut self) {
-        self.project.bpm = self.project.bpm.saturating_sub(1).max(1);
+        self.project_mut().bpm = self.project.bpm.saturating_sub(1).max(1);
         self.engine.set_bpm(self.project.bpm);
     }
 
     pub fn set_global_velocity(&mut self, velocity: u8) {
-        self.project.global_velocity = velocity;
+        self.project_mut().global_velocity = velocity;
         self.engine.set_global_velocity(velocity);
     }
 
     pub fn set_global_volume(&mut self, channel: u8, vol: u8) {
-        self.project.instruments[channel as usize].volume = vol;
+        self.project_mut().instruments[channel as usize].volume = vol;
         self.engine.set_global_volume(channel, vol);
+    }
+    pub fn is_saved(&self) -> bool {
+        return !self.has_changes;
     }
 }
 pub struct TrackCache {
