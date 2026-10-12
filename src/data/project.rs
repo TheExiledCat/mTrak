@@ -26,10 +26,10 @@ pub struct SequenceRow {
 }
 impl SequenceRow {
     pub fn increase_repeats(&mut self) {
-        self.repeats = self.repeats.saturating_add(1);
+        self.repeats = self.repeats.saturating_add(1).min(8);
     }
     pub fn decrease_repeats(&mut self) {
-        self.repeats = self.repeats.saturating_sub(1).clamp(1, u8::MAX);
+        self.repeats = self.repeats.saturating_sub(1).max(1);
     }
 
     pub fn increate_pattern(&mut self) -> PatternId {
