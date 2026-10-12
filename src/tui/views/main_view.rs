@@ -148,7 +148,7 @@ impl MtrakWidget for MainView {
             .iter_mut()
             .find(|b| b.key == save_key)
             .unwrap();
-        save_binding.label = if state.is_saved() { "Save" } else { "*Save" }.into();
+        save_binding.label = if state.is_saved() { "Save" } else { "*Save" };
         self.header.update(state);
         self.content.update(state);
     }
