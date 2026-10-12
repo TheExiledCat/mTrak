@@ -3,6 +3,7 @@ name = "m_trak"
 version = "0.1.5"
 edition = "2024"
 rust-version = "1.85"
+license-file="LICENSE"
 [[bin]]
 name = "mtrak"
 path = "src/main.rs"
