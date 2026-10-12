@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.1.4 - 2026-10-12
+
+### Changed
+
+- The download is about 3.5 MB smaller: the Linux binary is now around 1.6 MB instead of
+  5.2 MB. The updater was rewritten to use far fewer libraries and the system's own TLS
+  (OpenSSL 3 on Linux, the built-in TLS on macOS and Windows).
+- The update download now shows a simple `Downloading...  42%` line.
+
+### Fixed
+
+- On macOS, updating could fail or write the new binary to the wrong place when mTrak was
+  started through a relative symlink. The updater now always replaces the real binary behind
+  any symlinks and leaves the links alone.
+
 ## v0.1.3 - 2026-10-12
 
 ### Added
