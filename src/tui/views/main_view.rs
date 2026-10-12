@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use ratatui::{
     crossterm::event::{KeyCode, KeyModifiers},
     layout::{Constraint, Layout},
-    widgets::Padding,
+    widgets::{Padding, Paragraph, Widget},
 };
 
 use crate::{
@@ -20,6 +20,7 @@ use crate::{
         },
         views::{file_browser, header::Header, timeline::TimeLineView},
     },
+    updater::VERSION,
 };
 
 /// Actions available everywhere in the main view, regardless of which child has focus.
@@ -193,8 +194,18 @@ impl MtrakWidget for MainView {
             Constraint::Length(1),
         ])
         .areas(area);
+        let version_text = format!("mTrak v{}", VERSION);
+        let [footer_area, version_area] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(version_text.chars().count() as u16),
+        ])
+        .areas(footer_area);
         self.header.render(state, header_area, buf);
         self.content.render(state, content_area, buf);
         self.footer.render(state, footer_area, buf);
+
+        Paragraph::new(version_text)
+            .right_aligned()
+            .render(version_area, buf);
     }
 }

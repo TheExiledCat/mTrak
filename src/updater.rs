@@ -12,7 +12,7 @@ use ureq::{
 use crate::data::config::COMMAND;
 
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/TheExiledCat/mTrak/releases/latest";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const TARGET: &str = env!("TARGET");
 const MAX_DOWNLOAD_SIZE: u64 = 64 * 1024 * 1024;
 
