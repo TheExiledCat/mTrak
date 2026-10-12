@@ -51,6 +51,8 @@ cd mTrak
 cargo install --path .
 ```
 
+**Note**: as of v0.1.3, the self updating logic can flag as a false positive for some antivirusses. I am currently working on trying to get code signing certification setup so the binaries can be signed. Until then you might get anti virus warnings when using the binaries from the releases page, especially from windows defender.
+
 ## Usage
 
 ```sh
