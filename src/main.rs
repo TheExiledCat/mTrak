@@ -28,7 +28,10 @@ fn main() -> ExitCode {
 
     if !args.no_update_check {
         if let UpdateOutcome::Updated(version) = updater::check_for_update() {
-            println!("mTrak was updated to v{}. Start it again to use the new version.", version);
+            println!(
+                "mTrak was updated to v{}. Start it again to use the new version.",
+                version
+            );
             return ExitCode::SUCCESS;
         }
     }
