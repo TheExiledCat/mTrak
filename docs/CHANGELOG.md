@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.1.3 - 2026-10-12
+
+### Added
+
+- Automatic updates. When mTrak starts it checks GitHub for a newer release and, if there is
+  one for your platform, asks `A new version of mTrak is available: v0.1.3 -> vX.Y.Z. Update
+  now? [y/n]`. Answering `y` downloads the new version and replaces the installed `mtrak`;
+  start mTrak again afterwards to use it. Answering `n` starts mTrak as usual.
+  - If you're offline or the check fails, mTrak just starts.
+  - The check is skipped when mTrak isn't run from a terminal.
+  - Start with `--no-update-check` to skip it altogether.
+  - This release is the first with the updater, so updating to it from an earlier version
+    still has to be done by hand.
+
+### Changed
+
+- A sequence entry can now repeat its pattern at most 8 times.
+
 ## v0.1.2 - 2026-10-12
 
 ### Added
