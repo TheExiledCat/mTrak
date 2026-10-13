@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.6 - 2026-10-13
+
+### Changed
+
+- Updating on Windows works differently, to make antivirus software less likely to flag
+  mTrak as a trojan. The new version is now written straight into the folder mTrak lives in:
+  the old `mtrak.exe` is renamed to `mtrak.old.exe` and removed the next time you start mTrak.
+  Nothing is written to the temp folder and no helper process is started anymore.
+- mTrak is now released under the MIT license.
+
 ## v0.1.5 - 2026-10-12
 
 ### Added
