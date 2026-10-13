@@ -796,26 +796,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "m_trak"
-version = "0.1.6"
-dependencies = [
- "bincode",
- "chrono",
- "clap",
- "clap_derive",
- "dirs",
- "figlet-rs",
- "midi",
- "midir",
- "num",
- "ratatui",
- "serde",
- "serde_json",
- "ureq",
- "zip 7.2.0",
-]
-
-[[package]]
 name = "memchr"
 version = "2.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -871,6 +851,26 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "mtrak"
+version = "0.1.6"
+dependencies = [
+ "bincode",
+ "chrono",
+ "clap",
+ "clap_derive",
+ "dirs",
+ "figlet-rs",
+ "midi",
+ "midir",
+ "num",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "ureq",
+ "zip 7.2.0",
 ]
 
 [[package]]
