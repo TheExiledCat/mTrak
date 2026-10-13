@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.1.7 - 2026-10-13
+
+### Added
+
+- Undo and redo: `Ctrl+Z` undoes the last edit and `Ctrl+Y` redoes it. This covers everything
+  you do in the pattern editor (entering notes, instruments, volumes and effects, note offs,
+  inserting and deleting rows or events, cutting and pasting tracks, patterns and blocks,
+  transposing), changing a pattern's speed or length, shrinking and expanding patterns,
+  editing the sequence and changing the BPM. Up to 256 steps are kept.
+  - Undo and redo take you to what changed: the pattern editor switches to the edited
+    pattern and moves the cursor to the edited cell. After a block edit, the cursor is only
+    moved if it's outside the edited area. While the editor follows playback, the edit is
+    still undone but the cursor stays with the playing row.
+  - Undo and Redo show in the key hints at the bottom of the screen, greyed out when there's
+    nothing to undo or redo.
+  - Undoing back to the point where you last saved counts as saved again, so quitting won't
+    warn about unsaved progress.
+- Row lock: `Ctrl+L` stops the cursor following the playing row, so you can edit a pattern
+  while it plays, which is handy for loops. Turning it on also turns on edit mode, and the
+  top of the pattern editor shows `-- LOCK --`. When the playing pattern is the one on screen,
+  the playing row is highlighted separately from the cursor row. During row lock, `Space`
+  toggles edit mode instead of stopping playback, and `Esc` stops playback.
+
+### Changed
+
+- **Projects saved with v0.1.6 or earlier can't be opened.** The project file format changed;
+  until v1.0.0 mTrak only opens projects saved with the same version.
+- Shrinking a pattern no longer asks for confirmation, since it can now be undone.
+- If you installed mTrak with `cargo install`, the package is now called `mtrak` instead of
+  `m_trak`. Run `cargo uninstall m_trak` before installing this version, otherwise cargo
+  refuses to install because the `mtrak` binary already exists.
+
 ## v0.1.6 - 2026-10-13
 
 ### Changed
