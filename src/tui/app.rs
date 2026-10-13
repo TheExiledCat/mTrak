@@ -123,7 +123,7 @@ impl App {
         self.terminal.draw(|f| {
             let area = f.area();
             let buf = f.buffer_mut();
-            buf.set_style(area, self.state.theme.desktop);
+            buf.set_style(area, self.state.theme.background);
             let file_browser = &mut self.file_browser;
             if file_browser.is_open() {
                 file_browser.render(&self.state, area, buf);

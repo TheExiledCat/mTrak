@@ -114,7 +114,9 @@ Planned features, in no particular order:
 - [ ] **Program change and bank select per instrument**, so loading a project restores the right patches
 - [ ] **Panic button**: all notes off and reset controllers, for stuck notes
 - [ ] **Live record**: play notes in while the song is playing, for beatmaking
-- [ ] **Row lock edit**: option to stop the cursor following the playback row, so you can edit a pattern while it plays (handy for loops)
+- [ ] **Live edit**:
+    - [X] row lock edit: option to stop the cursor following the playback row, so you can edit a pattern while it plays (handy for loops)
+    - [ ] block loop: loop the currently marked block
 - [X] **Block operations**:
     - [X] select, copy, paste 
     - [X] transpose across rows and tracks

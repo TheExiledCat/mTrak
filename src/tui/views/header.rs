@@ -84,7 +84,7 @@ impl MtrakWidget for Header {
     {
         let border = Block::new()
             .borders(Borders::BOTTOM)
-            .border_style(state.theme.header_border);
+            .border_style(state.theme.border_strong);
         border.render(area, buf);
         let layout = Layout::horizontal([
             Constraint::Percentage(50),
@@ -99,7 +99,7 @@ impl MtrakWidget for Header {
         let util_block = Block::bordered()
             .borders(Borders::BOTTOM | Borders::RIGHT)
             .title_bottom("Util")
-            .title_style(state.theme.header_border.reversed());
+            .title_style(state.theme.border_strong.reversed());
         let util_inner = util_block.inner(layout[1]);
         util_block.render(layout[1], buf);
         self.top_left.render(state, left_layout[0], buf);
@@ -294,7 +294,7 @@ impl MtrakWidget for HeaderBottomLeft {
                 height,
                 ..inner
             };
-            buf.set_style(bar, _state.theme.header_border.reversed());
+            buf.set_style(bar, _state.theme.border_strong.reversed());
         });
     }
 }
@@ -1010,7 +1010,7 @@ impl MtrakWidget for MidiEventList {
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
         Block::new()
             .title_bottom("MIDI")
-            .title_style(state.theme.header_border.reversed())
+            .title_style(state.theme.border_strong.reversed())
             .render(area, buf);
         let area = Block::new().padding(Padding::bottom(1)).inner(area);
         self.max_lines_to_show = area.height;
@@ -1066,12 +1066,12 @@ impl MtrakWidget for UtilList {
             .iter()
             .map(|b| {
                 Line::raw(format!("{}: {}", b.key, b.label))
-                    .style(state.theme.header_title)
+                    .style(state.theme.heading)
                     .reversed()
             })
             .collect();
         Paragraph::new(lines)
-            .block(Block::new().style(state.theme.header_title).reversed())
+            .block(Block::new().style(state.theme.heading).reversed())
             .render(layout[0], buf);
         if let Some(notification) = &state.notification {
             Paragraph::new(notification.as_str())

@@ -7,6 +7,7 @@ use ratatui::{
     buffer::Buffer,
     crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers},
     layout::{Constraint, Layout, Rect},
+    style::Style,
     symbols::line,
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph, Widget},
@@ -84,6 +85,8 @@ pub enum TimelineAction {
         all_instruments: bool,
         delta: i8,
     },
+
+    RowLock,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -213,6 +216,7 @@ fn normal_keymap() -> Keymap<TimelineAction> {
     return transpose_keys(clipboard_keys(movement_keys(
         Keymap::new()
             .bind(Key::char(' '), ToggleEdit, "Edit")
+            .bind(Key::ctrl('l'), RowLock, "Lock")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
             .bind(Key::char(NOTE_OFF_KEY), NoteOff, "Off"),
     )));
@@ -223,6 +227,7 @@ fn edit_keymap() -> Keymap<TimelineAction> {
     return transpose_keys(clipboard_keys(movement_keys(
         Keymap::new()
             .bind(Key::char(' '), ToggleEdit, "Edit")
+            .bind(Key::ctrl('l'), RowLock, "Lock")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
             .bind(Key::char(NOTE_OFF_KEY), NoteOff, "Off")
             .bind(Key::plain(KeyCode::Delete), DeleteAtCursor, "Del")
@@ -330,38 +335,31 @@ fn scrolled_to_middle<'a>(lines: Vec<Line<'a>>, selected: u8, height: u16) -> Pa
 enum TimelineColumnLocation {
     Note,
     Instrument,
-    Volume { is_on_first_column: bool },
-    Effect { column_offset: u8 },
+    Volume,
+    Effect,
 }
 impl TimelineColumnLocation {
     pub fn from_column_index(index: u8) -> Self {
         match index {
             0 => TimelineColumnLocation::Note,
             1 => TimelineColumnLocation::Instrument,
-            2 => TimelineColumnLocation::Volume {
-                is_on_first_column: true,
-            },
-            3 => TimelineColumnLocation::Volume {
-                is_on_first_column: false,
-            },
-            4..=6 => TimelineColumnLocation::Effect {
-                column_offset: index - 4,
-            },
+            2 | 3 => TimelineColumnLocation::Volume,
+            4..=6 => TimelineColumnLocation::Effect,
             _ => panic!(),
         }
     }
 }
 pub struct TimeLineView {
     /// render cache for storing pattern tracks efficiently, maps pattern IDs to tracks
-    pub track_cache: RefCell<TrackCache>,
-    pub row_index: u8,
-    pub column_index: u8,
-    pub track_index: u8,
-    pub is_editing: bool,
-    pub row_number_lookup: String,
+    track_cache: RefCell<TrackCache>,
+    row_index: u8,
+    column_index: u8,
+    track_index: u8,
+    is_editing: bool,
     block_anchor: Option<(PatternId, u8, u8)>,
     normal_keys: Keymap<TimelineAction>,
     edit_keys: Keymap<TimelineAction>,
+    row_lock: bool,
 }
 impl TimeLineView {
     pub fn new(state: &AppState) -> Self {
@@ -373,10 +371,10 @@ impl TimeLineView {
             track_index: 0,
             column_index: 0,
             is_editing: false,
-            row_number_lookup: String::new(),
             block_anchor: None,
             normal_keys: normal_keymap(),
             edit_keys: edit_keymap(),
+            row_lock: false,
         };
     }
 
@@ -474,7 +472,7 @@ impl KeyActions for TimeLineView {
                 }
             }
             TimelineAction::ToggleEdit => {
-                if state.engine.status().play_mode() == PlayMode::Paused {
+                if self.row_lock || state.engine.status().play_mode() == PlayMode::Paused {
                     self.is_editing = !self.is_editing;
                 } else {
                     state.engine.stop();
@@ -483,6 +481,8 @@ impl KeyActions for TimeLineView {
             TimelineAction::ToggleRecord => {
                 if state.engine.status().play_mode() == PlayMode::Paused {
                     state.recording = !state.recording;
+                } else {
+                    state.engine.stop();
                 }
             }
             TimelineAction::Jump16Down => {
@@ -520,7 +520,7 @@ impl KeyActions for TimeLineView {
             TimelineAction::DeleteAtCursor => {
                 let on_volume = matches!(
                     TimelineColumnLocation::from_column_index(self.column_index),
-                    TimelineColumnLocation::Volume { .. }
+                    TimelineColumnLocation::Volume
                 );
                 self.edit_and_advance(state, |note| {
                     if on_volume {
@@ -651,6 +651,12 @@ impl KeyActions for TimeLineView {
                 all_instruments,
                 delta,
             } => self.transpose(state, area, all_instruments, delta),
+            TimelineAction::RowLock => {
+                self.row_lock = !self.row_lock;
+                if self.row_lock {
+                    self.is_editing = true;
+                }
+            }
         }
         return Ok(());
     }
@@ -664,8 +670,8 @@ impl KeyActions for TimeLineView {
             NextTrack => "Next track",
             PrevColumn => "Move left a column",
             NextColumn => "Move right a column",
-            ToggleEdit => "Toggle edit mode, or stop playback",
-            ToggleRecord => "Toggle record mode",
+            ToggleEdit => "Toggle edit mode, or stop playback outside of row lock",
+            ToggleRecord => "Toggle record mode, or stop playback during row lock",
             Jump16Down => "Jump 16 rows down",
             Jump16Up => "Jump 16 rows up",
             JumpToFirstRow => "Jump to the first row",
@@ -690,6 +696,7 @@ impl KeyActions for TimeLineView {
             CutBlock => "Cut the marked block",
             CopyBlock => "Copy the marked block",
             PasteBlock => "Paste block at the cursor",
+            RowLock => "Enable row lock",
             Transpose {
                 area,
                 all_instruments,
@@ -826,12 +833,12 @@ impl TimeLineView {
                 };
                 self.enter_instrument(state, instrument)
             }
-            TimelineColumnLocation::Volume { .. } => {
+            TimelineColumnLocation::Volume => {
                 let high = column_index_to_note_string_index(2).unwrap();
                 let low = column_index_to_note_string_index(3).unwrap();
                 self.enter_volume(state, [chars[high], chars[low]])
             }
-            TimelineColumnLocation::Effect { .. } => {
+            TimelineColumnLocation::Effect => {
                 let kind = column_index_to_note_string_index(4).unwrap();
                 let val_high = column_index_to_note_string_index(5).unwrap();
                 let val_low = column_index_to_note_string_index(6).unwrap();
@@ -857,15 +864,15 @@ impl TimeLineView {
     /// Draws a horizontal line across the line numbers and tracks at `y`, joining the
     /// track borders, to mark where the pattern begins or ends.
     fn render_pattern_boundary_line(&self, state: &AppState, width: u16, y: u16, buf: &mut Buffer) {
-        let style = state.theme.pattern_start;
+        let style = state.theme.divider;
         Line::raw(repeat_n(line::HORIZONTAL, width as usize).collect::<String>())
             .style(style)
             .render(Rect::new(0, y, width, 1), buf);
     }
 
     fn render_mode_indicator(&self, state: &AppState, area: Rect, buf: &mut Buffer) {
-        let recording = state.theme.recording;
-        let spans = match state.engine.status().play_mode() {
+        let recording = state.theme.danger;
+        let mut spans = match state.engine.status().play_mode() {
             PlayMode::Song => vec![Span::styled("-- REC SONG --", recording)],
             PlayMode::SongLoop => vec![Span::raw("-- LOOP SONG --")],
             PlayMode::Pattern => vec![Span::styled("-- REC PTN --", recording)],
@@ -884,6 +891,9 @@ impl TimeLineView {
                 spans
             }
         };
+        if self.row_lock {
+            spans.push(Span::styled("-- LOCK --", recording));
+        }
         Line::from(spans).centered().render(area, buf);
     }
 
@@ -895,14 +905,18 @@ impl TimeLineView {
         area: Rect,
         buf: &mut Buffer,
     ) {
+        let playback_row = self.locked_playback_row(state).map(u16::from);
         let lines = (0..row_count)
             .map(|i| {
-                let mut style = state.theme.row_number;
+                let mut style = state.theme.gutter;
                 if i % 4 == 0 {
-                    style = style.patch(state.theme.beat_row_number);
+                    style = style.patch(state.theme.gutter_accent);
+                }
+                if Some(i) == playback_row {
+                    style = style.patch(state.theme.highlight_secondary);
                 }
                 if i == self.row_index as u16 {
-                    style = style.patch(state.theme.selected_row_number);
+                    style = style.patch(state.theme.gutter_active);
                 }
                 Line::raw(format!("{:02X}", i)).style(style)
             })
@@ -943,34 +957,62 @@ impl TimeLineView {
             if block.tracks().contains(&(track_index as usize)) {
                 let marked = block.rows();
                 for row in rows.iter_mut().take(marked.end).skip(marked.start) {
-                    *row = row.clone().patch_style(state.theme.marked_block);
+                    *row = row.clone().patch_style(state.theme.selection_subtle);
                 }
             }
         }
-        let selected_row = rows[self.row_index as usize].clone();
-        rows[self.row_index as usize] =
-            self.highlight_selected_row(state, track_index, selected_row);
+        if let Some(row) = self.locked_playback_row(state) {
+            let index = row as usize;
+            rows[index] = self.highlight_row(
+                state,
+                track_index,
+                row,
+                rows[index].clone(),
+                state.theme.highlight_secondary,
+            );
+        }
+        let index = self.row_index as usize;
+        rows[index] = self.highlight_row(
+            state,
+            track_index,
+            self.row_index,
+            rows[index].clone(),
+            state.theme.highlight,
+        );
         scrolled_to_middle(rows, self.row_index, rows_height).render(track_layout[1], buf);
 
         Block::bordered()
             .borders(Borders::LEFT | Borders::RIGHT)
-            .border_style(state.theme.track_border)
+            .border_style(state.theme.border_subtle)
             .render(area, buf);
     }
 
-    fn highlight_selected_row<'a>(
+    fn locked_playback_row(&self, state: &AppState) -> Option<u8> {
+        let status = state.engine.status();
+        if !self.row_lock
+            || status.play_mode() == PlayMode::Paused
+            || PatternId(status.pattern() as u8) != state.active_pattern
+        {
+            return None;
+        }
+        return Some((status.row() as u8).min(state.active_pattern().last_row()));
+    }
+
+    fn highlight_row<'a>(
         &self,
         state: &AppState,
         track_index: u8,
+        row_index: u8,
         row: Line<'a>,
+        style: Style,
     ) -> Line<'a> {
-        if track_index != self.track_index {
-            return row.centered().style(state.theme.selected_row);
+        if track_index != self.track_index || row_index != self.row_index {
+            return row.centered().style(style);
         }
         let cell_style = if self.is_editing {
-            state.theme.editing_cell
+            state.theme.selection_danger
         } else {
-            state.theme.selected_cell
+            state.theme.selection
         };
         let cell = row.clone().centered().style(cell_style);
         return cell.spans(self.cursor_spans(state, &row));
@@ -1014,7 +1056,7 @@ impl MtrakWidget for TimeLineView {
         self.refresh_rows_from(state, 0);
         let status = state.engine.status();
         let mode = status.play_mode();
-        if mode == PlayMode::Paused {
+        if self.row_lock || mode == PlayMode::Paused {
             return;
         }
         self.is_editing = false;
@@ -1122,7 +1164,7 @@ impl MtrakWidget for TimeLineView {
             .borrow_mut()
             .sync_pattern(state.active_pattern, pattern);
         self.row_index = self.row_index.min(pattern.last_row());
-        buf.set_style(area, state.theme.pattern_area);
+        buf.set_style(area, state.theme.surface);
         let top_bottom = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
         self.render_mode_indicator(state, top_bottom[0], buf);
 
