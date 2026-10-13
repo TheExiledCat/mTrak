@@ -218,10 +218,12 @@ impl MtrakWidget for HeaderBottomLeft {
         hints.push(KeyHint {
             key: format!("{}{}", glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL), "1-8"),
             label: "Mute",
+            enabled: true,
         });
         hints.push(KeyHint {
             key: format!("{}{}", glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL), "9"),
             label: if self.upper { "Ch 1-8" } else { "Ch 9-16" },
+            enabled: true,
         });
     }
     fn render(

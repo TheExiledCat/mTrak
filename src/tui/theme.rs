@@ -28,6 +28,10 @@ pub struct Theme {
     pub text: Style,
     /// a small filled label, e.g. the key of a footer key hint
     pub badge: Style,
+    /// `text` for something currently unavailable, e.g. the label of the undo hint with nothing to undo
+    pub text_disabled: Style,
+    /// `badge` for something currently unavailable, e.g. the key of the undo hint with nothing to undo
+    pub badge_disabled: Style,
     /// the default border, e.g. around an info dialog
     pub border: Style,
     /// a border that stands out from `border`, e.g. around the header panels
@@ -105,6 +109,8 @@ impl Theme {
             heading: Style::new().bold().fg(FT2_TEXT),
             text: Style::new().fg(FT2_TEXT),
             badge: Style::new().fg(FT2_PATTERN_BG).bg(FT2_DESKTOP_LIGHT),
+            text_disabled: Style::new().fg(FT2_DESKTOP_LIGHT),
+            badge_disabled: Style::new().fg(FT2_DESKTOP).bg(FT2_DESKTOP_LIGHT),
             border: Style::new().fg(FT2_DESKTOP_LIGHT),
             border_strong: Style::new().fg(FT2_TEXT),
             border_subtle: Style::new().fg(FT2_DESKTOP),
@@ -131,6 +137,8 @@ impl Theme {
             heading: Style::new().bold().fg(Color::White),
             text: Style::new().fg(Color::White),
             badge: Style::new().fg(Color::Black).bg(Color::Gray),
+            text_disabled: Style::new().fg(Color::Gray),
+            badge_disabled: Style::new().fg(Color::DarkGray).bg(Color::Gray),
             border: Style::new().fg(Color::Gray),
             border_strong: Style::new().fg(Color::White),
             border_subtle: Style::new().fg(Color::Blue),
@@ -157,6 +165,8 @@ impl Theme {
             heading: Style::new().bold(),
             text: Style::new(),
             badge: Style::new().reversed(),
+            text_disabled: Style::new().dim(),
+            badge_disabled: Style::new().reversed().dim(),
             border: Style::new().bold(),
             border_strong: Style::new(),
             border_subtle: Style::new(),

@@ -78,15 +78,11 @@ impl MainView {
             state.request_exit();
             return;
         }
-        let dialog = Dialog::confirm(
-            PopupLevel::Warning,
-            "Quit?",
-            "Unsaved progress will be lost",
-        )
-        .on_submit(|state, _| {
-            state.request_exit();
-            return Ok(());
-        });
+        let dialog = Dialog::confirm(PopupLevel::Error, "Quit?", "Unsaved progress will be lost")
+            .on_submit(|state, _| {
+                state.request_exit();
+                return Ok(());
+            });
         state.open_dialog(dialog);
     }
 }
@@ -190,6 +186,16 @@ impl MtrakWidget for MainView {
     fn key_hints(&self, state: &AppState, hints: &mut Vec<KeyHint>) {
         hints.extend(self.keys.hint_for(MainAction::Help));
         self.content.key_hints(state, hints);
+        hints.extend(
+            self.keys
+                .hint_for(MainAction::Undo)
+                .map(|h| h.enabled(state.can_undo())),
+        );
+        hints.extend(
+            self.keys
+                .hint_for(MainAction::Redo)
+                .map(|h| h.enabled(state.can_redo())),
+        );
         hints.extend(self.keys.hint_for(MainAction::Save));
         hints.extend(self.keys.hint_for(MainAction::Quit));
     }

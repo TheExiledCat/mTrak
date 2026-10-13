@@ -23,7 +23,7 @@ use crate::{
     engine::engine::PlayMode,
     error::{MTrakError, Result},
     tui::{
-        app::{AppState, TrackCache, column_index_to_note_string_index},
+        app::{AppState, CursorJump, TrackCache, column_index_to_note_string_index},
         constants::{self, NOTE_OFF_KEY},
         framework::{
             core_extensions::Boxed,
@@ -347,6 +347,7 @@ fn scrolled_to_middle<'a>(lines: Vec<Line<'a>>, selected: u8, height: u16) -> Pa
         .collect();
     return Paragraph::new(padded).scroll((selected as u16, 0));
 }
+#[derive(PartialEq)]
 enum TimelineColumnLocation {
     Note,
     Instrument,
@@ -391,6 +392,23 @@ impl TimeLineView {
             edit_keys: edit_keymap(),
             row_lock: false,
         };
+    }
+
+    fn jump_to(&mut self, jump: CursorJump) {
+        let block = jump.block;
+        self.row_index = self.row_index.clamp(
+            block.row,
+            (block.row as u16 + block.height.saturating_sub(1)) as u8,
+        );
+        self.track_index = self
+            .track_index
+            .clamp(block.track, block.track + block.width.saturating_sub(1));
+        if let Some(column) = jump.column
+            && TimelineColumnLocation::from_column_index(self.column_index)
+                != TimelineColumnLocation::from_column_index(column)
+        {
+            self.column_index = column;
+        }
     }
 
     fn transpose(
@@ -1072,6 +1090,9 @@ impl MtrakWidget for TimeLineView {
             .borrow_mut()
             .sync_pattern(state.active_pattern, state.active_pattern());
         self.refresh_rows_from(state, 0);
+        if let Some(jump) = state.take_cursor_jump() {
+            self.jump_to(jump);
+        }
         let status = state.engine.status();
         let mode = status.play_mode();
         if self.row_lock || mode == PlayMode::Paused {
@@ -1223,6 +1244,133 @@ impl MtrakWidget for TimeLineView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{data::project::Project, tui::theme::Theme};
+
+    fn editor() -> (AppState, TimeLineView) {
+        let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let mut view = TimeLineView::new(&state);
+        view.is_editing = true;
+        return (state, view);
+    }
+
+    fn press(state: &mut AppState, view: &mut TimeLineView, c: char) {
+        let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        view.handle_event(state, &Event::Key(key));
+        view.update(state);
+    }
+
+    fn undo(state: &mut AppState, view: &mut TimeLineView) {
+        assert!(state.undo());
+        view.update(state);
+    }
+
+    fn redo(state: &mut AppState, view: &mut TimeLineView) {
+        assert!(state.redo());
+        view.update(state);
+    }
+
+    fn has_note(state: &AppState, row: usize, track: usize) -> bool {
+        let note = state.active_pattern().get_event(row, track).unwrap();
+        return matches!(note.kind, NoteKind::On(_));
+    }
+
+    #[test]
+    fn entering_notes_advances_by_line_add() {
+        let (mut state, mut view) = editor();
+        press(&mut state, &mut view, 'z');
+        assert_eq!(view.row_index, 1);
+        press(&mut state, &mut view, 'z');
+        assert_eq!(view.row_index, 2);
+        assert!(has_note(&state, 0, 0));
+        assert!(has_note(&state, 1, 0));
+
+        state.line_add = 4;
+        press(&mut state, &mut view, 'z');
+        assert_eq!(view.row_index, 6);
+        assert!(has_note(&state, 2, 0));
+    }
+
+    #[test]
+    fn undo_and_redo_jump_to_the_edited_cell() {
+        let (mut state, mut view) = editor();
+        view.track_index = 2;
+        press(&mut state, &mut view, 'z');
+        view.row_index = 10;
+        view.track_index = 5;
+        view.column_index = 4;
+
+        undo(&mut state, &mut view);
+        assert!(!has_note(&state, 0, 2));
+        assert_eq!(
+            (view.row_index, view.track_index, view.column_index),
+            (0, 2, 0)
+        );
+
+        view.row_index = 10;
+        view.track_index = 5;
+        redo(&mut state, &mut view);
+        assert!(has_note(&state, 0, 2));
+        assert_eq!((view.row_index, view.track_index), (0, 2));
+    }
+
+    #[test]
+    fn undo_keeps_the_column_within_the_edited_field() {
+        let (mut state, mut view) = editor();
+        state.enter_volume(0, 3, 0x40);
+        view.column_index = 3;
+        undo(&mut state, &mut view);
+        assert_eq!((view.row_index, view.column_index), (3, 3));
+
+        redo(&mut state, &mut view);
+        view.column_index = 0;
+        undo(&mut state, &mut view);
+        assert_eq!(view.column_index, 2);
+    }
+
+    #[test]
+    fn block_undo_only_moves_the_cursor_into_the_block() {
+        let (mut state, mut view) = editor();
+        press(&mut state, &mut view, 'z');
+        let block = state.active_pattern().track_block(0);
+        state.edit_block(block, |_, pattern| {
+            pattern.transpose(block, None, 1);
+        });
+
+        view.row_index = 5;
+        view.track_index = 0;
+        undo(&mut state, &mut view);
+        assert_eq!((view.row_index, view.track_index), (5, 0));
+
+        view.track_index = 3;
+        redo(&mut state, &mut view);
+        assert_eq!((view.row_index, view.track_index), (5, 0));
+    }
+
+    #[test]
+    fn undo_and_redo_availability_follows_the_history() {
+        let (mut state, mut view) = editor();
+        assert!(!state.can_undo() && !state.can_redo());
+        press(&mut state, &mut view, 'z');
+        assert!(state.can_undo() && !state.can_redo());
+        undo(&mut state, &mut view);
+        assert!(!state.can_undo() && state.can_redo());
+        redo(&mut state, &mut view);
+        press(&mut state, &mut view, 'z');
+        undo(&mut state, &mut view);
+        press(&mut state, &mut view, 'x');
+        assert!(state.can_undo() && !state.can_redo());
+    }
+
+    #[test]
+    fn editing_without_undo_leaves_the_cursor_alone() {
+        let (mut state, mut view) = editor();
+        state.enter_volume(1, 7, 0x40);
+        view.update(&mut state);
+        assert_eq!(
+            (view.row_index, view.track_index, view.column_index),
+            (0, 0, 0)
+        );
+    }
 
     #[test]
     fn alt_letters_jump_to_tracks() {

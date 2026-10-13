@@ -23,21 +23,23 @@ where
         self.undo_stack.push(action);
         self.redo_stack.clear();
     }
-    pub fn undo(&mut self, state: &mut T::State) -> bool {
-        let Some(mut action) = self.undo_stack.pop() else {
-            return false;
-        };
+    pub fn can_undo(&self) -> bool {
+        return !self.undo_stack.is_empty();
+    }
+    pub fn can_redo(&self) -> bool {
+        return !self.redo_stack.is_empty();
+    }
+    pub fn undo(&mut self, state: &mut T::State) -> Option<&T> {
+        let mut action = self.undo_stack.pop()?;
         action.undo_action(state);
         self.redo_stack.push(action);
-        return true;
+        return self.redo_stack.last();
     }
-    pub fn redo(&mut self, state: &mut T::State) -> bool {
-        let Some(mut action) = self.redo_stack.pop() else {
-            return false;
-        };
+    pub fn redo(&mut self, state: &mut T::State) -> Option<&T> {
+        let mut action = self.redo_stack.pop()?;
         action.do_action(state);
         self.undo_stack.push(action);
-        return true;
+        return self.undo_stack.last();
     }
 }
 impl<T> Default for UndoStack<T>
@@ -66,6 +68,12 @@ impl<T> Stack<T> {
     }
     pub fn pop(&mut self) -> Option<T> {
         return self.stack.pop();
+    }
+    pub fn is_empty(&self) -> bool {
+        return self.stack.is_empty();
+    }
+    pub fn last(&self) -> Option<&T> {
+        return self.stack.last();
     }
     pub fn clear(&mut self) {
         self.stack.clear();

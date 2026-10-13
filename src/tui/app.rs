@@ -194,6 +194,24 @@ pub struct ChannelHit {
     pub velocity: u8,
 }
 
+#[derive(Clone, Copy)]
+pub struct CursorJump {
+    pub block: Block,
+    pub column: Option<u8>,
+}
+fn edited_column(previous: &Note, new: &Note) -> u8 {
+    if previous.kind != new.kind {
+        return 0;
+    }
+    if previous.instrument_id != new.instrument_id {
+        return 1;
+    }
+    if previous.velocity != new.velocity {
+        return 2;
+    }
+    return 4;
+}
+
 enum AppStateAction {
     EditCell {
         pattern: PatternId,
@@ -270,7 +288,12 @@ impl AppStateAction {
                 let sequence = if undo { previous } else { new };
                 state.sequence_changed = true;
                 state.project_mut().sequence = sequence.clone();
-                state.active_sequence_index = state.active_sequence_index.min(sequence.len() - 1);
+                let changed = previous
+                    .iter()
+                    .zip(new)
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(previous.len().min(new.len()));
+                state.active_sequence_index = changed.min(sequence.len() - 1);
             }
             AppStateAction::SetSpeed {
                 pattern,
@@ -303,6 +326,32 @@ impl AppStateAction {
                 state.engine.set_bpm(bpm);
             }
         }
+    }
+}
+impl AppStateAction {
+    fn cursor_jump(&self) -> Option<CursorJump> {
+        return match self {
+            AppStateAction::EditCell {
+                row,
+                track,
+                previous_cell,
+                new_cell,
+                ..
+            } => Some(CursorJump {
+                block: Block {
+                    track: *track as u8,
+                    width: 1,
+                    row: *row as u8,
+                    height: 1,
+                },
+                column: Some(edited_column(previous_cell, new_cell)),
+            }),
+            AppStateAction::EditBlock { block, .. } => Some(CursorJump {
+                block: *block,
+                column: None,
+            }),
+            _ => None,
+        };
     }
 }
 impl UndoAction for AppStateAction {
@@ -339,6 +388,7 @@ pub struct AppState {
     pub copy_buffers: CopyBuffers,
     pub notification: Option<String>,
     undo_stack: UndoStack<AppStateAction>,
+    cursor_jump: Option<CursorJump>,
     has_changes: bool,
     notified_at: Instant,
     time: Duration,
@@ -392,6 +442,7 @@ impl AppState {
             errors,
             copy_buffers: CopyBuffers::new(),
             undo_stack: UndoStack::new(),
+            cursor_jump: None,
             help_requested: false,
         };
         for (channel, instrument) in state.project.instruments.iter().enumerate() {
@@ -553,17 +604,33 @@ impl AppState {
         self.has_changes = true;
         self.undo_stack.track(action);
     }
+    pub fn can_undo(&self) -> bool {
+        return self.undo_stack.can_undo();
+    }
+    pub fn can_redo(&self) -> bool {
+        return self.undo_stack.can_redo();
+    }
     pub fn undo(&mut self) -> bool {
         let mut undo_stack = std::mem::take(&mut self.undo_stack);
-        let undone = undo_stack.undo(self);
+        let jump = undo_stack.undo(self).map(AppStateAction::cursor_jump);
         self.undo_stack = undo_stack;
-        return undone;
+        return self.jump_after_history(jump);
     }
     pub fn redo(&mut self) -> bool {
         let mut undo_stack = std::mem::take(&mut self.undo_stack);
-        let redone = undo_stack.redo(self);
+        let jump = undo_stack.redo(self).map(AppStateAction::cursor_jump);
         self.undo_stack = undo_stack;
-        return redone;
+        return self.jump_after_history(jump);
+    }
+    fn jump_after_history(&mut self, jump: Option<Option<CursorJump>>) -> bool {
+        let Some(jump) = jump else {
+            return false;
+        };
+        self.cursor_jump = jump;
+        return true;
+    }
+    pub fn take_cursor_jump(&mut self) -> Option<CursorJump> {
+        return self.cursor_jump.take();
     }
     /// `block` has to cover every cell `edit` changes, or undo won't restore the rest.
     pub fn edit_block<R>(
