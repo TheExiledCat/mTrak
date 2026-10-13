@@ -124,6 +124,13 @@ impl Display for Key {
 pub struct KeyHint {
     pub key: String,
     pub label: &'static str,
+    pub enabled: bool,
+}
+impl KeyHint {
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        return self;
+    }
 }
 
 pub struct HelpEntry {
@@ -223,6 +230,7 @@ impl<A: Copy + PartialEq> Keymap<A> {
             .map(|b| KeyHint {
                 key: b.key.to_string(),
                 label: b.label,
+                enabled: true,
             });
     }
 
@@ -238,6 +246,7 @@ impl<A: Copy + PartialEq> Keymap<A> {
         hints.extend(groups.into_iter().map(|(label, keys)| KeyHint {
             key: join_keys(&keys),
             label,
+            enabled: true,
         }));
     }
 }

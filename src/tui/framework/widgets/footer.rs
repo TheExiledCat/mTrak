@@ -51,9 +51,14 @@ impl Footer {
 
     fn get_hint_line(&self, state: &AppState) -> Line<'static> {
         let spans = self.hints.iter().flat_map(|hint| {
+            let (badge, text) = if hint.enabled {
+                (state.theme.badge, state.theme.text)
+            } else {
+                (state.theme.badge_disabled, state.theme.text_disabled)
+            };
             [
-                Span::styled(format!(" {} ", hint.key), state.theme.key_hint_key),
-                Span::styled(format!(" {}  ", hint.label), state.theme.key_hint_label),
+                Span::styled(format!(" {} ", hint.key), badge),
+                Span::styled(format!(" {}  ", hint.label), text),
             ]
         });
         return Line::from_iter(spans);

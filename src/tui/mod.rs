@@ -5,4 +5,5 @@ pub mod files;
 pub mod framework;
 pub mod glyphs;
 pub mod theme;
+pub mod undo;
 pub mod views;

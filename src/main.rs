@@ -14,13 +14,13 @@ use ratatui::{
 use tui::{app::App, files, glyphs, theme::Theme};
 use updater::UpdateOutcome;
 
-pub mod cli;
-pub mod data;
-pub mod engine;
-pub mod error;
-pub mod tui;
-pub mod updater;
-pub mod util;
+mod cli;
+mod data;
+mod engine;
+mod error;
+mod tui;
+mod updater;
+mod util;
 
 fn main() -> ExitCode {
     let args = Cli::parse();
