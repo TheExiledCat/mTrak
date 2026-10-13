@@ -25,6 +25,7 @@ pub mod util;
 fn main() -> ExitCode {
     let args = Cli::parse();
     glyphs::set_ascii_mode(args.ascii_mode);
+    updater::remove_old_exe();
 
     if !args.no_update_check {
         if let UpdateOutcome::Updated(version) = updater::check_for_update() {
