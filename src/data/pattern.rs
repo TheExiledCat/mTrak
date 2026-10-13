@@ -11,6 +11,10 @@ use crate::{
 pub struct PatternId(pub u8);
 pub const MAX_ROWS: u16 = 0x100;
 
+pub fn same_cells(a: &[PatternRow], b: &[PatternRow]) -> bool {
+    return a.iter().map(|r| &r.tracks).eq(b.iter().map(|r| &r.tracks));
+}
+
 #[derive(Clone, Copy)]
 pub struct Block {
     pub track: u8,
@@ -154,21 +158,22 @@ impl Pattern {
     pub fn same_content(&self, other: &Pattern) -> bool {
         return self.ticks_per_line == other.ticks_per_line
             && self.row_count == other.row_count
-            && self
-                .rows
-                .iter()
-                .map(|r| &r.tracks)
-                .eq(other.rows.iter().map(|r| &r.tracks));
+            && same_cells(&self.rows, &other.rows);
     }
 
-    // replaces this pattern notes and ticks per line from another pattern
-    pub fn copy_content_from(&mut self, other: &Pattern) {
-        self.ticks_per_line = other.ticks_per_line;
-        self.row_count = other.row_count;
-        self.rows = other.rows.clone();
+    // swaps this pattern's notes and ticks per line with another pattern's
+    pub fn swap_content(&mut self, other: &mut Pattern) {
+        std::mem::swap(&mut self.ticks_per_line, &mut other.ticks_per_line);
+        std::mem::swap(&mut self.row_count, &mut other.row_count);
+        std::mem::swap(&mut self.rows, &mut other.rows);
         for row in &mut self.rows {
             row.dirty = true;
         }
+    }
+    pub fn swap_block(&mut self, block: Block, rows: &mut Vec<PatternRow>) {
+        let current = self.read_block(block);
+        self.write_block(block, rows);
+        *rows = current;
     }
     pub fn transpose(&mut self, block: Block, instrument: Option<u8>, delta: i8) {
         for row in block.rows() {
@@ -545,13 +550,35 @@ mod tests {
     }
 
     #[test]
-    fn copy_content_keeps_mutes() {
+    fn swap_content_keeps_mutes() {
         let mut pattern = Pattern::new(4);
         pattern.channel_mutes[0] = true;
         let mut other = Pattern::new(8);
         other.set_event(5, 0, note());
-        pattern.copy_content_from(&other);
-        assert!(pattern.same_content(&other));
+        let expected = other.clone();
+        pattern.swap_content(&mut other);
+        assert!(pattern.same_content(&expected));
+        assert_eq!(other.row_count, 4);
         assert!(pattern.channel_mutes[0]);
+        assert!(!other.channel_mutes[0]);
+    }
+
+    #[test]
+    fn swap_block_round_trips() {
+        let mut pattern = Pattern::new(4);
+        let block = Block {
+            track: 1,
+            width: 2,
+            row: 1,
+            height: 2,
+        };
+        let mut rows = vec![PatternRow::with_tracks(vec![note(); 2]); 2];
+        pattern.swap_block(block, &mut rows);
+        assert_eq!(pattern.get_event(1, 1), Some(&note()));
+        assert_eq!(pattern.get_event(2, 2), Some(&note()));
+        assert_eq!(rows[0].tracks, vec![Note::empty(); 2]);
+        pattern.swap_block(block, &mut rows);
+        assert_eq!(pattern.get_event(1, 1), Some(&Note::empty()));
+        assert_eq!(rows[1].tracks, vec![note(); 2]);
     }
 }

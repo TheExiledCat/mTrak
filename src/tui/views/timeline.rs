@@ -514,7 +514,7 @@ impl KeyActions for TimeLineView {
             TimelineAction::ToggleRecord => {
                 if state.engine.status().play_mode() == PlayMode::Paused {
                     state.recording = !state.recording;
-                } else {
+                } else if self.row_lock {
                     state.engine.stop();
                 }
             }
@@ -1090,12 +1090,13 @@ impl MtrakWidget for TimeLineView {
             .borrow_mut()
             .sync_pattern(state.active_pattern, state.active_pattern());
         self.refresh_rows_from(state, 0);
-        if let Some(jump) = state.take_cursor_jump() {
-            self.jump_to(jump);
-        }
+        let jump = state.take_cursor_jump();
         let status = state.engine.status();
         let mode = status.play_mode();
         if self.row_lock || mode == PlayMode::Paused {
+            if let Some(jump) = jump {
+                self.jump_to(jump);
+            }
             return;
         }
         self.is_editing = false;
@@ -1359,6 +1360,42 @@ mod tests {
         undo(&mut state, &mut view);
         press(&mut state, &mut view, 'x');
         assert!(state.can_undo() && !state.can_redo());
+    }
+
+    #[test]
+    fn pattern_edits_survive_repeated_undo_and_redo() {
+        let (mut state, mut view) = editor();
+        press(&mut state, &mut view, 'z');
+        state.edit_pattern(|_, pattern| pattern.set_length(32));
+        for _ in 0..2 {
+            undo(&mut state, &mut view);
+            assert_eq!(state.active_pattern().row_count, 64);
+            assert!(has_note(&state, 0, 0));
+            redo(&mut state, &mut view);
+            assert_eq!(state.active_pattern().row_count, 32);
+            assert!(has_note(&state, 0, 0));
+        }
+    }
+
+    #[test]
+    fn undoing_back_to_the_saved_point_counts_as_saved() {
+        let (mut state, mut view) = editor();
+        assert!(state.is_saved());
+        press(&mut state, &mut view, 'z');
+        assert!(!state.is_saved());
+        undo(&mut state, &mut view);
+        assert!(state.is_saved());
+        redo(&mut state, &mut view);
+        assert!(!state.is_saved());
+    }
+
+    #[test]
+    fn changes_outside_the_history_stay_unsaved_after_undo() {
+        let (mut state, mut view) = editor();
+        press(&mut state, &mut view, 'z');
+        state.active_pattern_mut().channel_mutes[0] = true;
+        undo(&mut state, &mut view);
+        assert!(!state.is_saved());
     }
 
     #[test]

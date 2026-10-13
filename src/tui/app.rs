@@ -20,7 +20,7 @@ use crate::{
         effect::CommandKind,
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VOLUME_MAX},
         note::{Note, NoteKind, NotePitch},
-        pattern::{Block, Pattern, PatternId, PatternRow},
+        pattern::{self, Block, Pattern, PatternId, PatternRow},
         project::{Project, SequenceRow},
     },
     engine::{engine::PlayMode, handle::EngineHandle},
@@ -223,13 +223,11 @@ enum AppStateAction {
     EditBlock {
         pattern: PatternId,
         block: Block,
-        previous_cells: Vec<PatternRow>,
-        new_cells: Vec<PatternRow>,
+        other_cells: Vec<PatternRow>,
     },
     EditPattern {
         pattern: PatternId,
-        previous: Pattern,
-        new: Pattern,
+        other: Pattern,
     },
     EditSequence {
         previous: Vec<SequenceRow>,
@@ -252,7 +250,7 @@ enum AppStateAction {
     },
 }
 impl AppStateAction {
-    fn apply(&self, state: &mut AppState, undo: bool) {
+    fn apply(&mut self, state: &mut AppState, undo: bool) {
         match self {
             AppStateAction::EditCell {
                 pattern,
@@ -268,26 +266,20 @@ impl AppStateAction {
             AppStateAction::EditBlock {
                 pattern,
                 block,
-                previous_cells,
-                new_cells,
+                other_cells,
             } => {
-                let cells = if undo { previous_cells } else { new_cells };
                 state.active_pattern = *pattern;
-                state.pattern_mut(*pattern).write_block(*block, cells);
+                state.pattern_mut(*pattern).swap_block(*block, other_cells);
             }
-            AppStateAction::EditPattern {
-                pattern,
-                previous,
-                new,
-            } => {
-                let content = if undo { previous } else { new };
+            AppStateAction::EditPattern { pattern, other } => {
                 state.active_pattern = *pattern;
-                state.pattern_mut(*pattern).copy_content_from(content);
+                state.pattern_mut(*pattern).swap_content(other);
             }
             AppStateAction::EditSequence { previous, new } => {
+                let (previous, new) = (&*previous, &*new);
                 let sequence = if undo { previous } else { new };
                 state.sequence_changed = true;
-                state.project_mut().sequence = sequence.clone();
+                state.project.sequence = sequence.clone();
                 let changed = previous
                     .iter()
                     .zip(new)
@@ -322,13 +314,11 @@ impl AppStateAction {
             }
             AppStateAction::SetBpm { previous, new } => {
                 let bpm = if undo { *previous } else { *new };
-                state.project_mut().bpm = bpm;
+                state.project.bpm = bpm;
                 state.engine.set_bpm(bpm);
             }
         }
     }
-}
-impl AppStateAction {
     fn cursor_jump(&self) -> Option<CursorJump> {
         return match self {
             AppStateAction::EditCell {
@@ -390,6 +380,7 @@ pub struct AppState {
     undo_stack: UndoStack<AppStateAction>,
     cursor_jump: Option<CursorJump>,
     has_changes: bool,
+    saved_position: u64,
     notified_at: Instant,
     time: Duration,
     pending_dialogs: Vec<Dialog>,
@@ -421,6 +412,7 @@ impl AppState {
             notified_at: Instant::now(),
             theme,
             has_changes: false,
+            saved_position: 0,
             exit_requested: false,
             active_sequence_index: 0,
             active_port: None,
@@ -568,15 +560,12 @@ impl AppState {
             .unwrap();
     }
     pub fn active_pattern_mut(&mut self) -> &mut Pattern {
+        self.has_changes = true;
         return self.pattern_mut(self.active_pattern);
     }
     fn pattern_mut(&mut self, id: PatternId) -> &mut Pattern {
         self.changed_patterns.insert(id);
-        return self
-            .project_mut()
-            .patterns
-            .get_pattern_by_id_mut(id)
-            .unwrap();
+        return self.project.patterns.get_pattern_by_id_mut(id).unwrap();
     }
     pub fn copy_buffers_and_active_pattern(&mut self) -> (&mut CopyBuffers, &Pattern) {
         let pattern = self
@@ -595,13 +584,19 @@ impl AppState {
             .unwrap();
         return (&mut self.copy_buffers, pattern);
     }
+    fn with_history<R>(
+        &mut self,
+        f: impl FnOnce(&mut UndoStack<AppStateAction>, &mut Self) -> R,
+    ) -> R {
+        let mut history = std::mem::take(&mut self.undo_stack);
+        let result = f(&mut history, self);
+        self.undo_stack = history;
+        return result;
+    }
     fn track_and_do(&mut self, action: AppStateAction) {
-        let mut undo_stack = std::mem::take(&mut self.undo_stack);
-        undo_stack.track_and_do(self, action);
-        self.undo_stack = undo_stack;
+        self.with_history(|history, state| history.track_and_do(state, action));
     }
     fn track(&mut self, action: AppStateAction) {
-        self.has_changes = true;
         self.undo_stack.track(action);
     }
     pub fn can_undo(&self) -> bool {
@@ -611,19 +606,18 @@ impl AppState {
         return self.undo_stack.can_redo();
     }
     pub fn undo(&mut self) -> bool {
-        let mut undo_stack = std::mem::take(&mut self.undo_stack);
-        let jump = undo_stack.undo(self).map(AppStateAction::cursor_jump);
-        self.undo_stack = undo_stack;
-        return self.jump_after_history(jump);
+        let undone = self
+            .with_history(|history, state| history.undo(state).map(AppStateAction::cursor_jump));
+        let Some(jump) = undone else {
+            return false;
+        };
+        self.cursor_jump = jump;
+        return true;
     }
     pub fn redo(&mut self) -> bool {
-        let mut undo_stack = std::mem::take(&mut self.undo_stack);
-        let jump = undo_stack.redo(self).map(AppStateAction::cursor_jump);
-        self.undo_stack = undo_stack;
-        return self.jump_after_history(jump);
-    }
-    fn jump_after_history(&mut self, jump: Option<Option<CursorJump>>) -> bool {
-        let Some(jump) = jump else {
+        let redone = self
+            .with_history(|history, state| history.redo(state).map(AppStateAction::cursor_jump));
+        let Some(jump) = redone else {
             return false;
         };
         self.cursor_jump = jump;
@@ -642,16 +636,11 @@ impl AppState {
         let previous_cells = pattern.read_block(block);
         let result = edit(buffers, pattern);
         let new_cells = pattern.read_block(block);
-        if !previous_cells
-            .iter()
-            .map(|r| &r.tracks)
-            .eq(new_cells.iter().map(|r| &r.tracks))
-        {
+        if !pattern::same_cells(&previous_cells, &new_cells) {
             self.track(AppStateAction::EditBlock {
                 pattern: self.active_pattern,
                 block,
-                previous_cells,
-                new_cells,
+                other_cells: previous_cells,
             });
         }
         return result;
@@ -661,11 +650,9 @@ impl AppState {
         let previous = pattern.clone();
         let result = edit(buffers, pattern);
         if !previous.same_content(pattern) {
-            let new = pattern.clone();
             self.track(AppStateAction::EditPattern {
                 pattern: self.active_pattern,
-                previous,
-                new,
+                other: previous,
             });
         }
         return result;
@@ -743,6 +730,7 @@ impl AppState {
     pub fn save_project(&mut self, path: PathBuf) -> Result<()> {
         self.project.save(path.clone())?;
         self.has_changes = false;
+        self.saved_position = self.undo_stack.position();
         self.project_path = Some(path);
         self.notify("SAVED");
         return Ok(());
@@ -978,7 +966,7 @@ impl AppState {
         self.engine.set_global_volume(channel, vol);
     }
     pub fn is_saved(&self) -> bool {
-        return !self.has_changes;
+        return !self.has_changes && self.saved_position == self.undo_stack.position();
     }
 }
 pub struct TrackCache {
