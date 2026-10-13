@@ -32,6 +32,8 @@ pub enum MainAction {
     SaveAs,
     PlayPattern,
     PlaySong,
+    Undo,
+    Redo,
     Help,
 }
 
@@ -54,6 +56,8 @@ impl MainView {
                     MainAction::PlayPattern,
                     "Play PTN",
                 )
+                .bind(Key::ctrl('z'), MainAction::Undo, "Undo")
+                .bind(Key::ctrl('y'), MainAction::Redo, "Redo")
                 .bind(Key::ctrl('s'), MainAction::Save, "Save")
                 .bind(
                     Key::new(KeyCode::Char('s'), KeyModifiers::ALT),
@@ -103,6 +107,16 @@ impl KeyActions for MainView {
             MainAction::SaveAs => request_save_as(state),
             MainAction::PlayPattern => state.play_pattern(state.active_pattern),
             MainAction::PlaySong => state.play_song(state.active_sequence_index),
+            MainAction::Undo => {
+                if !state.undo() {
+                    state.notify("NO UNDO");
+                }
+            }
+            MainAction::Redo => {
+                if !state.redo() {
+                    state.notify("NO REDO");
+                }
+            }
             MainAction::Help => state.request_help(),
         }
         return Ok(());
@@ -115,6 +129,8 @@ impl KeyActions for MainView {
             MainAction::SaveAs => "Save project as",
             MainAction::PlayPattern => "Play the current pattern",
             MainAction::PlaySong => "Play the song from the current sequence position",
+            MainAction::Undo => "Undo the last edit",
+            MainAction::Redo => "Redo the last undone edit",
             MainAction::Help => "Show all keybindings",
         };
     }

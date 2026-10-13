@@ -752,7 +752,12 @@ mod tests {
         let mut parts = text.split(' ');
         let kind = match parts.next().unwrap() {
             "===" => NoteKind::Off,
-            pitch => NoteKind::On(NotePitch::from_string(pitch).unwrap()),
+            pitch => NoteKind::On(
+                (NotePitch::MIN..=NotePitch::MAX)
+                    .map(NotePitch)
+                    .find(|p| p.to_string() == pitch)
+                    .unwrap(),
+            ),
         };
         let instrument = parts.next().map(|i| u8::from_str_radix(i, 16).unwrap());
         let volume = parts

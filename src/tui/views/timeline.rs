@@ -281,19 +281,34 @@ fn open_paste_overflow_dialog(state: &mut AppState, row_count: u16, overflow_len
     )
     .width(60)
     .on_submit(move |state, result| {
-        let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-        match result.choice("action") {
-            Some(0) => {
+        let set_length = match result.choice("action") {
+            Some(0) => true,
+            Some(1) => false,
+            _ => return Ok(()),
+        };
+        state.edit_pattern(|buffers, pattern| {
+            if set_length {
                 pattern.set_length(buffer_length);
-                buffers.paste_pattern_truncated(pattern);
             }
-            Some(1) => buffers.paste_pattern_truncated(pattern),
-            _ => {}
-        }
+            buffers.paste_pattern_truncated(pattern);
+        });
         state.notify("PTN PASTE");
         return Ok(());
     });
     state.open_dialog(dialog);
+}
+
+fn rows_from(state: &AppState, track: u8, width: u8, row: u8) -> pattern::Block {
+    return pattern::Block {
+        track,
+        width,
+        row,
+        height: state.active_pattern().row_count - row as u16,
+    };
+}
+
+fn all_tracks_from(state: &AppState, row: u8) -> pattern::Block {
+    return rows_from(state, 0, state.active_pattern().track_count, row);
 }
 
 /// The track an Alt+letter press jumps to, if it is one of `TRACK_JUMP_KEYS`.
@@ -399,9 +414,9 @@ impl TimeLineView {
             }),
         };
         let instrument = (!all_instruments).then_some(state.active_instrument);
-        state
-            .active_pattern_mut()
-            .transpose(block, instrument, delta);
+        state.edit_block(block, |_, pattern| {
+            pattern.transpose(block, instrument, delta)
+        });
         for row in block.rows() {
             self.refresh_row(state, row);
         }
@@ -507,15 +522,7 @@ impl KeyActions for TimeLineView {
                     state.engine.release_note(self.track_index as usize);
                     return Ok(());
                 }
-                let row = self.row_index as usize;
-                let track = self.track_index as usize;
-                let pattern = state.active_pattern_mut();
-                let Some(mut note) = pattern.get_event(row, track).copied() else {
-                    return Ok(());
-                };
-                note.kind = NoteKind::Off;
-                pattern.set_event(row, track, note);
-                self.refresh_row_and_advance(state, row);
+                self.edit_and_advance(state, |note| note.kind = NoteKind::Off);
             }
             TimelineAction::DeleteAtCursor => {
                 let on_volume = matches!(
@@ -546,8 +553,10 @@ impl KeyActions for TimeLineView {
                 let Some(row) = self.row_index.checked_sub(1) else {
                     return Ok(());
                 };
-                let track = self.track_index as usize;
-                state.active_pattern_mut().delete_event(row as usize, track);
+                let track = self.track_index;
+                state.edit_block(rows_from(state, track, 1, row), |_, pattern| {
+                    pattern.delete_event(row as usize, track as usize)
+                });
                 self.refresh_rows_from(state, row as usize);
                 self.row_index = row;
             }
@@ -555,24 +564,30 @@ impl KeyActions for TimeLineView {
                 let Some(row) = self.row_index.checked_sub(1) else {
                     return Ok(());
                 };
-                state.active_pattern_mut().delete_line(row as usize);
+                state.edit_block(all_tracks_from(state, row), |_, pattern| {
+                    pattern.delete_line(row as usize)
+                });
                 self.refresh_rows_from(state, row as usize);
                 self.row_index = row;
             }
             TimelineAction::InsertNote => {
-                let (row, track) = (self.row_index as usize, self.track_index as usize);
-                state.active_pattern_mut().insert_event(row, track);
-                self.refresh_rows_from(state, row);
+                let (row, track) = (self.row_index, self.track_index);
+                state.edit_block(rows_from(state, track, 1, row), |_, pattern| {
+                    pattern.insert_event(row as usize, track as usize)
+                });
+                self.refresh_rows_from(state, row as usize);
             }
             TimelineAction::InsertLine => {
-                let row = self.row_index as usize;
-                state.active_pattern_mut().insert_line(row);
-                self.refresh_rows_from(state, row);
+                let row = self.row_index;
+                state.edit_block(all_tracks_from(state, row), |_, pattern| {
+                    pattern.insert_line(row as usize)
+                });
+                self.refresh_rows_from(state, row as usize);
             }
             TimelineAction::CutTrack => {
                 let track = self.track_index;
-                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                buffers.cut_track(pattern, track);
+                let block = state.active_pattern().track_block(track);
+                state.edit_block(block, |buffers, pattern| buffers.cut_track(pattern, track));
                 self.refresh_rows_from(state, 0);
                 state.notify("TRCK CUT");
             }
@@ -583,14 +598,16 @@ impl KeyActions for TimeLineView {
             }
             TimelineAction::PasteTrack => {
                 let track = self.track_index;
-                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                buffers.paste_track(pattern, track);
+                let block = state.active_pattern().track_block(track);
+                state.edit_block(block, |buffers, pattern| {
+                    buffers.paste_track(pattern, track)
+                });
                 self.refresh_rows_from(state, 0);
                 state.notify("TRCK PASTE");
             }
             TimelineAction::CutPattern => {
-                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                buffers.cut_pattern(pattern);
+                let block = state.active_pattern().block();
+                state.edit_block(block, |buffers, pattern| buffers.cut_pattern(pattern));
                 self.refresh_rows_from(state, 0);
                 state.notify("PTN CUT");
             }
@@ -600,9 +617,9 @@ impl KeyActions for TimeLineView {
                 state.notify("PTN COPY");
             }
             TimelineAction::PastePattern => {
-                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                let row_count = pattern.row_count;
-                match buffers.paste_pattern(pattern) {
+                let block = state.active_pattern().block();
+                let row_count = block.height;
+                match state.edit_block(block, |buffers, pattern| buffers.paste_pattern(pattern)) {
                     Err(MTrakError::PatternPasteOverflow { overflow_length }) => {
                         open_paste_overflow_dialog(state, row_count, overflow_length);
                     }
@@ -623,8 +640,7 @@ impl KeyActions for TimeLineView {
                 let Some(block) = self.marked_block(state) else {
                     return Ok(());
                 };
-                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                buffers.cut_block(pattern, block);
+                state.edit_block(block, |buffers, pattern| buffers.cut_block(pattern, block));
                 self.block_anchor = None;
                 self.refresh_rows_from(state, 0);
 
@@ -640,8 +656,10 @@ impl KeyActions for TimeLineView {
             }
             TimelineAction::PasteBlock => {
                 let (track, row) = (self.track_index, self.row_index);
-                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                buffers.paste_block(pattern, track, row);
+                let width = state.active_pattern().track_count - track;
+                state.edit_block(rows_from(state, track, width, row), |buffers, pattern| {
+                    buffers.paste_block(pattern, track, row)
+                });
                 self.block_anchor = None;
                 self.refresh_rows_from(state, 0);
                 state.notify("BLCK PASTE");

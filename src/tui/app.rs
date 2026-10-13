@@ -20,7 +20,7 @@ use crate::{
         effect::CommandKind,
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VOLUME_MAX},
         note::{Note, NoteKind, NotePitch},
-        pattern::{Pattern, PatternId},
+        pattern::{Block, Pattern, PatternId, PatternRow},
         project::{Project, SequenceRow},
     },
     engine::{engine::PlayMode, handle::EngineHandle},
@@ -35,6 +35,7 @@ use crate::{
         },
         glyphs,
         theme::Theme,
+        undo::{UndoAction, UndoStack},
         views::{
             file_browser::{FileBrowser, Submit},
             keybindings,
@@ -193,6 +194,128 @@ pub struct ChannelHit {
     pub velocity: u8,
 }
 
+enum AppStateAction {
+    EditCell {
+        pattern: PatternId,
+        row: usize,
+        track: usize,
+        previous_cell: Note,
+        new_cell: Note,
+    },
+    EditBlock {
+        pattern: PatternId,
+        block: Block,
+        previous_cells: Vec<PatternRow>,
+        new_cells: Vec<PatternRow>,
+    },
+    EditPattern {
+        pattern: PatternId,
+        previous: Pattern,
+        new: Pattern,
+    },
+    EditSequence {
+        previous: Vec<SequenceRow>,
+        new: Vec<SequenceRow>,
+    },
+    SetSpeed {
+        pattern: PatternId,
+        previous: u8,
+        new: u8,
+    },
+    ChangeLength {
+        pattern: PatternId,
+        previous: u16,
+        new: u16,
+        removed_rows: Vec<PatternRow>,
+    },
+    SetBpm {
+        previous: u8,
+        new: u8,
+    },
+}
+impl AppStateAction {
+    fn apply(&self, state: &mut AppState, undo: bool) {
+        match self {
+            AppStateAction::EditCell {
+                pattern,
+                row,
+                track,
+                previous_cell,
+                new_cell,
+            } => {
+                let cell = if undo { previous_cell } else { new_cell };
+                state.active_pattern = *pattern;
+                state.pattern_mut(*pattern).set_event(*row, *track, *cell);
+            }
+            AppStateAction::EditBlock {
+                pattern,
+                block,
+                previous_cells,
+                new_cells,
+            } => {
+                let cells = if undo { previous_cells } else { new_cells };
+                state.active_pattern = *pattern;
+                state.pattern_mut(*pattern).write_block(*block, cells);
+            }
+            AppStateAction::EditPattern {
+                pattern,
+                previous,
+                new,
+            } => {
+                let content = if undo { previous } else { new };
+                state.active_pattern = *pattern;
+                state.pattern_mut(*pattern).copy_content_from(content);
+            }
+            AppStateAction::EditSequence { previous, new } => {
+                let sequence = if undo { previous } else { new };
+                state.sequence_changed = true;
+                state.project_mut().sequence = sequence.clone();
+                state.active_sequence_index = state.active_sequence_index.min(sequence.len() - 1);
+            }
+            AppStateAction::SetSpeed {
+                pattern,
+                previous,
+                new,
+            } => {
+                state.active_pattern = *pattern;
+                state.pattern_mut(*pattern).ticks_per_line = if undo { *previous } else { *new };
+            }
+            AppStateAction::ChangeLength {
+                pattern,
+                previous,
+                new,
+                removed_rows,
+            } => {
+                state.active_pattern = *pattern;
+                let target = state.pattern_mut(*pattern);
+                if !undo {
+                    target.set_length(*new);
+                    return;
+                }
+                target.set_length(*previous);
+                for (row, removed) in target.rows.iter_mut().skip(*new as usize).zip(removed_rows) {
+                    row.tracks = removed.tracks.clone();
+                }
+            }
+            AppStateAction::SetBpm { previous, new } => {
+                let bpm = if undo { *previous } else { *new };
+                state.project_mut().bpm = bpm;
+                state.engine.set_bpm(bpm);
+            }
+        }
+    }
+}
+impl UndoAction for AppStateAction {
+    type State = AppState;
+
+    fn do_action(&mut self, state: &mut Self::State) {
+        self.apply(state, false);
+    }
+
+    fn undo_action(&mut self, state: &mut Self::State) {
+        self.apply(state, true);
+    }
+}
 pub struct AppState {
     pub config: Config,
     project: Project,
@@ -215,6 +338,7 @@ pub struct AppState {
     pub project_path: Option<PathBuf>,
     pub copy_buffers: CopyBuffers,
     pub notification: Option<String>,
+    undo_stack: UndoStack<AppStateAction>,
     has_changes: bool,
     notified_at: Instant,
     time: Duration,
@@ -267,6 +391,7 @@ impl AppState {
             save_file_request: None,
             errors,
             copy_buffers: CopyBuffers::new(),
+            undo_stack: UndoStack::new(),
             help_requested: false,
         };
         for (channel, instrument) in state.project.instruments.iter().enumerate() {
@@ -392,8 +517,10 @@ impl AppState {
             .unwrap();
     }
     pub fn active_pattern_mut(&mut self) -> &mut Pattern {
-        self.changed_patterns.insert(self.active_pattern);
-        let id = self.active_pattern;
+        return self.pattern_mut(self.active_pattern);
+    }
+    fn pattern_mut(&mut self, id: PatternId) -> &mut Pattern {
+        self.changed_patterns.insert(id);
         return self
             .project_mut()
             .patterns
@@ -408,15 +535,119 @@ impl AppState {
             .unwrap();
         return (&mut self.copy_buffers, pattern);
     }
-    pub fn copy_buffers_and_active_pattern_mut(&mut self) -> (&mut CopyBuffers, &mut Pattern) {
+    fn copy_buffers_and_active_pattern_mut(&mut self) -> (&mut CopyBuffers, &mut Pattern) {
         self.changed_patterns.insert(self.active_pattern);
-        self.has_changes = true;
         let pattern = self
             .project
             .patterns
             .get_pattern_by_id_mut(self.active_pattern)
             .unwrap();
         return (&mut self.copy_buffers, pattern);
+    }
+    fn track_and_do(&mut self, action: AppStateAction) {
+        let mut undo_stack = std::mem::take(&mut self.undo_stack);
+        undo_stack.track_and_do(self, action);
+        self.undo_stack = undo_stack;
+    }
+    fn track(&mut self, action: AppStateAction) {
+        self.has_changes = true;
+        self.undo_stack.track(action);
+    }
+    pub fn undo(&mut self) -> bool {
+        let mut undo_stack = std::mem::take(&mut self.undo_stack);
+        let undone = undo_stack.undo(self);
+        self.undo_stack = undo_stack;
+        return undone;
+    }
+    pub fn redo(&mut self) -> bool {
+        let mut undo_stack = std::mem::take(&mut self.undo_stack);
+        let redone = undo_stack.redo(self);
+        self.undo_stack = undo_stack;
+        return redone;
+    }
+    /// `block` has to cover every cell `edit` changes, or undo won't restore the rest.
+    pub fn edit_block<R>(
+        &mut self,
+        block: Block,
+        edit: impl FnOnce(&mut CopyBuffers, &mut Pattern) -> R,
+    ) -> R {
+        let (buffers, pattern) = self.copy_buffers_and_active_pattern_mut();
+        let previous_cells = pattern.read_block(block);
+        let result = edit(buffers, pattern);
+        let new_cells = pattern.read_block(block);
+        if !previous_cells
+            .iter()
+            .map(|r| &r.tracks)
+            .eq(new_cells.iter().map(|r| &r.tracks))
+        {
+            self.track(AppStateAction::EditBlock {
+                pattern: self.active_pattern,
+                block,
+                previous_cells,
+                new_cells,
+            });
+        }
+        return result;
+    }
+    pub fn edit_pattern<R>(&mut self, edit: impl FnOnce(&mut CopyBuffers, &mut Pattern) -> R) -> R {
+        let (buffers, pattern) = self.copy_buffers_and_active_pattern_mut();
+        let previous = pattern.clone();
+        let result = edit(buffers, pattern);
+        if !previous.same_content(pattern) {
+            let new = pattern.clone();
+            self.track(AppStateAction::EditPattern {
+                pattern: self.active_pattern,
+                previous,
+                new,
+            });
+        }
+        return result;
+    }
+    pub fn change_speed(&mut self, increase: bool) {
+        let (_, pattern) = self.copy_buffers_and_active_pattern_mut();
+        let previous = pattern.ticks_per_line;
+        if increase {
+            pattern.increase_ticks_per_line();
+        } else {
+            pattern.decrease_ticks_per_line();
+        }
+        let new = pattern.ticks_per_line;
+        if new != previous {
+            self.track(AppStateAction::SetSpeed {
+                pattern: self.active_pattern,
+                previous,
+                new,
+            });
+        }
+    }
+    pub fn change_length(&mut self, increase: bool) {
+        let (_, pattern) = self.copy_buffers_and_active_pattern_mut();
+        let previous = pattern.row_count;
+        let removed_rows = if increase {
+            pattern.increase_length();
+            Vec::new()
+        } else {
+            pattern.decrease_length()
+        };
+        let new = pattern.row_count;
+        if new != previous {
+            self.track(AppStateAction::ChangeLength {
+                pattern: self.active_pattern,
+                previous,
+                new,
+                removed_rows,
+            });
+        }
+    }
+    fn edit_sequence<R>(&mut self, edit: impl FnOnce(&mut Project) -> R) -> R {
+        let previous = self.project.sequence.clone();
+        let result = edit(&mut self.project);
+        if self.project.sequence != previous {
+            self.sequence_changed = true;
+            let new = self.project.sequence.clone();
+            self.track(AppStateAction::EditSequence { previous, new });
+        }
+        return result;
     }
     pub fn open_dialog(&mut self, dialog: Dialog) {
         self.pending_dialogs.push(dialog);
@@ -497,26 +728,32 @@ impl AppState {
     }
 
     pub fn change_sequence_pattern(&mut self, index: usize, increase: bool) {
-        let row = self.sequence_row_mut(index);
-        let id = if increase {
-            row.increate_pattern()
-        } else {
-            row.decrease_pattern()
-        };
+        let id = self.edit_sequence(|project| {
+            let row = &mut project.sequence[index];
+            if increase {
+                row.increate_pattern()
+            } else {
+                row.decrease_pattern()
+            }
+        });
         self.ensure_pattern(id);
+    }
+    pub fn change_sequence_repeats(&mut self, index: usize, increase: bool) {
+        self.edit_sequence(|project| {
+            let row = &mut project.sequence[index];
+            if increase {
+                row.increase_repeats();
+            } else {
+                row.decrease_repeats();
+            }
+        });
     }
 
     pub fn insert_sequence(&mut self, index: usize, pattern_id: PatternId) {
-        self.sequence_changed = true;
-        self.project_mut().insert_sequence(index, pattern_id);
+        self.edit_sequence(|project| project.insert_sequence(index, pattern_id));
     }
     pub fn delete_sequence(&mut self, index: usize) -> usize {
-        self.sequence_changed = true;
-        return self.project_mut().delete_sequence(index);
-    }
-    pub fn sequence_row_mut(&mut self, index: usize) -> &mut SequenceRow {
-        self.sequence_changed = true;
-        return &mut self.project_mut().sequence[index];
+        return self.edit_sequence(|project| project.delete_sequence(index));
     }
 
     pub fn play_song(&mut self, sequence_index: usize) {
@@ -575,11 +812,10 @@ impl AppState {
     ) -> Option<NotePitch> {
         let pitch = self.play_key(track, key)?;
         let instrument = self.active_instrument;
-        let pattern = self.active_pattern_mut();
-        let mut note = pattern.get_event(row, track).copied()?;
-        note.kind = NoteKind::On(pitch);
-        note.instrument_id = note.instrument_id.or(Some(instrument));
-        pattern.set_event(row, track, note);
+        self.edit_event(row, track, |note| {
+            note.kind = NoteKind::On(pitch);
+            note.instrument_id = note.instrument_id.or(Some(instrument));
+        });
         return Some(pitch);
     }
     pub fn play_key(&self, track: usize, key: event::KeyEvent) -> Option<NotePitch> {
@@ -599,38 +835,37 @@ impl AppState {
 
     /// Applies `edit` to the event at `row` in `track` of the active pattern.
     pub fn edit_event(&mut self, row: usize, track: usize, edit: impl FnOnce(&mut Note)) {
-        let pattern = self.active_pattern_mut();
-        let Some(mut note) = pattern.get_event(row, track).copied() else {
+        let Some(&previous_cell) = self.active_pattern().get_event(row, track) else {
             return;
         };
-        edit(&mut note);
-        pattern.set_event(row, track, note);
+        let mut new_cell = previous_cell;
+        edit(&mut new_cell);
+        if new_cell == previous_cell {
+            return;
+        }
+        self.track_and_do(AppStateAction::EditCell {
+            pattern: self.active_pattern,
+            row,
+            track,
+            previous_cell,
+            new_cell,
+        });
     }
 
     pub fn enter_instrument(&mut self, track_index: usize, row_index: usize, instrument: u8) {
         if instrument > MIDI_CHANNEL_MAX {
             return;
         };
-        let mut current_event = *self
-            .active_pattern()
-            .get_event(row_index, track_index)
-            .unwrap();
-        current_event.instrument_id = Some(instrument);
-        self.active_pattern_mut()
-            .set_event(row_index, track_index, current_event);
+        self.edit_event(row_index, track_index, |note| {
+            note.instrument_id = Some(instrument)
+        });
     }
 
     pub fn enter_volume(&mut self, track_index: usize, row_index: usize, volume: u8) {
         if volume > VOLUME_MAX {
             return;
         };
-        let mut current_event = *self
-            .active_pattern()
-            .get_event(row_index, track_index)
-            .unwrap();
-        current_event.velocity = Some(volume);
-        self.active_pattern_mut()
-            .set_event(row_index, track_index, current_event);
+        self.edit_event(row_index, track_index, |note| note.velocity = Some(volume));
     }
 
     pub fn enter_command(
@@ -639,26 +874,31 @@ impl AppState {
         row_index: usize,
         command: crate::data::effect::Command,
     ) {
-        let mut current_event = *self
-            .active_pattern()
-            .get_event(row_index, track_index)
-            .unwrap();
-        current_event.command = command;
-        if current_event.command.kind != CommandKind::None {
-            current_event.instrument_id = Some(self.active_instrument);
-        }
-        self.active_pattern_mut()
-            .set_event(row_index, track_index, current_event);
+        let instrument = self.active_instrument;
+        self.edit_event(row_index, track_index, |note| {
+            note.command = command;
+            if note.command.kind != CommandKind::None {
+                note.instrument_id = Some(instrument);
+            }
+        });
     }
 
     pub fn increase_bpm(&mut self) {
-        self.project_mut().bpm = self.project.bpm.saturating_add(1);
-        self.engine.set_bpm(self.project.bpm);
+        self.set_bpm(self.project.bpm.saturating_add(1));
     }
 
     pub fn decrease_bpm(&mut self) {
-        self.project_mut().bpm = self.project.bpm.saturating_sub(1).max(1);
-        self.engine.set_bpm(self.project.bpm);
+        self.set_bpm(self.project.bpm.saturating_sub(1).max(1));
+    }
+
+    fn set_bpm(&mut self, bpm: u8) {
+        if bpm == self.project.bpm {
+            return;
+        }
+        self.track_and_do(AppStateAction::SetBpm {
+            previous: self.project.bpm,
+            new: bpm,
+        });
     }
 
     pub fn set_global_velocity(&mut self, velocity: u8) {
@@ -717,23 +957,6 @@ impl<'a> TrackCache {
                 .insert(pattern_index, Self::build_rows(pattern));
         }
     }
-    pub fn update_all_dirty(&mut self, patterns: &[Pattern]) {
-        for (i, pattern) in patterns.iter().enumerate() {
-            for row_index in 0..pattern.row_count as usize {
-                let row = &pattern.rows[row_index];
-                if !row.dirty {
-                    continue;
-                }
-                self.patterns.get_mut(&i).unwrap()[row_index].tracks = row
-                    .tracks
-                    .iter()
-                    .map(|c| Line::from(c.to_string()))
-                    .collect::<Vec<Line<'static>>>()
-                    .try_into()
-                    .unwrap();
-            }
-        }
-    }
     pub fn update_dirty(
         &mut self,
         project: &mut Project,
@@ -776,18 +999,6 @@ impl<'a> TrackCache {
             .iter()
             .map(|r| r.tracks[track_index].clone())
             .collect();
-    }
-    pub fn get_row_mut(
-        &'a mut self,
-        pattern_index: usize,
-        row_index: usize,
-    ) -> &'a mut TrackCacheRow {
-        return self
-            .patterns
-            .get_mut(&pattern_index)
-            .unwrap()
-            .get_mut(row_index)
-            .unwrap();
     }
 }
 

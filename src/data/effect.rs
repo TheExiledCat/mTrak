@@ -1,10 +1,9 @@
 use std::{fmt::Display, str::FromStr};
 
+use MidiCommand::*;
 use serde::{Deserialize, Serialize};
 
 use crate::error::MTrakError;
-pub const COMMAND_VALUE_MAX: u8 = u8::MAX;
-use MidiCommand::*;
 pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 8] = [
     ('S', SetCC),
     ('C', ChangeCC),
