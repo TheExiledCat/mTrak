@@ -1,5 +1,5 @@
 [package]
-name = "m_trak"
+name = "mtrak"
 version = "0.1.6"
 edition = "2024"
 rust-version = "1.85"
