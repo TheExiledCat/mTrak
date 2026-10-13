@@ -123,11 +123,28 @@ fn replace_exe(binary: &[u8]) -> io::Result<()> {
 
 #[cfg(windows)]
 fn replace_exe(binary: &[u8]) -> io::Result<()> {
-    let new_exe = env::temp_dir().join(format!("{}-update.exe", COMMAND));
-    fs::write(&new_exe, binary)?;
-    let result = self_replace::self_replace(&new_exe);
-    let _ = fs::remove_file(&new_exe);
-    return result;
+    let exe = env::current_exe()?;
+    let old = old_exe(&exe);
+    let _ = fs::remove_file(&old);
+    fs::rename(&exe, &old)?;
+    if let Err(e) = fs::write(&exe, binary) {
+        let _ = fs::remove_file(&exe);
+        let _ = fs::rename(&old, &exe);
+        return Err(e);
+    }
+    return Ok(());
+}
+
+#[cfg(windows)]
+fn old_exe(exe: &std::path::Path) -> std::path::PathBuf {
+    return exe.with_extension("old.exe");
+}
+
+pub fn remove_old_exe() {
+    #[cfg(windows)]
+    if let Ok(exe) = env::current_exe() {
+        let _ = fs::remove_file(old_exe(&exe));
+    }
 }
 
 fn download(agent: &Agent, url: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
