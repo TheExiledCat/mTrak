@@ -106,14 +106,16 @@ stable and newer versions will open older projects.
 Planned features, in no particular order:
 
 - [x] **File browser and global saving**
-- [ ] **Undo system**
+- [X] **Undo system**
 - [ ] **MIDI file import/export**
 - [ ] **MIDI input**
 - [X] **MIDI clock out**: send clock and start/stop to sync external sequencers, drum machines and arpeggiators
 - [ ] **Multiple output ports**: map instruments to different MIDI devices, not just channels on one port
 - [ ] **Program change and bank select per instrument**, so loading a project restores the right patches
 - [ ] **Panic button**: all notes off and reset controllers, for stuck notes
-- [ ] **Live record**: play notes in while the song is playing, for beatmaking
+- [ ] **Live record**:
+    - [ ] play notes in while the song is playing, for beatmaking
+    - [ ] send metronome to channel
 - [ ] **Live edit**:
     - [X] row lock edit: option to stop the cursor following the playback row, so you can edit a pattern while it plays (handy for loops)
     - [ ] block loop: loop the currently marked block
