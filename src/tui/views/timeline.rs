@@ -7,6 +7,7 @@ use ratatui::{
     buffer::Buffer,
     crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers},
     layout::{Constraint, Layout, Rect},
+    style::Style,
     symbols::line,
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph, Widget},
@@ -22,7 +23,7 @@ use crate::{
     engine::engine::PlayMode,
     error::{MTrakError, Result},
     tui::{
-        app::{AppState, TrackCache, column_index_to_note_string_index},
+        app::{AppState, CursorJump, TrackCache, column_index_to_note_string_index},
         constants::{self, NOTE_OFF_KEY},
         framework::{
             core_extensions::Boxed,
@@ -84,6 +85,8 @@ pub enum TimelineAction {
         all_instruments: bool,
         delta: i8,
     },
+
+    RowLock,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -213,6 +216,7 @@ fn normal_keymap() -> Keymap<TimelineAction> {
     return transpose_keys(clipboard_keys(movement_keys(
         Keymap::new()
             .bind(Key::char(' '), ToggleEdit, "Edit")
+            .bind(Key::ctrl('l'), RowLock, "Lock")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
             .bind(Key::char(NOTE_OFF_KEY), NoteOff, "Off"),
     )));
@@ -223,6 +227,7 @@ fn edit_keymap() -> Keymap<TimelineAction> {
     return transpose_keys(clipboard_keys(movement_keys(
         Keymap::new()
             .bind(Key::char(' '), ToggleEdit, "Edit")
+            .bind(Key::ctrl('l'), RowLock, "Lock")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
             .bind(Key::char(NOTE_OFF_KEY), NoteOff, "Off")
             .bind(Key::plain(KeyCode::Delete), DeleteAtCursor, "Del")
@@ -276,19 +281,34 @@ fn open_paste_overflow_dialog(state: &mut AppState, row_count: u16, overflow_len
     )
     .width(60)
     .on_submit(move |state, result| {
-        let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-        match result.choice("action") {
-            Some(0) => {
+        let set_length = match result.choice("action") {
+            Some(0) => true,
+            Some(1) => false,
+            _ => return Ok(()),
+        };
+        state.edit_pattern(|buffers, pattern| {
+            if set_length {
                 pattern.set_length(buffer_length);
-                buffers.paste_pattern_truncated(pattern);
             }
-            Some(1) => buffers.paste_pattern_truncated(pattern),
-            _ => {}
-        }
+            buffers.paste_pattern_truncated(pattern);
+        });
         state.notify("PTN PASTE");
         return Ok(());
     });
     state.open_dialog(dialog);
+}
+
+fn rows_from(state: &AppState, track: u8, width: u8, row: u8) -> pattern::Block {
+    return pattern::Block {
+        track,
+        width,
+        row,
+        height: state.active_pattern().row_count - row as u16,
+    };
+}
+
+fn all_tracks_from(state: &AppState, row: u8) -> pattern::Block {
+    return rows_from(state, 0, state.active_pattern().track_count, row);
 }
 
 /// The track an Alt+letter press jumps to, if it is one of `TRACK_JUMP_KEYS`.
@@ -327,41 +347,35 @@ fn scrolled_to_middle<'a>(lines: Vec<Line<'a>>, selected: u8, height: u16) -> Pa
         .collect();
     return Paragraph::new(padded).scroll((selected as u16, 0));
 }
+#[derive(PartialEq)]
 enum TimelineColumnLocation {
     Note,
     Instrument,
-    Volume { is_on_first_column: bool },
-    Effect { column_offset: u8 },
+    Volume,
+    Effect,
 }
 impl TimelineColumnLocation {
     pub fn from_column_index(index: u8) -> Self {
         match index {
             0 => TimelineColumnLocation::Note,
             1 => TimelineColumnLocation::Instrument,
-            2 => TimelineColumnLocation::Volume {
-                is_on_first_column: true,
-            },
-            3 => TimelineColumnLocation::Volume {
-                is_on_first_column: false,
-            },
-            4..=6 => TimelineColumnLocation::Effect {
-                column_offset: index - 4,
-            },
+            2 | 3 => TimelineColumnLocation::Volume,
+            4..=6 => TimelineColumnLocation::Effect,
             _ => panic!(),
         }
     }
 }
 pub struct TimeLineView {
     /// render cache for storing pattern tracks efficiently, maps pattern IDs to tracks
-    pub track_cache: RefCell<TrackCache>,
-    pub row_index: u8,
-    pub column_index: u8,
-    pub track_index: u8,
-    pub is_editing: bool,
-    pub row_number_lookup: String,
+    track_cache: RefCell<TrackCache>,
+    row_index: u8,
+    column_index: u8,
+    track_index: u8,
+    is_editing: bool,
     block_anchor: Option<(PatternId, u8, u8)>,
     normal_keys: Keymap<TimelineAction>,
     edit_keys: Keymap<TimelineAction>,
+    row_lock: bool,
 }
 impl TimeLineView {
     pub fn new(state: &AppState) -> Self {
@@ -373,11 +387,28 @@ impl TimeLineView {
             track_index: 0,
             column_index: 0,
             is_editing: false,
-            row_number_lookup: String::new(),
             block_anchor: None,
             normal_keys: normal_keymap(),
             edit_keys: edit_keymap(),
+            row_lock: false,
         };
+    }
+
+    fn jump_to(&mut self, jump: CursorJump) {
+        let block = jump.block;
+        self.row_index = self.row_index.clamp(
+            block.row,
+            (block.row as u16 + block.height.saturating_sub(1)) as u8,
+        );
+        self.track_index = self
+            .track_index
+            .clamp(block.track, block.track + block.width.saturating_sub(1));
+        if let Some(column) = jump.column
+            && TimelineColumnLocation::from_column_index(self.column_index)
+                != TimelineColumnLocation::from_column_index(column)
+        {
+            self.column_index = column;
+        }
     }
 
     fn transpose(
@@ -401,9 +432,9 @@ impl TimeLineView {
             }),
         };
         let instrument = (!all_instruments).then_some(state.active_instrument);
-        state
-            .active_pattern_mut()
-            .transpose(block, instrument, delta);
+        state.edit_block(block, |_, pattern| {
+            pattern.transpose(block, instrument, delta)
+        });
         for row in block.rows() {
             self.refresh_row(state, row);
         }
@@ -474,7 +505,7 @@ impl KeyActions for TimeLineView {
                 }
             }
             TimelineAction::ToggleEdit => {
-                if state.engine.status().play_mode() == PlayMode::Paused {
+                if self.row_lock || state.engine.status().play_mode() == PlayMode::Paused {
                     self.is_editing = !self.is_editing;
                 } else {
                     state.engine.stop();
@@ -483,6 +514,8 @@ impl KeyActions for TimeLineView {
             TimelineAction::ToggleRecord => {
                 if state.engine.status().play_mode() == PlayMode::Paused {
                     state.recording = !state.recording;
+                } else if self.row_lock {
+                    state.engine.stop();
                 }
             }
             TimelineAction::Jump16Down => {
@@ -507,20 +540,12 @@ impl KeyActions for TimeLineView {
                     state.engine.release_note(self.track_index as usize);
                     return Ok(());
                 }
-                let row = self.row_index as usize;
-                let track = self.track_index as usize;
-                let pattern = state.active_pattern_mut();
-                let Some(mut note) = pattern.get_event(row, track).copied() else {
-                    return Ok(());
-                };
-                note.kind = NoteKind::Off;
-                pattern.set_event(row, track, note);
-                self.refresh_row_and_advance(state, row);
+                self.edit_and_advance(state, |note| note.kind = NoteKind::Off);
             }
             TimelineAction::DeleteAtCursor => {
                 let on_volume = matches!(
                     TimelineColumnLocation::from_column_index(self.column_index),
-                    TimelineColumnLocation::Volume { .. }
+                    TimelineColumnLocation::Volume
                 );
                 self.edit_and_advance(state, |note| {
                     if on_volume {
@@ -546,8 +571,10 @@ impl KeyActions for TimeLineView {
                 let Some(row) = self.row_index.checked_sub(1) else {
                     return Ok(());
                 };
-                let track = self.track_index as usize;
-                state.active_pattern_mut().delete_event(row as usize, track);
+                let track = self.track_index;
+                state.edit_block(rows_from(state, track, 1, row), |_, pattern| {
+                    pattern.delete_event(row as usize, track as usize)
+                });
                 self.refresh_rows_from(state, row as usize);
                 self.row_index = row;
             }
@@ -555,24 +582,30 @@ impl KeyActions for TimeLineView {
                 let Some(row) = self.row_index.checked_sub(1) else {
                     return Ok(());
                 };
-                state.active_pattern_mut().delete_line(row as usize);
+                state.edit_block(all_tracks_from(state, row), |_, pattern| {
+                    pattern.delete_line(row as usize)
+                });
                 self.refresh_rows_from(state, row as usize);
                 self.row_index = row;
             }
             TimelineAction::InsertNote => {
-                let (row, track) = (self.row_index as usize, self.track_index as usize);
-                state.active_pattern_mut().insert_event(row, track);
-                self.refresh_rows_from(state, row);
+                let (row, track) = (self.row_index, self.track_index);
+                state.edit_block(rows_from(state, track, 1, row), |_, pattern| {
+                    pattern.insert_event(row as usize, track as usize)
+                });
+                self.refresh_rows_from(state, row as usize);
             }
             TimelineAction::InsertLine => {
-                let row = self.row_index as usize;
-                state.active_pattern_mut().insert_line(row);
-                self.refresh_rows_from(state, row);
+                let row = self.row_index;
+                state.edit_block(all_tracks_from(state, row), |_, pattern| {
+                    pattern.insert_line(row as usize)
+                });
+                self.refresh_rows_from(state, row as usize);
             }
             TimelineAction::CutTrack => {
                 let track = self.track_index;
-                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                buffers.cut_track(pattern, track);
+                let block = state.active_pattern().track_block(track);
+                state.edit_block(block, |buffers, pattern| buffers.cut_track(pattern, track));
                 self.refresh_rows_from(state, 0);
                 state.notify("TRCK CUT");
             }
@@ -583,14 +616,16 @@ impl KeyActions for TimeLineView {
             }
             TimelineAction::PasteTrack => {
                 let track = self.track_index;
-                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                buffers.paste_track(pattern, track);
+                let block = state.active_pattern().track_block(track);
+                state.edit_block(block, |buffers, pattern| {
+                    buffers.paste_track(pattern, track)
+                });
                 self.refresh_rows_from(state, 0);
                 state.notify("TRCK PASTE");
             }
             TimelineAction::CutPattern => {
-                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                buffers.cut_pattern(pattern);
+                let block = state.active_pattern().block();
+                state.edit_block(block, |buffers, pattern| buffers.cut_pattern(pattern));
                 self.refresh_rows_from(state, 0);
                 state.notify("PTN CUT");
             }
@@ -600,9 +635,9 @@ impl KeyActions for TimeLineView {
                 state.notify("PTN COPY");
             }
             TimelineAction::PastePattern => {
-                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                let row_count = pattern.row_count;
-                match buffers.paste_pattern(pattern) {
+                let block = state.active_pattern().block();
+                let row_count = block.height;
+                match state.edit_block(block, |buffers, pattern| buffers.paste_pattern(pattern)) {
                     Err(MTrakError::PatternPasteOverflow { overflow_length }) => {
                         open_paste_overflow_dialog(state, row_count, overflow_length);
                     }
@@ -623,8 +658,7 @@ impl KeyActions for TimeLineView {
                 let Some(block) = self.marked_block(state) else {
                     return Ok(());
                 };
-                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                buffers.cut_block(pattern, block);
+                state.edit_block(block, |buffers, pattern| buffers.cut_block(pattern, block));
                 self.block_anchor = None;
                 self.refresh_rows_from(state, 0);
 
@@ -640,8 +674,10 @@ impl KeyActions for TimeLineView {
             }
             TimelineAction::PasteBlock => {
                 let (track, row) = (self.track_index, self.row_index);
-                let (buffers, pattern) = state.copy_buffers_and_active_pattern_mut();
-                buffers.paste_block(pattern, track, row);
+                let width = state.active_pattern().track_count - track;
+                state.edit_block(rows_from(state, track, width, row), |buffers, pattern| {
+                    buffers.paste_block(pattern, track, row)
+                });
                 self.block_anchor = None;
                 self.refresh_rows_from(state, 0);
                 state.notify("BLCK PASTE");
@@ -651,6 +687,12 @@ impl KeyActions for TimeLineView {
                 all_instruments,
                 delta,
             } => self.transpose(state, area, all_instruments, delta),
+            TimelineAction::RowLock => {
+                self.row_lock = !self.row_lock;
+                if self.row_lock {
+                    self.is_editing = true;
+                }
+            }
         }
         return Ok(());
     }
@@ -664,8 +706,8 @@ impl KeyActions for TimeLineView {
             NextTrack => "Next track",
             PrevColumn => "Move left a column",
             NextColumn => "Move right a column",
-            ToggleEdit => "Toggle edit mode, or stop playback",
-            ToggleRecord => "Toggle record mode",
+            ToggleEdit => "Toggle edit mode, or stop playback outside of row lock",
+            ToggleRecord => "Toggle record mode, or stop playback during row lock",
             Jump16Down => "Jump 16 rows down",
             Jump16Up => "Jump 16 rows up",
             JumpToFirstRow => "Jump to the first row",
@@ -690,6 +732,7 @@ impl KeyActions for TimeLineView {
             CutBlock => "Cut the marked block",
             CopyBlock => "Copy the marked block",
             PasteBlock => "Paste block at the cursor",
+            RowLock => "Enable row lock",
             Transpose {
                 area,
                 all_instruments,
@@ -826,12 +869,12 @@ impl TimeLineView {
                 };
                 self.enter_instrument(state, instrument)
             }
-            TimelineColumnLocation::Volume { .. } => {
+            TimelineColumnLocation::Volume => {
                 let high = column_index_to_note_string_index(2).unwrap();
                 let low = column_index_to_note_string_index(3).unwrap();
                 self.enter_volume(state, [chars[high], chars[low]])
             }
-            TimelineColumnLocation::Effect { .. } => {
+            TimelineColumnLocation::Effect => {
                 let kind = column_index_to_note_string_index(4).unwrap();
                 let val_high = column_index_to_note_string_index(5).unwrap();
                 let val_low = column_index_to_note_string_index(6).unwrap();
@@ -857,15 +900,15 @@ impl TimeLineView {
     /// Draws a horizontal line across the line numbers and tracks at `y`, joining the
     /// track borders, to mark where the pattern begins or ends.
     fn render_pattern_boundary_line(&self, state: &AppState, width: u16, y: u16, buf: &mut Buffer) {
-        let style = state.theme.pattern_start;
+        let style = state.theme.divider;
         Line::raw(repeat_n(line::HORIZONTAL, width as usize).collect::<String>())
             .style(style)
             .render(Rect::new(0, y, width, 1), buf);
     }
 
     fn render_mode_indicator(&self, state: &AppState, area: Rect, buf: &mut Buffer) {
-        let recording = state.theme.recording;
-        let spans = match state.engine.status().play_mode() {
+        let recording = state.theme.danger;
+        let mut spans = match state.engine.status().play_mode() {
             PlayMode::Song => vec![Span::styled("-- REC SONG --", recording)],
             PlayMode::SongLoop => vec![Span::raw("-- LOOP SONG --")],
             PlayMode::Pattern => vec![Span::styled("-- REC PTN --", recording)],
@@ -884,6 +927,9 @@ impl TimeLineView {
                 spans
             }
         };
+        if self.row_lock {
+            spans.push(Span::styled("-- LOCK --", recording));
+        }
         Line::from(spans).centered().render(area, buf);
     }
 
@@ -895,14 +941,18 @@ impl TimeLineView {
         area: Rect,
         buf: &mut Buffer,
     ) {
+        let playback_row = self.locked_playback_row(state).map(u16::from);
         let lines = (0..row_count)
             .map(|i| {
-                let mut style = state.theme.row_number;
+                let mut style = state.theme.gutter;
                 if i % 4 == 0 {
-                    style = style.patch(state.theme.beat_row_number);
+                    style = style.patch(state.theme.gutter_accent);
+                }
+                if Some(i) == playback_row {
+                    style = style.patch(state.theme.highlight_secondary);
                 }
                 if i == self.row_index as u16 {
-                    style = style.patch(state.theme.selected_row_number);
+                    style = style.patch(state.theme.gutter_active);
                 }
                 Line::raw(format!("{:02X}", i)).style(style)
             })
@@ -943,34 +993,62 @@ impl TimeLineView {
             if block.tracks().contains(&(track_index as usize)) {
                 let marked = block.rows();
                 for row in rows.iter_mut().take(marked.end).skip(marked.start) {
-                    *row = row.clone().patch_style(state.theme.marked_block);
+                    *row = row.clone().patch_style(state.theme.selection_subtle);
                 }
             }
         }
-        let selected_row = rows[self.row_index as usize].clone();
-        rows[self.row_index as usize] =
-            self.highlight_selected_row(state, track_index, selected_row);
+        if let Some(row) = self.locked_playback_row(state) {
+            let index = row as usize;
+            rows[index] = self.highlight_row(
+                state,
+                track_index,
+                row,
+                rows[index].clone(),
+                state.theme.highlight_secondary,
+            );
+        }
+        let index = self.row_index as usize;
+        rows[index] = self.highlight_row(
+            state,
+            track_index,
+            self.row_index,
+            rows[index].clone(),
+            state.theme.highlight,
+        );
         scrolled_to_middle(rows, self.row_index, rows_height).render(track_layout[1], buf);
 
         Block::bordered()
             .borders(Borders::LEFT | Borders::RIGHT)
-            .border_style(state.theme.track_border)
+            .border_style(state.theme.border_subtle)
             .render(area, buf);
     }
 
-    fn highlight_selected_row<'a>(
+    fn locked_playback_row(&self, state: &AppState) -> Option<u8> {
+        let status = state.engine.status();
+        if !self.row_lock
+            || status.play_mode() == PlayMode::Paused
+            || PatternId(status.pattern() as u8) != state.active_pattern
+        {
+            return None;
+        }
+        return Some((status.row() as u8).min(state.active_pattern().last_row()));
+    }
+
+    fn highlight_row<'a>(
         &self,
         state: &AppState,
         track_index: u8,
+        row_index: u8,
         row: Line<'a>,
+        style: Style,
     ) -> Line<'a> {
-        if track_index != self.track_index {
-            return row.centered().style(state.theme.selected_row);
+        if track_index != self.track_index || row_index != self.row_index {
+            return row.centered().style(style);
         }
         let cell_style = if self.is_editing {
-            state.theme.editing_cell
+            state.theme.selection_danger
         } else {
-            state.theme.selected_cell
+            state.theme.selection
         };
         let cell = row.clone().centered().style(cell_style);
         return cell.spans(self.cursor_spans(state, &row));
@@ -1012,9 +1090,13 @@ impl MtrakWidget for TimeLineView {
             .borrow_mut()
             .sync_pattern(state.active_pattern, state.active_pattern());
         self.refresh_rows_from(state, 0);
+        let jump = state.take_cursor_jump();
         let status = state.engine.status();
         let mode = status.play_mode();
-        if mode == PlayMode::Paused {
+        if self.row_lock || mode == PlayMode::Paused {
+            if let Some(jump) = jump {
+                self.jump_to(jump);
+            }
             return;
         }
         self.is_editing = false;
@@ -1122,7 +1204,7 @@ impl MtrakWidget for TimeLineView {
             .borrow_mut()
             .sync_pattern(state.active_pattern, pattern);
         self.row_index = self.row_index.min(pattern.last_row());
-        buf.set_style(area, state.theme.pattern_area);
+        buf.set_style(area, state.theme.surface);
         let top_bottom = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
         self.render_mode_indicator(state, top_bottom[0], buf);
 
@@ -1163,6 +1245,169 @@ impl MtrakWidget for TimeLineView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{data::project::Project, tui::theme::Theme};
+
+    fn editor() -> (AppState, TimeLineView) {
+        let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let mut view = TimeLineView::new(&state);
+        view.is_editing = true;
+        return (state, view);
+    }
+
+    fn press(state: &mut AppState, view: &mut TimeLineView, c: char) {
+        let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        view.handle_event(state, &Event::Key(key));
+        view.update(state);
+    }
+
+    fn undo(state: &mut AppState, view: &mut TimeLineView) {
+        assert!(state.undo());
+        view.update(state);
+    }
+
+    fn redo(state: &mut AppState, view: &mut TimeLineView) {
+        assert!(state.redo());
+        view.update(state);
+    }
+
+    fn has_note(state: &AppState, row: usize, track: usize) -> bool {
+        let note = state.active_pattern().get_event(row, track).unwrap();
+        return matches!(note.kind, NoteKind::On(_));
+    }
+
+    #[test]
+    fn entering_notes_advances_by_line_add() {
+        let (mut state, mut view) = editor();
+        press(&mut state, &mut view, 'z');
+        assert_eq!(view.row_index, 1);
+        press(&mut state, &mut view, 'z');
+        assert_eq!(view.row_index, 2);
+        assert!(has_note(&state, 0, 0));
+        assert!(has_note(&state, 1, 0));
+
+        state.line_add = 4;
+        press(&mut state, &mut view, 'z');
+        assert_eq!(view.row_index, 6);
+        assert!(has_note(&state, 2, 0));
+    }
+
+    #[test]
+    fn undo_and_redo_jump_to_the_edited_cell() {
+        let (mut state, mut view) = editor();
+        view.track_index = 2;
+        press(&mut state, &mut view, 'z');
+        view.row_index = 10;
+        view.track_index = 5;
+        view.column_index = 4;
+
+        undo(&mut state, &mut view);
+        assert!(!has_note(&state, 0, 2));
+        assert_eq!(
+            (view.row_index, view.track_index, view.column_index),
+            (0, 2, 0)
+        );
+
+        view.row_index = 10;
+        view.track_index = 5;
+        redo(&mut state, &mut view);
+        assert!(has_note(&state, 0, 2));
+        assert_eq!((view.row_index, view.track_index), (0, 2));
+    }
+
+    #[test]
+    fn undo_keeps_the_column_within_the_edited_field() {
+        let (mut state, mut view) = editor();
+        state.enter_volume(0, 3, 0x40);
+        view.column_index = 3;
+        undo(&mut state, &mut view);
+        assert_eq!((view.row_index, view.column_index), (3, 3));
+
+        redo(&mut state, &mut view);
+        view.column_index = 0;
+        undo(&mut state, &mut view);
+        assert_eq!(view.column_index, 2);
+    }
+
+    #[test]
+    fn block_undo_only_moves_the_cursor_into_the_block() {
+        let (mut state, mut view) = editor();
+        press(&mut state, &mut view, 'z');
+        let block = state.active_pattern().track_block(0);
+        state.edit_block(block, |_, pattern| {
+            pattern.transpose(block, None, 1);
+        });
+
+        view.row_index = 5;
+        view.track_index = 0;
+        undo(&mut state, &mut view);
+        assert_eq!((view.row_index, view.track_index), (5, 0));
+
+        view.track_index = 3;
+        redo(&mut state, &mut view);
+        assert_eq!((view.row_index, view.track_index), (5, 0));
+    }
+
+    #[test]
+    fn undo_and_redo_availability_follows_the_history() {
+        let (mut state, mut view) = editor();
+        assert!(!state.can_undo() && !state.can_redo());
+        press(&mut state, &mut view, 'z');
+        assert!(state.can_undo() && !state.can_redo());
+        undo(&mut state, &mut view);
+        assert!(!state.can_undo() && state.can_redo());
+        redo(&mut state, &mut view);
+        press(&mut state, &mut view, 'z');
+        undo(&mut state, &mut view);
+        press(&mut state, &mut view, 'x');
+        assert!(state.can_undo() && !state.can_redo());
+    }
+
+    #[test]
+    fn pattern_edits_survive_repeated_undo_and_redo() {
+        let (mut state, mut view) = editor();
+        press(&mut state, &mut view, 'z');
+        state.edit_pattern(|_, pattern| pattern.set_length(32));
+        for _ in 0..2 {
+            undo(&mut state, &mut view);
+            assert_eq!(state.active_pattern().row_count, 64);
+            assert!(has_note(&state, 0, 0));
+            redo(&mut state, &mut view);
+            assert_eq!(state.active_pattern().row_count, 32);
+            assert!(has_note(&state, 0, 0));
+        }
+    }
+
+    #[test]
+    fn undoing_back_to_the_saved_point_counts_as_saved() {
+        let (mut state, mut view) = editor();
+        assert!(state.is_saved());
+        press(&mut state, &mut view, 'z');
+        assert!(!state.is_saved());
+        undo(&mut state, &mut view);
+        assert!(state.is_saved());
+        redo(&mut state, &mut view);
+        assert!(!state.is_saved());
+    }
+
+    #[test]
+    fn changes_outside_the_history_stay_unsaved_after_undo() {
+        let (mut state, mut view) = editor();
+        press(&mut state, &mut view, 'z');
+        state.active_pattern_mut().channel_mutes[0] = true;
+        undo(&mut state, &mut view);
+        assert!(!state.is_saved());
+    }
+
+    #[test]
+    fn editing_without_undo_leaves_the_cursor_alone() {
+        let (mut state, mut view) = editor();
+        state.enter_volume(1, 7, 0x40);
+        view.update(&mut state);
+        assert_eq!(
+            (view.row_index, view.track_index, view.column_index),
+            (0, 0, 0)
+        );
+    }
 
     #[test]
     fn alt_letters_jump_to_tracks() {

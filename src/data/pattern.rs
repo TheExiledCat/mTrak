@@ -11,6 +11,10 @@ use crate::{
 pub struct PatternId(pub u8);
 pub const MAX_ROWS: u16 = 0x100;
 
+pub fn same_cells(a: &[PatternRow], b: &[PatternRow]) -> bool {
+    return a.iter().map(|r| &r.tracks).eq(b.iter().map(|r| &r.tracks));
+}
+
 #[derive(Clone, Copy)]
 pub struct Block {
     pub track: u8,
@@ -32,7 +36,6 @@ pub struct Pattern {
     pub row_count: u16,
     pub track_count: u8,
     pub rows: Vec<PatternRow>,
-    pub name: Option<String>,
     pub channel_mutes: [bool; 16],
 }
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -67,7 +70,6 @@ impl Pattern {
             row_count,
             track_count: constants::TRACK_COUNT,
             rows: Vec::new(),
-            name: None,
 
             ticks_per_line: 6,
             channel_mutes: [false; MIDI_CHANNEL_MAX as usize + 1],
@@ -124,6 +126,54 @@ impl Pattern {
             width: 1,
             ..self.block()
         };
+    }
+    pub fn read_block(&self, block: Block) -> Vec<PatternRow> {
+        return self
+            .rows
+            .iter()
+            .skip(block.row as usize)
+            .take(block.height as usize)
+            .map(|r| {
+                PatternRow::with_tracks(
+                    r.tracks
+                        .iter()
+                        .skip(block.track as usize)
+                        .take(block.width as usize)
+                        .copied()
+                        .collect(),
+                )
+            })
+            .collect();
+    }
+    /// writes pattern rows into the pattern, filling only the area defined in the block
+    pub fn write_block(&mut self, block: Block, rows: &[PatternRow]) {
+        for (row, cells) in block.rows().zip(rows) {
+            for (track, cell) in block.tracks().zip(&cells.tracks) {
+                self.set_event(row, track, *cell);
+            }
+        }
+    }
+
+    /// checks if 2 patterns are equal, that is, they have the same notes and ticks per line
+    pub fn same_content(&self, other: &Pattern) -> bool {
+        return self.ticks_per_line == other.ticks_per_line
+            && self.row_count == other.row_count
+            && same_cells(&self.rows, &other.rows);
+    }
+
+    // swaps this pattern's notes and ticks per line with another pattern's
+    pub fn swap_content(&mut self, other: &mut Pattern) {
+        std::mem::swap(&mut self.ticks_per_line, &mut other.ticks_per_line);
+        std::mem::swap(&mut self.row_count, &mut other.row_count);
+        std::mem::swap(&mut self.rows, &mut other.rows);
+        for row in &mut self.rows {
+            row.dirty = true;
+        }
+    }
+    pub fn swap_block(&mut self, block: Block, rows: &mut Vec<PatternRow>) {
+        let current = self.read_block(block);
+        self.write_block(block, rows);
+        *rows = current;
     }
     pub fn transpose(&mut self, block: Block, instrument: Option<u8>, delta: i8) {
         for row in block.rows() {
@@ -199,9 +249,9 @@ impl Pattern {
             .resize_with(self.row_count as usize, PatternRow::new);
     }
 
-    pub fn decrease_length(&mut self) {
+    pub fn decrease_length(&mut self) -> Vec<PatternRow> {
         self.row_count = self.row_count.saturating_sub(1).max(1);
-        self.rows.truncate(self.row_count as usize);
+        return self.rows.split_off(self.row_count as usize);
     }
 
     pub fn shrink(&mut self) -> bool {
@@ -250,44 +300,11 @@ impl PatternStore {
     pub fn get_pattern_by_id(&self, id: PatternId) -> Option<&Pattern> {
         return self.patterns.get(id.0 as usize);
     }
-    pub fn get_pattern_by_name(&self, name: &str) -> Option<&Pattern> {
-        for pattern in self.patterns.iter() {
-            let pattern_name = match &pattern.name {
-                Some(n) => n,
-                None => continue,
-            };
-            if pattern_name == name {
-                return Some(pattern);
-            }
-        }
-        return None;
-    }
     pub fn get_patterns(&self) -> &[Pattern] {
         return &self.patterns;
     }
     pub fn get_pattern_by_id_mut(&mut self, id: PatternId) -> Option<&mut Pattern> {
         return self.patterns.get_mut(id.0 as usize);
-    }
-    pub fn get_pattern_by_name_mut(&mut self, name: &str) -> Option<&mut Pattern> {
-        for pattern in self.patterns.iter_mut() {
-            let pattern_name = match &pattern.name {
-                Some(n) => n,
-                None => continue,
-            };
-            if pattern_name == name {
-                return Some(pattern);
-            }
-        }
-        return None;
-    }
-    pub fn get_patterns_mut(&mut self) -> &mut [Pattern] {
-        return &mut self.patterns;
-    }
-    pub fn copy_pattern(&mut self, source: &Pattern) {
-        self.patterns.push(source.clone());
-    }
-    pub fn create_pattern(&mut self) {
-        self.patterns.push(Pattern::default());
     }
     pub fn create_pattern_id_if_not_exists(&mut self, pattern: PatternId) {
         let pattern = pattern.0 as usize;
@@ -421,15 +438,6 @@ mod tests {
     }
 
     #[test]
-    fn store_finds_patterns_by_name() {
-        let mut named = Pattern::new(1);
-        named.name = Some("verse".into());
-        let store = PatternStore::new(vec![Pattern::new(1), named]);
-        assert_eq!(store.get_pattern_by_name("verse").unwrap().row_count, 1);
-        assert!(store.get_pattern_by_name("chorus").is_none());
-    }
-
-    #[test]
     fn expand_doubles_up_to_max_rows() {
         let mut pattern = Pattern::new(0x80);
         pattern.set_event(0x7F, 0, note());
@@ -516,5 +524,61 @@ mod tests {
             pattern.get_event(1, 0),
             Some(&instrument_note(NotePitch::MIN, 0))
         );
+    }
+
+    #[test]
+    fn block_read_then_write_round_trips_and_truncates() {
+        let mut pattern = Pattern::new(4);
+        pattern.set_event(2, 1, note());
+        pattern.set_event(3, 2, note());
+        let block = Block {
+            track: 1,
+            width: 2,
+            row: 2,
+            height: 4,
+        };
+        let rows = pattern.read_block(block);
+        assert_eq!(rows.len(), 2);
+        pattern.write_block(
+            block,
+            &vec![PatternRow::with_tracks(vec![Note::empty(); 2]); 2],
+        );
+        assert_eq!(pattern.get_event(2, 1), Some(&Note::empty()));
+        pattern.write_block(block, &rows);
+        assert_eq!(pattern.get_event(2, 1), Some(&note()));
+        assert_eq!(pattern.get_event(3, 2), Some(&note()));
+    }
+
+    #[test]
+    fn swap_content_keeps_mutes() {
+        let mut pattern = Pattern::new(4);
+        pattern.channel_mutes[0] = true;
+        let mut other = Pattern::new(8);
+        other.set_event(5, 0, note());
+        let expected = other.clone();
+        pattern.swap_content(&mut other);
+        assert!(pattern.same_content(&expected));
+        assert_eq!(other.row_count, 4);
+        assert!(pattern.channel_mutes[0]);
+        assert!(!other.channel_mutes[0]);
+    }
+
+    #[test]
+    fn swap_block_round_trips() {
+        let mut pattern = Pattern::new(4);
+        let block = Block {
+            track: 1,
+            width: 2,
+            row: 1,
+            height: 2,
+        };
+        let mut rows = vec![PatternRow::with_tracks(vec![note(); 2]); 2];
+        pattern.swap_block(block, &mut rows);
+        assert_eq!(pattern.get_event(1, 1), Some(&note()));
+        assert_eq!(pattern.get_event(2, 2), Some(&note()));
+        assert_eq!(rows[0].tracks, vec![Note::empty(); 2]);
+        pattern.swap_block(block, &mut rows);
+        assert_eq!(pattern.get_event(1, 1), Some(&Note::empty()));
+        assert_eq!(rows[1].tracks, vec![note(); 2]);
     }
 }

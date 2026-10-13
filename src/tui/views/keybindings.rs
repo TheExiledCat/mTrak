@@ -146,11 +146,11 @@ impl MtrakWidget for KeyTable {
             .enumerate()
         {
             let line = match row {
-                Row::Title(title) => Line::styled(*title, state.theme.header_title),
+                Row::Title(title) => Line::styled(*title, state.theme.heading),
                 Row::Entry(key, description) => Line::from(vec![
-                    Span::styled(format!(" {key} "), state.theme.key_hint_key),
+                    Span::styled(format!(" {key} "), state.theme.badge),
                     Span::raw(" ".repeat(self.key_width - key.chars().count() + 2)),
-                    Span::styled(*description, state.theme.key_hint_label),
+                    Span::styled(*description, state.theme.text),
                 ]),
                 Row::Blank => Line::default(),
             };

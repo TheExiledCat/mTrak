@@ -320,7 +320,7 @@ impl MtrakWidget for FileBrowser {
         .split(area);
         Paragraph::new(self.current_folder.to_string_lossy())
             .left_aligned()
-            .style(state.theme.header_border)
+            .style(state.theme.border_strong)
             .reversed()
             .block(
                 Block::bordered()
@@ -345,7 +345,7 @@ impl MtrakWidget for FileBrowser {
             .map(|l| {
                 let index = l.0;
                 let line = l.1;
-                let mut style = state.theme.pattern_area;
+                let mut style = state.theme.surface;
                 if self.selected_index == index {
                     style = style.reversed();
                 }
@@ -361,7 +361,7 @@ impl MtrakWidget for FileBrowser {
             self.scroll_offset = self.selected_index + 1 - visible;
         }
         let total_lines = lines.len();
-        let block = Block::new().style(state.theme.pattern_area);
+        let block = Block::new().style(state.theme.surface);
         Paragraph::new(lines)
             .left_aligned()
             .scroll((self.scroll_offset as u16, 0))

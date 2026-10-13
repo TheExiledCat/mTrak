@@ -310,9 +310,9 @@ impl MtrakWidget for Dialog {
         let block = Block::bordered()
             .title(format!(" {} ", self.title))
             .border_style(match self.level {
-                PopupLevel::Info => state.theme.dialog_border,
-                PopupLevel::Warning => state.theme.dialog_warning_border,
-                PopupLevel::Error => state.theme.dialog_error_border,
+                PopupLevel::Info => state.theme.border,
+                PopupLevel::Warning => state.theme.border_warning,
+                PopupLevel::Error => state.theme.border_danger,
             })
             .padding(Padding::horizontal(1));
 
@@ -326,7 +326,7 @@ impl MtrakWidget for Dialog {
             height,
         };
         Clear.render(popup, buf);
-        buf.set_style(popup, state.theme.desktop);
+        buf.set_style(popup, state.theme.background);
         let inner = block.inner(popup);
         block.render(popup, buf);
 
@@ -427,7 +427,7 @@ impl MtrakWidget for TextPrompt {
             Span::raw(self.text.as_str()),
         ];
         if self.focused {
-            spans.push(Span::styled(" ", state.theme.selected_cell));
+            spans.push(Span::styled(" ", state.theme.selection));
         }
         Line::from(spans).render(area, buf);
     }
@@ -508,7 +508,7 @@ impl MtrakWidget for Checkbox {
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
         let mark = if self.checked { "X" } else { " " };
         let style = if self.focused {
-            state.theme.selected_cell
+            state.theme.selection
         } else {
             Style::new()
         };
@@ -627,7 +627,7 @@ impl MtrakWidget for Select {
         };
         let block = Block::new()
             .borders(Borders::LEFT)
-            .border_style(state.theme.dialog_border);
+            .border_style(state.theme.border);
         let list_area = block.inner(area);
         block.render(area, buf);
         let area = list_area;
@@ -644,8 +644,8 @@ impl MtrakWidget for Select {
         }
         for (row, index) in (self.offset..self.options.len()).take(visible).enumerate() {
             let style = match (index == self.selected, self.focused) {
-                (true, true) => state.theme.selected_cell,
-                (true, false) => state.theme.selected_row,
+                (true, true) => state.theme.selection,
+                (true, false) => state.theme.highlight,
                 _ => Style::new(),
             };
             let line_area = Rect {

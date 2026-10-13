@@ -4,7 +4,6 @@ pub const TRACK_COUNT: u8 = 8;
 pub const EMPTY_NOTE: &str = "---|-|--|000";
 pub const NOTE_OFF_KEY: char = '`';
 pub const NOTE_STRING_LENGTH: u8 = 15;
-pub const MAX_TRACK_EFFECTS: u8 = 4;
 pub const TRACK_COLUMN_COUNT: u8 = 7;
 
 pub const NOTE_NAMES: &[&str] = &[

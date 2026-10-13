@@ -19,7 +19,7 @@ use crate::{
 };
 const PROJECT_HEADER: [u8; 4] = *b"MTRK";
 const PROJECT_VERSION: u16 = 1;
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct SequenceRow {
     pub pattern_id: PatternId,
     pub repeats: u8,

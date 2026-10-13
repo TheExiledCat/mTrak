@@ -24,7 +24,7 @@ use crate::{
         app::AppState,
         framework::{
             core_extensions::Boxed,
-            dialog::{Checkbox, Dialog, PopupLevel, Select, TextPrompt},
+            dialog::{Checkbox, Dialog, Select, TextPrompt},
             keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::{MtrakWidget, clicked_in},
         },
@@ -84,7 +84,7 @@ impl MtrakWidget for Header {
     {
         let border = Block::new()
             .borders(Borders::BOTTOM)
-            .border_style(state.theme.header_border);
+            .border_style(state.theme.border_strong);
         border.render(area, buf);
         let layout = Layout::horizontal([
             Constraint::Percentage(50),
@@ -99,7 +99,7 @@ impl MtrakWidget for Header {
         let util_block = Block::bordered()
             .borders(Borders::BOTTOM | Borders::RIGHT)
             .title_bottom("Util")
-            .title_style(state.theme.header_border.reversed());
+            .title_style(state.theme.border_strong.reversed());
         let util_inner = util_block.inner(layout[1]);
         util_block.render(layout[1], buf);
         self.top_left.render(state, left_layout[0], buf);
@@ -218,10 +218,12 @@ impl MtrakWidget for HeaderBottomLeft {
         hints.push(KeyHint {
             key: format!("{}{}", glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL), "1-8"),
             label: "Mute",
+            enabled: true,
         });
         hints.push(KeyHint {
             key: format!("{}{}", glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL), "9"),
             label: if self.upper { "Ch 1-8" } else { "Ch 9-16" },
+            enabled: true,
         });
     }
     fn render(
@@ -294,7 +296,7 @@ impl MtrakWidget for HeaderBottomLeft {
                 height,
                 ..inner
             };
-            buf.set_style(bar, _state.theme.header_border.reversed());
+            buf.set_style(bar, _state.theme.border_strong.reversed());
         });
     }
 }
@@ -406,12 +408,8 @@ impl KeyActions for SequenceList {
                     .active_sequence_index
                     .clamp(0, state.delete_sequence(state.active_sequence_index) - 1)
             }
-            IncRepeats => state
-                .sequence_row_mut(state.active_sequence_index)
-                .increase_repeats(),
-            DecRepeats => state
-                .sequence_row_mut(state.active_sequence_index)
-                .decrease_repeats(),
+            IncRepeats => state.change_sequence_repeats(state.active_sequence_index, true),
+            DecRepeats => state.change_sequence_repeats(state.active_sequence_index, false),
             IncPattern => state.change_sequence_pattern(state.active_sequence_index, true),
             DecPattern => state.change_sequence_pattern(state.active_sequence_index, false),
         }
@@ -538,18 +536,9 @@ impl PatternInfo {
             state.notify("CANT SRNK");
             return;
         }
-        let dialog = Dialog::confirm(
-            PopupLevel::Warning,
-            "Confirm shrink?",
-            "Shrinking the pattern can not be undone",
-        )
-        .on_submit(|state, _| {
-            if !state.active_pattern_mut().shrink() {
-                state.notify("PTN TOO SHORT");
-            }
-            return Ok(());
-        });
-        state.open_dialog(dialog);
+        if !state.edit_pattern(|_, pattern| pattern.shrink()) {
+            state.notify("PTN TOO SHORT");
+        }
     }
 }
 impl MtrakWidget for PatternInfo {
@@ -694,17 +683,17 @@ impl KeyActions for PatternInfo {
         match action {
             PatternInfoActions::BpmUp => state.increase_bpm(),
             PatternInfoActions::BpmDown => state.decrease_bpm(),
-            PatternInfoActions::SpeedUp => state.active_pattern_mut().increase_ticks_per_line(),
-            PatternInfoActions::SpeedDown => state.active_pattern_mut().decrease_ticks_per_line(),
+            PatternInfoActions::SpeedUp => state.change_speed(true),
+            PatternInfoActions::SpeedDown => state.change_speed(false),
             PatternInfoActions::LineAddUp => state.increase_line_add(),
             PatternInfoActions::LineAddDown => state.decrease_line_add(),
             PatternInfoActions::PatternUp => state.next_pattern(),
             PatternInfoActions::PatternDown => state.prev_pattern(),
-            PatternInfoActions::PatternLengthUp => state.active_pattern_mut().increase_length(),
-            PatternInfoActions::PatternLengthDown => state.active_pattern_mut().decrease_length(),
+            PatternInfoActions::PatternLengthUp => state.change_length(true),
+            PatternInfoActions::PatternLengthDown => state.change_length(false),
             PatternInfoActions::PatternShrink => self.shrink_pattern(state),
             PatternInfoActions::PatternExpand => {
-                if !state.active_pattern_mut().expand() {
+                if !state.edit_pattern(|_, pattern| pattern.expand()) {
                     state.notify("PTN TOO LONG");
                 }
             }
@@ -1010,7 +999,7 @@ impl MtrakWidget for MidiEventList {
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
         Block::new()
             .title_bottom("MIDI")
-            .title_style(state.theme.header_border.reversed())
+            .title_style(state.theme.border_strong.reversed())
             .render(area, buf);
         let area = Block::new().padding(Padding::bottom(1)).inner(area);
         self.max_lines_to_show = area.height;
@@ -1066,12 +1055,12 @@ impl MtrakWidget for UtilList {
             .iter()
             .map(|b| {
                 Line::raw(format!("{}: {}", b.key, b.label))
-                    .style(state.theme.header_title)
+                    .style(state.theme.heading)
                     .reversed()
             })
             .collect();
         Paragraph::new(lines)
-            .block(Block::new().style(state.theme.header_title).reversed())
+            .block(Block::new().style(state.theme.heading).reversed())
             .render(layout[0], buf);
         if let Some(notification) = &state.notification {
             Paragraph::new(notification.as_str())
