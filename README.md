@@ -51,7 +51,12 @@ cd mTrak
 cargo install --path .
 ```
 
-**Note**: as of v0.1.3, the self updating logic can flag as a false positive for some antivirusses. once the project gets enough adoption, i will be able to apply for signing credentials. Until then you might get anti virus warnings when using the binaries from the releases page, especially from windows defender.
+**Note**: v0.1.3 to v0.1.5 could be flagged by some antivirus software (especially Windows
+Defender) as a false positive because of how the self updater replaced the executable. v0.1.6
+changes how updates are installed on Windows to avoid this, but the release binaries are not
+signed yet, so warnings can still show up. Once the project gets enough adoption, I will apply
+for signing credentials. Until then, building from source with `cargo install` avoids the
+issue.
 
 ## Usage
 
