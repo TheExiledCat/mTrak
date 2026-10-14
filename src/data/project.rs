@@ -51,6 +51,8 @@ pub struct Project {
     pub sequence: Vec<SequenceRow>,
     pub patterns: PatternStore,
     pub instruments: [Instrument; MIDI_CHANNEL_MAX as usize + 1],
+    pub midi_input: Option<String>,
+    pub record_input_velocity: bool,
     pub midi_output: Option<String>,
     pub send_midi_clock: bool,
 }
@@ -67,6 +69,8 @@ impl Project {
             }],
             instruments: std::array::from_fn(|_| Instrument::default()),
             patterns: PatternStore::new(vec![Pattern::default()]),
+            midi_input: None,
+            record_input_velocity: false,
             midi_output: None,
             send_midi_clock: false,
         };

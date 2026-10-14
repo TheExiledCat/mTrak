@@ -73,6 +73,19 @@ impl Voices {
         }
     }
 
+    /// Stops the track's note only if it is still playing `pitch`.
+    pub fn release_pitch(&mut self, track: usize, pitch: u8, out: &mut Vec<Message>) {
+        if self
+            .tracks
+            .get(track)
+            .copied()
+            .flatten()
+            .is_some_and(|voice| voice.pitch == pitch)
+        {
+            self.release(track, out);
+        }
+    }
+
     /// Releases every track playing on a muted channel.
     pub fn release_channels(&mut self, muted: &[bool], out: &mut Vec<Message>) {
         for track in 0..self.tracks.len() {
@@ -130,6 +143,19 @@ mod tests {
                 Message::NoteOn(Channel::Ch1, 62, 100),
             ]
         );
+    }
+
+    #[test]
+    fn release_pitch_ignores_a_replaced_note() {
+        let mut voices = Voices::new();
+        let mut out = vec![];
+        voices.note_on(0, 0, 60, 100, &mut out);
+        voices.note_on(0, 0, 62, 100, &mut out);
+        out.clear();
+        voices.release_pitch(0, 60, &mut out);
+        assert!(out.is_empty());
+        voices.release_pitch(0, 62, &mut out);
+        assert_eq!(out, vec![Message::NoteOff(Channel::Ch1, 62, 0)]);
     }
 
     #[test]

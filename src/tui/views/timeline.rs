@@ -16,11 +16,11 @@ use ratatui::{
 use crate::{
     data::{
         effect::Command,
-        midi::{MIDI_CHANNEL_MAX, VOLUME_MAX},
-        note::{Note, NoteKind},
+        midi::{MIDI_CHANNEL_MAX, VELOCITY_MAX, VOLUME_MAX},
+        note::{Note, NoteKind, NotePitch},
         pattern::{self, PatternId},
     },
-    engine::engine::PlayMode,
+    engine::engine::{PlayMode, velocity},
     error::{MTrakError, Result},
     tui::{
         app::{AppState, CursorJump, TrackCache, column_index_to_note_string_index},
@@ -450,11 +450,49 @@ impl TimeLineView {
         if let Some(Note {
             kind: NoteKind::On(pitch),
             instrument_id: Some(channel),
+            velocity: volume,
             ..
         }) = cell
             && instrument.is_none_or(|i| i == *channel)
+            && let Some(velocity) = velocity(*volume, None)
         {
-            state.engine.play_note(track, *channel, *pitch);
+            state.engine.play_note(track, *channel, *pitch, velocity);
+        }
+    }
+
+    fn handle_midi_input(&mut self, state: &mut AppState, midi_input: Vec<midi::Message>) {
+        for message in midi_input {
+            match message {
+                midi::Message::NoteOn(_, note, vel) if vel > 0 => {
+                    let vel = if state.project().record_input_velocity {
+                        Some(vel)
+                    } else {
+                        None
+                    };
+                    state.play_note(
+                        self.track_index as usize,
+                        state.active_instrument,
+                        NotePitch::new(note),
+                        vel.unwrap_or(VELOCITY_MAX),
+                    );
+                    if self.is_editing {
+                        state.enter_note(
+                            state.active_instrument,
+                            self.track_index as usize,
+                            self.row_index as usize,
+                            NotePitch::new(note),
+                            vel,
+                        );
+                        self.refresh_row_and_advance(state, self.row_index as usize);
+                    }
+                }
+                midi::Message::NoteOff(_, note, _) | midi::Message::NoteOn(_, note, 0) => {
+                    state
+                        .engine
+                        .release_pitch(self.track_index as usize, NotePitch::new(note));
+                }
+                _ => {}
+            }
         }
     }
 }
@@ -1086,6 +1124,10 @@ impl TimeLineView {
 }
 impl MtrakWidget for TimeLineView {
     fn update(&mut self, state: &mut AppState) {
+        let midi_input = state.drain_midi_input();
+        if !midi_input.is_empty() {
+            self.handle_midi_input(state, midi_input);
+        }
         self.track_cache
             .borrow_mut()
             .sync_pattern(state.active_pattern, state.active_pattern());

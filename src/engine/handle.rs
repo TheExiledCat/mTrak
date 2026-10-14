@@ -33,8 +33,13 @@ pub enum EngineCommand {
         track: usize,
         channel: u8,
         pitch: u8,
+        velocity: u8,
     },
     ReleaseNote(usize),
+    ReleasePitch {
+        track: usize,
+        pitch: u8,
+    },
 
     SetGlobalVolume {
         channel: u8,
@@ -146,15 +151,22 @@ impl EngineHandle {
         }
     }
 
-    pub fn play_note(&self, track: usize, channel: u8, note: NotePitch) {
+    pub fn play_note(&self, track: usize, channel: u8, note: NotePitch, velocity: u8) {
         self.send(EngineCommand::PlayNote {
             track,
             channel,
             pitch: note.0,
+            velocity,
         });
     }
     pub fn release_note(&self, track: usize) {
         self.send(EngineCommand::ReleaseNote(track));
+    }
+    pub fn release_pitch(&self, track: usize, note: NotePitch) {
+        self.send(EngineCommand::ReleasePitch {
+            track,
+            pitch: note.0,
+        });
     }
 
     pub fn set_global_volume(&self, channel: u8, volume: u8) {

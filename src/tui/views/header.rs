@@ -779,18 +779,37 @@ impl KeyActions for InstrumentList {
     }
 }
 fn open_config_dialog(state: &mut AppState) {
-    let names = state.get_midi_port_names();
-    let current = state
-        .active_port
+    let mut in_names = state.get_midi_in_port_names();
+    in_names.insert(0, "(none)".into());
+    let mut out_names = state.get_midi_out_port_names();
+    out_names.insert(0, "(none)".into());
+    let current_in = state
+        .active_in_port
         .as_ref()
-        .and_then(|p| names.iter().position(|n| *n == p.id()))
+        .zip(state.midi_in_client.as_ref())
+        .and_then(|(p, client)| client.port_name(p).ok())
+        .and_then(|name| in_names.iter().position(|n| *n == name))
+        .unwrap_or(0);
+    let current_out = state
+        .active_out_port
+        .as_ref()
+        .zip(state.midi_out_client.as_ref())
+        .and_then(|(p, client)| client.port_name(p).ok())
+        .and_then(|name| out_names.iter().position(|n| *n == name))
         .unwrap_or(0);
     let dialog = Dialog::new(
         "Config",
         vec![
-            Select::new("port", names)
+            Select::new("input", in_names)
+                .label("MIDI input")
+                .selected(current_in)
+                .boxed(),
+            Checkbox::new("velocity", "Record Velocity")
+                .checked(state.project().record_input_velocity)
+                .boxed(),
+            Select::new("output", out_names)
                 .label("MIDI output")
-                .selected(current)
+                .selected(current_out)
                 .boxed(),
             Checkbox::new("midi_clock", "Send MIDI clock")
                 .checked(state.project().send_midi_clock)
@@ -798,17 +817,35 @@ fn open_config_dialog(state: &mut AppState) {
         ],
     )
     .on_submit(|state, result| {
-        if let Some(enabled) = result.bool("midi_clock") {
-            state.set_midi_clock(enabled);
+        if let Some(midi_clock) = result.bool("midi_clock") {
+            state.set_midi_clock(midi_clock);
         }
-        let Some(index) = result.choice("port") else {
-            return Ok(());
-        };
-        let port = state
-            .midi_client
-            .as_ref()
-            .and_then(|client| client.ports().get(index).cloned());
-        state.set_midi_output(port);
+        if let Some(velocity) = result.bool("velocity") {
+            state.set_midi_velocity_record(velocity);
+        }
+        if let Some(input) = result.choice("input") {
+            let input = if input == 0 {
+                None
+            } else {
+                state
+                    .midi_in_client
+                    .as_ref()
+                    .and_then(|client| client.ports().get(input - 1).cloned())
+            };
+            state.set_midi_input(input)?;
+        }
+        if let Some(output) = result.choice("output") {
+            let output = if output == 0 {
+                None
+            } else {
+                state
+                    .midi_out_client
+                    .as_ref()
+                    .and_then(|client| client.ports().get(output - 1).cloned())
+            };
+            state.set_midi_output(output);
+        }
+
         return Ok(());
     });
     state.open_dialog(dialog);
@@ -890,7 +927,7 @@ impl MtrakWidget for InstrumentList {
         .split(block.inner(area));
 
         block.render(area, buf);
-        let port = match (&state.midi_client, &state.active_port) {
+        let port = match (&state.midi_out_client, &state.active_out_port) {
             (None, _) => "no MIDI backend".into(),
             (Some(c), Some(p)) => {
                 let name = c.port_name(p).unwrap_or(p.id());
