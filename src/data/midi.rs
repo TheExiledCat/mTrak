@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use midi::{Channel, Message, RawMessage};
+use midi::{Channel, Message, RawMessage, utils::msb_lsb_to_u14};
 use num::FromPrimitive;
 
 pub const MIDI_CHANNEL_MAX: u8 = 0xF;
@@ -108,6 +108,29 @@ pub fn raw_message_to_bytes(msg: RawMessage) -> Vec<u8> {
         }
     }
 }
+pub fn bytes_to_message(bytes: &[u8]) -> Option<Message> {
+    let (&status, data) = bytes.split_first()?;
+    let channel = Channel::from_u8(status & 0x0F)?;
+    let message = match (status & 0xF0, data) {
+        (0x80, &[note, velocity, ..]) => Message::NoteOff(channel, note, velocity),
+        (0x90, &[note, velocity, ..]) => Message::NoteOn(channel, note, velocity),
+        (0xA0, &[note, pressure, ..]) => Message::PolyphonicPressure(channel, note, pressure),
+        (0xB0, &[controller, value, ..]) => Message::ControlChange(channel, controller, value),
+        (0xC0, &[program, ..]) => Message::ProgramChange(channel, program),
+        (0xD0, &[pressure, ..]) => Message::ChannelPressure(channel, pressure),
+        (0xE0, &[lsb, msb, ..]) => Message::PitchBend(channel, msb_lsb_to_u14(msb, lsb)),
+        _ => match status {
+            0xF8 => Message::TimingClock,
+            0xFA => Message::Start,
+            0xFB => Message::Continue,
+            0xFC => Message::Stop,
+            0xFE => Message::ActiveSensing,
+            0xFF => Message::SystemReset,
+            _ => return None,
+        },
+    };
+    return Some(message);
+}
 
 #[cfg(test)]
 mod tests {
@@ -153,6 +176,29 @@ mod tests {
             .collect();
         assert_eq!(bytes, vec![0x91, 60, 100]);
         assert_eq!(raw_message_to_bytes(RawMessage::Status(0xF8)), vec![0xF8]);
+    }
+
+    #[test]
+    fn bytes_round_trip_through_messages() {
+        let messages = [
+            Message::NoteOn(Channel::Ch2, 60, 100),
+            Message::NoteOff(Channel::Ch1, 60, 0),
+            Message::ControlChange(Channel::Ch16, 74, 64),
+            Message::ProgramChange(Channel::Ch3, 5),
+            Message::ChannelPressure(Channel::Ch4, 90),
+            Message::PitchBend(Channel::Ch1, 12345),
+            Message::TimingClock,
+        ];
+        for message in messages {
+            let bytes: Vec<u8> = message
+                .to_raw_messages()
+                .into_iter()
+                .flat_map(raw_message_to_bytes)
+                .collect();
+            assert_eq!(bytes_to_message(&bytes), Some(message));
+        }
+        assert_eq!(bytes_to_message(&[0x90, 60]), None);
+        assert_eq!(bytes_to_message(&[]), None);
     }
 
     #[test]
