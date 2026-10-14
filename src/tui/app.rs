@@ -1,11 +1,12 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
+    sync::mpsc::{self, Receiver, Sender},
     time::{Duration, Instant},
 };
 
-use midi::Message;
-use midir::{MidiOutput, MidiOutputPort};
+use midi::Message::{self};
+use midir::{MidiInput, MidiInputConnection, MidiInputPort, MidiOutput, MidiOutputPort};
 use ratatui::{
     DefaultTerminal,
     crossterm::event::{self, Event, KeyCode, KeyCode::Char, KeyEvent, KeyEventKind},
@@ -18,7 +19,7 @@ use crate::{
     data::{
         config::{Config, TITLE},
         effect::CommandKind,
-        midi::{MIDI_CHANNEL_MAX, MidiEvent, VOLUME_MAX},
+        midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX, bytes_to_message},
         note::{Note, NoteKind, NotePitch},
         pattern::{self, Block, Pattern, PatternId, PatternRow},
         project::{Project, SequenceRow},
@@ -359,14 +360,15 @@ pub struct AppState {
     pub config: Config,
     project: Project,
     pub engine: EngineHandle,
-
-    pub midi_client: Option<MidiOutput>,
+    pub midi_in_client: Option<MidiInput>,
+    pub midi_out_client: Option<MidiOutput>,
     pub theme: Theme,
     pub exit_requested: bool,
 
     pub active_sequence_index: usize,
     pub active_pattern: PatternId,
-    pub active_port: Option<MidiOutputPort>,
+    pub active_in_port: Option<MidiInputPort>,
+    pub active_out_port: Option<MidiOutputPort>,
     pub line_add: u8,
     pub active_instrument: u8,
     pub event_history: VecDeque<MidiEvent>,
@@ -377,6 +379,10 @@ pub struct AppState {
     pub project_path: Option<PathBuf>,
     pub copy_buffers: CopyBuffers,
     pub notification: Option<String>,
+    midi_in_connection: Option<MidiInputConnection<Sender<Message>>>,
+    midi_in_sender: Sender<Message>,
+    midi_in_receiver: Receiver<Message>,
+    pending_midi_input: Vec<Message>,
     undo_stack: UndoStack<AppStateAction>,
     cursor_jump: Option<CursorJump>,
     has_changes: bool,
@@ -394,13 +400,21 @@ pub struct AppState {
 impl AppState {
     pub fn new(project: Project, theme: Theme) -> Result<Self> {
         let mut errors = Vec::new();
-        let midi_client = match MidiOutput::new(TITLE) {
+        let midi_in_client = match MidiInput::new(TITLE) {
             Ok(client) => Some(client),
             Err(e) => {
                 errors.push(e.into());
                 None
             }
         };
+        let midi_out_client = match MidiOutput::new(TITLE) {
+            Ok(client) => Some(client),
+            Err(e) => {
+                errors.push(e.into());
+                None
+            }
+        };
+        let (midi_in_sender, midi_in_receiver) = mpsc::channel();
         let changed_patterns = (0..project.patterns.get_patterns().len() as u8)
             .map(PatternId)
             .collect();
@@ -415,8 +429,14 @@ impl AppState {
             saved_position: 0,
             exit_requested: false,
             active_sequence_index: 0,
-            active_port: None,
-            midi_client,
+            active_in_port: None,
+            active_out_port: None,
+            midi_in_client,
+            midi_in_connection: None,
+            midi_in_sender,
+            midi_in_receiver,
+            pending_midi_input: vec![],
+            midi_out_client,
             time: Duration::ZERO,
             playback_start_time: None,
             active_instrument: 0,
@@ -448,6 +468,7 @@ impl AppState {
             .set_global_velocity(state.project.global_velocity);
         state.engine.set_midi_clock(state.project.send_midi_clock);
         state.restore_midi_output();
+        state.restore_midi_input();
         return Ok(state);
     }
     pub fn update(&mut self) {
@@ -473,6 +494,7 @@ impl AppState {
             }
             self.event_history.push_back(event);
         }
+        self.pending_midi_input = self.midi_in_receiver.try_iter().collect();
 
         let status = self.engine.status();
         if status.play_mode() == PlayMode::Paused {
@@ -499,11 +521,28 @@ impl AppState {
             _ => {}
         }
     }
+    fn restore_midi_input(&mut self) {
+        let Some(name) = self.project.midi_input.clone() else {
+            return;
+        };
+        let port = self.midi_in_client.as_ref().and_then(|client| {
+            client
+                .ports()
+                .into_iter()
+                .find(|p| client.port_name(p).is_ok_and(|n| n == name))
+        });
+        if port.is_none() {
+            self.project.midi_input = None;
+        }
+        if let Err(e) = self.set_midi_input(port) {
+            self.report_error(e);
+        }
+    }
     fn restore_midi_output(&mut self) {
         let Some(name) = self.project.midi_output.clone() else {
             return;
         };
-        let port = self.midi_client.as_ref().and_then(|client| {
+        let port = self.midi_out_client.as_ref().and_then(|client| {
             client
                 .ports()
                 .into_iter()
@@ -514,9 +553,57 @@ impl AppState {
         }
         self.set_midi_output(port);
     }
+    pub fn set_midi_input(&mut self, port: Option<MidiInputPort>) -> Result<()> {
+        let name = self
+            .midi_in_client
+            .as_ref()
+            .map(|client| port.as_ref().and_then(|p| client.port_name(p).ok()));
+        if let Some(name) = name
+            && name != self.project.midi_input
+        {
+            self.project_mut().midi_input = name;
+        }
+        if let Some(connection) = self.midi_in_connection.take() {
+            connection.close();
+        }
+        self.active_in_port = None;
+        let Some(port) = port else {
+            return Ok(());
+        };
+        match self.connect_input_port(&port) {
+            Ok(connection) => {
+                self.midi_in_connection = Some(connection);
+                self.active_in_port = Some(port);
+                return Ok(());
+            }
+            Err(e) => {
+                self.project_mut().midi_input = None;
+                return Err(e);
+            }
+        }
+    }
+    /// Connects to an input port with a fresh `MidiInput`, since `connect` consumes the client.
+    /// Incoming messages are sent to `midi_in_receiver` and picked up in `update`.
+    fn connect_input_port(
+        &self,
+        port: &MidiInputPort,
+    ) -> Result<MidiInputConnection<Sender<Message>>> {
+        return MidiInput::new(TITLE)?
+            .connect(
+                port,
+                TITLE,
+                |_, bytes, sender| {
+                    if let Some(message) = bytes_to_message(bytes) {
+                        let _ = sender.send(message);
+                    }
+                },
+                self.midi_in_sender.clone(),
+            )
+            .map_err(|e| MTrakError::Midi(e.to_string()));
+    }
     pub fn set_midi_output(&mut self, port: Option<MidiOutputPort>) {
         let name = self
-            .midi_client
+            .midi_out_client
             .as_ref()
             .map(|client| port.as_ref().and_then(|p| client.port_name(p).ok()));
         if let Some(name) = name
@@ -525,14 +612,27 @@ impl AppState {
             self.project_mut().midi_output = name;
         }
         self.engine.set_output_port(port.clone());
-        self.active_port = port;
+        self.active_out_port = port;
     }
     pub fn set_midi_clock(&mut self, enabled: bool) {
         self.project_mut().send_midi_clock = enabled;
         self.engine.set_midi_clock(enabled);
     }
-    pub fn get_midi_port_names(&self) -> Vec<String> {
-        let Some(client) = &self.midi_client else {
+    pub fn set_midi_velocity_record(&mut self, enabled: bool) {
+        self.project_mut().record_input_velocity = enabled;
+    }
+    pub fn get_midi_in_port_names(&self) -> Vec<String> {
+        let Some(client) = &self.midi_in_client else {
+            return vec![];
+        };
+        return client
+            .ports()
+            .iter()
+            .map(|p| client.port_name(p).unwrap_or(p.id()))
+            .collect::<Vec<String>>();
+    }
+    pub fn get_midi_out_port_names(&self) -> Vec<String> {
+        let Some(client) = &self.midi_out_client else {
             return vec![];
         };
         return client
@@ -867,11 +967,22 @@ impl AppState {
     ) -> Option<NotePitch> {
         let pitch = self.play_key(track, key)?;
         let instrument = self.active_instrument;
+        self.enter_note(instrument, track, row, pitch, None);
+        return Some(pitch);
+    }
+    pub fn enter_note(
+        &mut self,
+        instrument: u8,
+        track: usize,
+        row: usize,
+        pitch: NotePitch,
+        vel: Option<u8>,
+    ) {
         self.edit_event(row, track, |note| {
             note.kind = NoteKind::On(pitch);
             note.instrument_id = note.instrument_id.or(Some(instrument));
+            note.velocity = vel.or(note.velocity);
         });
-        return Some(pitch);
     }
     pub fn play_key(&self, track: usize, key: event::KeyEvent) -> Option<NotePitch> {
         if !key.modifiers.is_empty() {
@@ -883,9 +994,12 @@ impl AppState {
         let note = self.key_to_note_pitch(c)?;
 
         if key.kind != KeyEventKind::Repeat {
-            self.engine.play_note(track, self.active_instrument, note);
+            self.play_note(track, self.active_instrument, note, VELOCITY_MAX);
         }
         return Some(note);
+    }
+    pub fn play_note(&self, track: usize, instrument: u8, pitch: NotePitch, velocity: u8) {
+        self.engine.play_note(track, instrument, pitch, velocity);
     }
 
     /// Applies `edit` to the event at `row` in `track` of the active pattern.
@@ -967,6 +1081,10 @@ impl AppState {
     }
     pub fn is_saved(&self) -> bool {
         return !self.has_changes && self.saved_position == self.undo_stack.position();
+    }
+
+    pub fn drain_midi_input(&mut self) -> Vec<Message> {
+        return std::mem::take(&mut self.pending_midi_input);
     }
 }
 pub struct TrackCache {

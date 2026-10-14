@@ -157,15 +157,21 @@ impl MtrakEngine {
                 track,
                 channel,
                 pitch,
+                velocity,
             } => {
                 let mut out = vec![];
                 self.voices
-                    .note_on(track, channel, pitch, VELOCITY_MAX, &mut out);
+                    .note_on(track, channel, pitch, velocity, &mut out);
                 self.dispatch_messages(out);
             }
             EngineCommand::ReleaseNote(track) => {
                 let mut out = vec![];
                 self.voices.release(track, &mut out);
+                self.dispatch_messages(out);
+            }
+            EngineCommand::ReleasePitch { track, pitch } => {
+                let mut out = vec![];
+                self.voices.release_pitch(track, pitch, &mut out);
                 self.dispatch_messages(out);
             }
             EngineCommand::SetGlobalVolume { channel, volume } => {
@@ -682,7 +688,7 @@ fn message_channel(message: &Message) -> Option<u8> {
 
 /// A note's velocity: the volume column (00-80) wins, then a velocity slide's value, then full
 /// velocity. `None` means the note is silent.
-fn velocity(volume: Option<u8>, glide: Option<u8>) -> Option<u8> {
+pub fn velocity(volume: Option<u8>, glide: Option<u8>) -> Option<u8> {
     let velocity = match volume {
         Some(volume) => volume.min(VELOCITY_MAX),
         None => glide.unwrap_or(VELOCITY_MAX),
