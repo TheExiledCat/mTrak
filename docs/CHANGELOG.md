@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.1.8 - 2026-10-14
+
+### Added
+
+- MIDI input: connect a MIDI keyboard or controller and play notes with it, like with the
+  computer keyboard. Pick the device under **MIDI input** in the Config dialog; mTrak
+  remembers it in the project and reconnects when you open the project again.
+  - In edit mode, each note you play is written on the cursor row with the active
+    instrument, and the cursor moves down by the line add. Outside edit mode, notes are
+    just played.
+  - Notes keep sounding for as long as you hold the key and stop when you let go.
+  - **Record Velocity** (in the Config dialog) writes how hard you played each note into the
+    volume column. With it off, the volume column is left as it is and notes play at full
+    velocity.
+  - Starting and stopping playback from a controller isn't supported yet.
+- The MIDI input and MIDI output lists in the Config dialog both start with a **(none)**
+  entry, so you can disconnect a port without unplugging anything.
+
+### Changed
+
+- **Projects saved with v0.1.7 or earlier can't be opened.** The project file format changed
+  to store the MIDI input settings; until v1.0.0 mTrak only opens projects saved with the
+  same version.
+- Transposing a single note now plays it back at its own volume instead of always at full
+  velocity. A note with volume `00` stays silent.
+
 ## v0.1.7 - 2026-10-13
 
 ### Added
