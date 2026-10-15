@@ -6,7 +6,7 @@ mTrak is modelled on FastTracker 2: the same pattern editor layout, piano keyboa
 mapping and navigation keys. Instead of playing samples it sends MIDI, so it can drive
 any hardware or software synth.
 
-![mTrak playing a song](docs/screenshot.png)
+![mTrak demo: playing a song, editing patterns, block copy/paste and transpose, and editing during playback with row lock](docs/demo.gif)
 
 ## Features
 
