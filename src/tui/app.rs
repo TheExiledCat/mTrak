@@ -111,6 +111,9 @@ impl App {
             };
             self.sync_dialogs();
         }
+        if let Some(path) = self.state.project_load_request.take() {
+            self.load_project(path)?;
+        }
         self.state.update();
         if self.file_browser.is_open() {
             self.file_browser.update(&mut self.state);
@@ -142,6 +145,28 @@ impl App {
         return Ok(!self.state.exit_requested);
     }
 
+    fn load_project(&mut self, path: PathBuf) -> Result<()> {
+        let project = match Project::load(path.clone()) {
+            Ok(project) => project,
+            Err(e) => {
+                self.state.report_error(e);
+                return Ok(());
+            }
+        };
+        let theme = std::mem::replace(&mut self.state.theme, Theme::monochrome());
+        self.state.shut_down();
+        self.state = AppState::new(project, theme)?;
+        self.state.project_path = Some(path.clone());
+        self.root = Container::new(MainView::new(&self.state).boxed(), Padding::ZERO);
+        self.terminal.clear()?;
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        self.state.open_dialog(Dialog::popup(
+            PopupLevel::Info,
+            "Opened",
+            format!("Opened {}", name),
+        ));
+        return Ok(());
+    }
     /// Marks presses of keys that are still held as repeats.
     fn mark_repeat(&mut self, key: &mut KeyEvent) {
         match key.kind {
@@ -183,6 +208,9 @@ impl App {
         if let Some(on_submit) = self.state.save_file_request.take() {
             self.file_browser
                 .save_file(on_submit.0, on_submit.1, on_submit.2, on_submit.3);
+        } else if let Some(on_submit) = self.state.open_file_request.take() {
+            self.file_browser
+                .open_file(on_submit.0, on_submit.1, on_submit.2, on_submit.3);
         }
     }
 }
@@ -391,6 +419,8 @@ pub struct AppState {
     time: Duration,
     pending_dialogs: Vec<Dialog>,
     help_requested: bool,
+    project_load_request: Option<PathBuf>,
+    open_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
     save_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
     changed_patterns: HashSet<PatternId>,
     sequence_changed: bool,
@@ -450,12 +480,14 @@ impl AppState {
             event_history: VecDeque::new(),
             channel_hits: [None; MIDI_CHANNEL_MAX as usize + 1],
             sequence_changed: true,
+            open_file_request: None,
             save_file_request: None,
             errors,
             copy_buffers: CopyBuffers::new(),
             undo_stack: UndoStack::new(),
             cursor_jump: None,
             help_requested: false,
+            project_load_request: None,
         };
         for (channel, instrument) in state.project.instruments.iter().enumerate() {
             state
@@ -813,6 +845,20 @@ impl AppState {
     pub fn time(&self) -> Duration {
         return self.time;
     }
+    pub fn request_open_file(
+        &mut self,
+        on_submit: impl FnOnce(&mut AppState, PathBuf) -> Result<()> + 'static,
+        start_directory: PathBuf,
+        title: impl Into<String>,
+        extensions: Vec<String>,
+    ) {
+        self.open_file_request = Some((
+            Box::new(on_submit),
+            start_directory,
+            title.into(),
+            extensions,
+        ));
+    }
     pub fn request_save_file(
         &mut self,
         on_submit: impl FnOnce(&mut AppState, PathBuf) -> Result<()> + 'static,
@@ -834,6 +880,16 @@ impl AppState {
         self.project_path = Some(path);
         self.notify("SAVED");
         return Ok(());
+    }
+    pub fn request_project_load(&mut self, path: PathBuf) {
+        self.project_load_request = Some(path);
+    }
+    fn shut_down(&mut self) {
+        self.engine.stop();
+        self.engine.shut_down();
+        if let Some(connection) = self.midi_in_connection.take() {
+            connection.close();
+        }
     }
     /// Hands an error to the app, which shows it in a warning dialog.
     pub fn report_error(&mut self, error: MTrakError) {

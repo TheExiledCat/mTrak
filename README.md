@@ -19,7 +19,7 @@ any hardware or software synth.
   (see [docs/COMMANDS.md](docs/COMMANDS.md))
 - Pattern and song playback, looping or once through for recording
 - Per-channel activity meters, channel muting and a MIDI event monitor
-- Built-in file browser for saving projects, with Save As and folder creation
+- Built-in file browser for opening and saving projects, with Save As and folder creation
 - Context-aware key hints in the footer, dialogs and file browser
 - FT2 color theme on truecolor terminals, a 16-color theme on Windows consoles and macOS
   terminals without truecolor, and a monochrome fallback
@@ -66,6 +66,7 @@ mtrak song.mtrak       # open a project
 ```
 
 Pick a MIDI output port with `Ctrl+O`. mTrak makes no sound on its own, so connect it to a physical (or virtual) midi device to make music.
+You can also open projects from the built-in file browser with `Alt+O`.
 
 ### Keybindings
 
