@@ -66,6 +66,7 @@ mtrak song.mtrak       # open a project
 ```
 
 Pick a MIDI output port with `Ctrl+O`. mTrak makes no sound on its own, so connect it to a physical (or virtual) midi device to make music.
+You can also open projects from the built in file browser using `Alt+O`
 
 ### Keybindings
 
