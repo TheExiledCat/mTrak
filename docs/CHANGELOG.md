@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.1.9 - 2026-10-15
+
+### Added
+
+- Open projects from inside mTrak: press `Alt+O` to open the file browser on your projects
+  folder (or the folder of the current project), pick a `.mtrak` file and press `Enter`.
+  You no longer have to start mTrak from the command line to open a project.
+  - `Enter` opens the highlighted file, or the file you selected with `Space`.
+  - If the current project has unsaved changes, mTrak asks before discarding them.
+  - Playback stops and the project opens fresh, the same as starting mTrak with it: the
+    cursor goes back to the start of the song, undo history is cleared, and the octave, line
+    add, active instrument and copy/paste clipboard go back to their defaults.
+  - The MIDI input and output saved in the project are reconnected.
+  - If the file can't be opened (for example a project saved with another version of
+    mTrak), an error is shown and the current project stays open.
+
+### Changed
+
+- Projects saved with v0.1.8 open in v0.1.9; the project file format didn't change.
+
 ## v0.1.8 - 2026-10-14
 
 ### Added
