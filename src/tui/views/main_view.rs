@@ -35,6 +35,7 @@ pub enum MainAction {
     Undo,
     Redo,
     Help,
+    File, //Open a file
 }
 
 pub struct MainView {
@@ -65,25 +66,17 @@ impl MainView {
                     "Save As",
                 )
                 .bind(
+                    Key::new(KeyCode::Char('o'), KeyModifiers::ALT),
+                    MainAction::File,
+                    "File",
+                )
+                .bind(
                     Key::new(constants::EXIT_KEY, KeyModifiers::CONTROL),
                     MainAction::Quit,
                     "Quit",
                 )
                 .bind(Key::char('?'), MainAction::Help, "Keys"),
         };
-    }
-
-    fn request_exit(&self, state: &mut AppState) {
-        if state.is_saved() {
-            state.request_exit();
-            return;
-        }
-        let dialog = Dialog::confirm(PopupLevel::Error, "Quit?", "Unsaved progress will be lost")
-            .on_submit(|state, _| {
-                state.request_exit();
-                return Ok(());
-            });
-        state.open_dialog(dialog);
     }
 }
 impl KeyActions for MainView {
@@ -95,7 +88,7 @@ impl KeyActions for MainView {
 
     fn perform(&mut self, action: MainAction, state: &mut AppState) -> Result<()> {
         match action {
-            MainAction::Quit => self.request_exit(state),
+            MainAction::Quit => confirm_discard(state, "Quit?", AppState::request_exit),
             MainAction::Save => match state.project_path.clone() {
                 Some(path) => state.save_project(path)?,
                 None => request_save_as(state),
@@ -114,6 +107,7 @@ impl KeyActions for MainView {
                 }
             }
             MainAction::Help => state.request_help(),
+            MainAction::File => confirm_discard(state, "Open?", browse_to_open),
         }
         return Ok(());
     }
@@ -128,17 +122,33 @@ impl KeyActions for MainView {
             MainAction::Undo => "Undo the last edit",
             MainAction::Redo => "Redo the last undone edit",
             MainAction::Help => "Show all keybindings",
+            MainAction::File => "Load a file",
         };
     }
 }
-fn request_save_as(state: &mut AppState) {
-    let start_directory = state
+fn confirm_discard(state: &mut AppState, title: &str, then: fn(&mut AppState)) {
+    if state.is_saved() {
+        then(state);
+        return;
+    }
+    let dialog = Dialog::confirm(PopupLevel::Error, title, "Unsaved progress will be lost")
+        .on_submit(move |state, _| {
+            then(state);
+            return Ok(());
+        });
+    state.open_dialog(dialog);
+}
+fn project_browse_directory(state: &AppState) -> PathBuf {
+    return state
         .project_path
         .as_ref()
         .and_then(|p| p.parent())
         .map(PathBuf::from)
         .or_else(files::get_projects_directory_root)
         .unwrap_or_else(|| PathBuf::from("."));
+}
+fn request_save_as(state: &mut AppState) {
+    let start_directory = project_browse_directory(state);
     state.request_save_file(
         |state, file_path| {
             let name = file_path.file_name().unwrap_or_default().to_string_lossy();
@@ -149,6 +159,18 @@ fn request_save_as(state: &mut AppState) {
         },
         start_directory,
         "Save project",
+        vec!["*".to_owned() + file_browser::MTRAK_FILE_EXTENSION],
+    );
+}
+fn browse_to_open(state: &mut AppState) {
+    let start_directory = project_browse_directory(state);
+    state.request_open_file(
+        |state, file_path| {
+            state.request_project_load(file_path);
+            return Ok(());
+        },
+        start_directory,
+        "Open project",
         vec!["*".to_owned() + file_browser::MTRAK_FILE_EXTENSION],
     );
 }
@@ -197,6 +219,7 @@ impl MtrakWidget for MainView {
                 .map(|h| h.enabled(state.can_redo())),
         );
         hints.extend(self.keys.hint_for(MainAction::Save));
+        hints.extend(self.keys.hint_for(MainAction::File));
         hints.extend(self.keys.hint_for(MainAction::Quit));
     }
 

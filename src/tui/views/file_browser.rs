@@ -15,7 +15,7 @@ use ratatui::{
 };
 
 use crate::{
-    error::{MTrakError, Result},
+    error::Result,
     tui::{
         app::AppState,
         framework::{
@@ -112,15 +112,15 @@ impl FileBrowser {
             current_folder_contents: vec![],
         };
     }
-    //opens a save file picker, picks a directory to save the file in and a name for the file.
-    pub fn save_file(
+
+    fn open(
         &mut self,
+        mode: FileBrowserMode,
         on_submit: Box<Submit>,
         start_directory: PathBuf,
         title: impl Into<String>,
-        extensions: Vec<String>,
     ) {
-        self.mode = SaveFile { extensions };
+        self.mode = mode;
         self.is_open = true;
         self.submit_handler = Some(on_submit);
         self.title = title.into();
@@ -133,7 +133,25 @@ impl FileBrowser {
 
         self.load_contents();
     }
-
+    //opens a save file picker, picks a directory to save the file in and a name for the file.
+    pub fn save_file(
+        &mut self,
+        on_submit: Box<Submit>,
+        start_directory: PathBuf,
+        title: impl Into<String>,
+        extensions: Vec<String>,
+    ) {
+        self.open(SaveFile { extensions }, on_submit, start_directory, title)
+    }
+    pub fn open_file(
+        &mut self,
+        on_submit: Box<Submit>,
+        start_directory: PathBuf,
+        title: impl Into<String>,
+        extensions: Vec<String>,
+    ) {
+        self.open(OpenFile { extensions }, on_submit, start_directory, title)
+    }
     pub fn is_open(&self) -> bool {
         return self.is_open;
     }
@@ -182,8 +200,23 @@ impl FileBrowser {
                 state.open_dialog(dialog);
                 return Ok(());
             }
-            OpenFile { .. } => return Err(MTrakError::Unsupported("Opening files")),
+            OpenFile { .. } => {
+                let Some(file) = self.selected_file.clone().or_else(|| self.highlighted_file())
+                else {
+                    state.open_dialog(Dialog::popup(
+                        PopupLevel::Warning,
+                        "File browser",
+                        "No file selected",
+                    ));
+                    return Ok(());
+                };
+                return self.finish(state, file);
+            }
         };
+    }
+    fn highlighted_file(&self) -> Option<PathBuf> {
+        let entry = self.current_folder_contents.get(self.selected_index.checked_sub(1)?)?;
+        return Some(entry.path()).filter(|p| p.is_file());
     }
     fn finish(&mut self, state: &mut AppState, path: PathBuf) -> Result<()> {
         self.is_open = false;
@@ -434,17 +467,7 @@ impl KeyActions for FileBrowser {
                     None => {}
                 }
             }
-            FileBrowserAction::Confirm => {
-                if matches!(self.mode, SaveFile { .. }) || self.selected_file.is_some() {
-                    self.submit(state)?;
-                } else {
-                    state.open_dialog(Dialog::popup(
-                        PopupLevel::Warning,
-                        "File browser",
-                        "No file selected",
-                    ));
-                }
-            }
+            FileBrowserAction::Confirm => self.submit(state)?,
             FileBrowserAction::NewDirectory => self.request_new_directory(state),
             FileBrowserAction::Cancel => {
                 self.is_open = false;
