@@ -177,11 +177,17 @@ impl EngineHandle {
     }
 }
 
-impl Drop for EngineHandle {
-    fn drop(&mut self) {
+impl EngineHandle {
+    pub fn shut_down(&mut self) {
         self.commands.take();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+impl Drop for EngineHandle {
+    fn drop(&mut self) {
+        self.shut_down();
     }
 }

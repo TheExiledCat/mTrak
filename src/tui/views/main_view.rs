@@ -35,6 +35,7 @@ pub enum MainAction {
     Undo,
     Redo,
     Help,
+    File, //Open a file
 }
 
 pub struct MainView {
@@ -63,6 +64,11 @@ impl MainView {
                     Key::new(KeyCode::Char('s'), KeyModifiers::ALT),
                     MainAction::SaveAs,
                     "Save As",
+                )
+                .bind(
+                    Key::new(KeyCode::Char('o'), KeyModifiers::ALT),
+                    MainAction::File,
+                    "File",
                 )
                 .bind(
                     Key::new(constants::EXIT_KEY, KeyModifiers::CONTROL),
@@ -114,6 +120,7 @@ impl KeyActions for MainView {
                 }
             }
             MainAction::Help => state.request_help(),
+            MainAction::File => request_open(state),
         }
         return Ok(());
     }
@@ -128,6 +135,7 @@ impl KeyActions for MainView {
             MainAction::Undo => "Undo the last edit",
             MainAction::Redo => "Redo the last undone edit",
             MainAction::Help => "Show all keybindings",
+            MainAction::File => "Load a file",
         };
     }
 }
@@ -149,6 +157,36 @@ fn request_save_as(state: &mut AppState) {
         },
         start_directory,
         "Save project",
+        vec!["*".to_owned() + file_browser::MTRAK_FILE_EXTENSION],
+    );
+}
+fn request_open(state: &mut AppState) {
+    if !state.is_saved() {
+        let dialog = Dialog::confirm(PopupLevel::Error, "Open?", "Unsaved progress will be lost")
+            .on_submit(|state, _| {
+                browse_to_open(state);
+                return Ok(());
+            });
+        state.open_dialog(dialog);
+        return;
+    }
+    browse_to_open(state);
+}
+fn browse_to_open(state: &mut AppState) {
+    let start_directory = state
+        .project_path
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map(PathBuf::from)
+        .or_else(files::get_projects_directory_root)
+        .unwrap_or_else(|| PathBuf::from("."));
+    state.request_open_file(
+        |state, file_path| {
+            state.request_project_load(file_path);
+            return Ok(());
+        },
+        start_directory,
+        "Open project",
         vec!["*".to_owned() + file_browser::MTRAK_FILE_EXTENSION],
     );
 }
@@ -197,6 +235,7 @@ impl MtrakWidget for MainView {
                 .map(|h| h.enabled(state.can_redo())),
         );
         hints.extend(self.keys.hint_for(MainAction::Save));
+        hints.extend(self.keys.hint_for(MainAction::File));
         hints.extend(self.keys.hint_for(MainAction::Quit));
     }
 
