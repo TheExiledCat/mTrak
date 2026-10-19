@@ -187,7 +187,7 @@ impl Dialog {
 
     pub fn help(sections: &mut Vec<HelpSection>) {
         let dialog = Dialog::new("", Vec::new());
-        let select = Select::new("", Vec::new());
+        let select = Select::new("", Vec::<String>::new());
         let checkbox = Checkbox::new("", "");
         sections.push(
             dialog
@@ -551,11 +551,11 @@ pub enum SelectAction {
 }
 
 impl Select {
-    pub fn new(id: &'static str, options: Vec<String>) -> Self {
+    pub fn new(id: &'static str, options: Vec<impl Into<String>>) -> Self {
         return Self {
             id,
             label: None,
-            options,
+            options: options.into_iter().map(|s| s.into()).collect(),
             selected: 0,
             offset: 0,
             max_visible: 8,

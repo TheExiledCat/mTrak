@@ -21,7 +21,7 @@ use crate::{
         effect::CommandKind,
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX, bytes_to_message},
         note::{Note, NoteKind, NotePitch},
-        pattern::{self, Block, Pattern, PatternId, PatternRow},
+        pattern::{self, Block, ClearOption, ClearTarget, Pattern, PatternId, PatternRow},
         project::{Project, SequenceRow},
     },
     engine::{engine::PlayMode, handle::EngineHandle},
@@ -167,6 +167,12 @@ impl App {
         ));
         return Ok(());
     }
+    fn table_dialog_height(&self) -> u8 {
+        let terminal_height = self.terminal.size().map(|s| s.height).unwrap_or(24);
+        return (terminal_height * 3 / 5)
+            .saturating_sub(4)
+            .min(u8::MAX as u16) as u8;
+    }
     /// Marks presses of keys that are still held as repeats.
     fn mark_repeat(&mut self, key: &mut KeyEvent) {
         match key.kind {
@@ -198,12 +204,14 @@ impl App {
             self.root.help(&mut sections);
             self.file_browser.help(&mut sections);
             Dialog::help(&mut sections);
-            let terminal_height = self.terminal.size().map(|s| s.height).unwrap_or(24);
-            let height = (terminal_height * 3 / 5)
-                .saturating_sub(4)
-                .min(u8::MAX as u16);
+            self.dialogs.push(keybindings::keybindings_dialog(
+                sections,
+                self.table_dialog_height(),
+            ));
+        }
+        if std::mem::take(&mut self.state.commands_requested) {
             self.dialogs
-                .push(keybindings::keybindings_dialog(sections, height as u8));
+                .push(keybindings::commands_dialog(self.table_dialog_height()));
         }
         if let Some(on_submit) = self.state.save_file_request.take() {
             self.file_browser
@@ -419,6 +427,8 @@ pub struct AppState {
     time: Duration,
     pending_dialogs: Vec<Dialog>,
     help_requested: bool,
+    commands_requested: bool,
+    clear_request: Option<(ClearOption, ClearTarget)>,
     project_load_request: Option<PathBuf>,
     open_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
     save_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
@@ -487,6 +497,8 @@ impl AppState {
             undo_stack: UndoStack::new(),
             cursor_jump: None,
             help_requested: false,
+            commands_requested: false,
+            clear_request: None,
             project_load_request: None,
         };
         for (channel, instrument) in state.project.instruments.iter().enumerate() {
@@ -898,6 +910,9 @@ impl AppState {
     pub fn request_help(&mut self) {
         self.help_requested = true;
     }
+    pub fn request_commands(&mut self) {
+        self.commands_requested = true;
+    }
     pub fn request_exit(&mut self) {
         self.exit_requested = true;
     }
@@ -920,7 +935,12 @@ impl AppState {
     pub fn decrease_line_add(&mut self) {
         self.line_add = self.line_add.saturating_sub(1);
     }
-
+    pub fn request_clear(&mut self, option: ClearOption, target: ClearTarget) {
+        self.clear_request = Some((option, target));
+    }
+    pub fn take_clear_request(&mut self) -> Option<(ClearOption, ClearTarget)> {
+        return self.clear_request.take();
+    }
     pub fn next_pattern(&mut self) {
         self.active_pattern.0 = self.active_pattern.0.saturating_add(1);
         self.ensure_pattern(self.active_pattern);
@@ -942,12 +962,13 @@ impl AppState {
         let id = self.edit_sequence(|project| {
             let row = &mut project.sequence[index];
             if increase {
-                row.increate_pattern()
+                row.increase_pattern()
             } else {
                 row.decrease_pattern()
             }
         });
         self.ensure_pattern(id);
+        self.active_pattern = id;
     }
     pub fn change_sequence_repeats(&mut self, index: usize, increase: bool) {
         self.edit_sequence(|project| {

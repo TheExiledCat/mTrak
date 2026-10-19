@@ -18,7 +18,7 @@ use crate::{
         effect::Command,
         midi::{MIDI_CHANNEL_MAX, VELOCITY_MAX, VOLUME_MAX},
         note::{Note, NoteKind, NotePitch},
-        pattern::{self, PatternId},
+        pattern::{self, ClearOption, ClearTarget, PatternId},
     },
     engine::engine::{PlayMode, velocity},
     error::{MTrakError, Result},
@@ -424,12 +424,7 @@ impl TimeLineView {
         let block = match area {
             TransposeArea::Track => pattern.track_block(self.track_index),
             TransposeArea::Pattern => pattern.block(),
-            TransposeArea::Block => marked_block.unwrap_or(pattern::Block {
-                track: self.track_index,
-                width: 1,
-                row: self.row_index,
-                height: 1,
-            }),
+            TransposeArea::Block => marked_block.unwrap_or(self.cursor_block()),
         };
         let instrument = (!all_instruments).then_some(state.active_instrument);
         state.edit_block(block, |_, pattern| {
@@ -793,6 +788,31 @@ impl KeyActions for TimeLineView {
     }
 }
 impl TimeLineView {
+    fn cursor_block(&self) -> pattern::Block {
+        return pattern::Block {
+            track: self.track_index,
+            width: 1,
+            row: self.row_index,
+            height: 1,
+        };
+    }
+    fn clear(&mut self, state: &mut AppState, option: ClearOption, target: ClearTarget) {
+        if state.engine.status().play_mode() != PlayMode::Paused {
+            state.notify("CANT CLR");
+            return;
+        }
+        let pattern = state.active_pattern();
+        let marked_block = self.marked_block(state);
+        let block = match option {
+            ClearOption::Block => marked_block.unwrap_or(self.cursor_block()),
+            ClearOption::Track => pattern.track_block(self.track_index),
+            ClearOption::Pattern => pattern.block(),
+        };
+        state.edit_block(block, |_, pattern| pattern.clear(block, target));
+        if matches!(option, ClearOption::Block) && marked_block.is_some() {
+            self.block_anchor = None;
+        }
+    }
     //returns the marked block area, if any
     fn marked_block(&self, state: &AppState) -> Option<pattern::Block> {
         let (pattern, anchor_track, anchor_row) = self.block_anchor?;
@@ -1127,6 +1147,9 @@ impl MtrakWidget for TimeLineView {
         let midi_input = state.drain_midi_input();
         if !midi_input.is_empty() {
             self.handle_midi_input(state, midi_input);
+        }
+        if let Some((option, target)) = state.take_clear_request() {
+            self.clear(state, option, target);
         }
         self.track_cache
             .borrow_mut()

@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::{
+    data::effect::{EFFECT_COMMAND_LOOKUP, MIDI_COMMAND_LOOKUP},
     error::Result,
     tui::{
         app::AppState,
@@ -172,14 +173,28 @@ impl DialogComponent for KeyTable {
     }
 }
 
+fn table_dialog(title: &str, sections: Vec<HelpSection>, height: u8) -> Dialog {
+    return Dialog::new(title, vec![KeyTable::new(sections, height.max(1)).boxed()])
+        .width(u16::MAX);
+}
+
 pub fn keybindings_dialog(mut sections: Vec<HelpSection>, height: u8) -> Dialog {
     sections.push(
         HelpSection::new("Keybindings screen")
             .entries(table_keymap().help_entries(KeyTable::describe)),
     );
-    return Dialog::new(
-        "Keybindings",
-        vec![KeyTable::new(sections, height.max(1)).boxed()],
-    )
-    .width(u16::MAX);
+    return table_dialog("Keybindings", sections, height);
+}
+
+pub fn commands_dialog(height: u8) -> Dialog {
+    let midi = MIDI_COMMAND_LOOKUP.iter().fold(
+        HelpSection::new("MIDI commands"),
+        |section, (c, command)| section.entry(format!("{c}xx"), command.description()),
+    );
+    let effects = EFFECT_COMMAND_LOOKUP.iter().fold(
+        HelpSection::new("Effect commands"),
+        |section, (c, command)| section.entry(format!("{c}xx"), command.description()),
+    );
+    let general = HelpSection::new("Values").entry("000", "No command");
+    return table_dialog("Commands", vec![general, midi, effects], height);
 }

@@ -17,6 +17,7 @@ use crate::{
     data::{
         config::TITLE,
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, midi_to_string},
+        pattern::{ClearOption, ClearTarget},
     },
     engine::engine::PlayMode,
     error::Result,
@@ -850,6 +851,38 @@ fn open_config_dialog(state: &mut AppState) {
     });
     state.open_dialog(dialog);
 }
+fn open_clear_dialog(state: &mut AppState) {
+    let options = vec!["Block", "Track", "Pattern"];
+    let targets = vec!["All", "Note", "Vel", "Cmd"];
+    let dialog = Dialog::new(
+        "Clear",
+        vec![
+            Select::new("clear", options).label("Selection").boxed(),
+            Select::new("target", targets).label("Target").boxed(),
+        ],
+    )
+    .on_submit(|state, result| {
+        use ClearOption::*;
+        use ClearTarget::*;
+        let option = match result.choice("clear").unwrap_or(0) {
+            0 => Block,
+            1 => Track,
+            2 => Pattern,
+            _ => unreachable!(),
+        };
+        let target = match result.choice("target").unwrap_or(0) {
+            0 => All,
+            1 => Note,
+            2 => Velocity,
+            3 => Command,
+            _ => unreachable!(),
+        };
+        state.request_clear(option, target);
+        return Ok(());
+    });
+
+    state.open_dialog(dialog);
+}
 fn open_instrument_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
     let name = &state.project().instruments[instrument as usize].name;
@@ -1062,6 +1095,7 @@ enum UtilListAction {
     Instruments,
     Velocity,
     Config,
+    Clear,
 }
 struct UtilList {
     keymap: Keymap<UtilListAction>,
@@ -1072,6 +1106,7 @@ impl UtilList {
         let keymap = Keymap::new()
             .bind(Key::ctrl('r'), Instruments, "Instrument")
             .bind(Key::ctrl('e'), Velocity, "GLB Velocity")
+            .bind(Key::alt('z'), Clear, "Clear")
             .bind(Key::ctrl('o'), Config, "Config");
         return Self { keymap };
     }
@@ -1088,10 +1123,13 @@ impl MtrakWidget for UtilList {
             Constraint::Length(2),
         ])
         .split(area);
+        let keys: Vec<String> = bindings.iter().map(|b| b.key.to_string()).collect();
+        let key_width = keys.iter().map(|k| k.chars().count()).max().unwrap_or(0);
         let lines: Vec<Line> = bindings
             .iter()
-            .map(|b| {
-                Line::raw(format!("{}: {}", b.key, b.label))
+            .zip(&keys)
+            .map(|(b, key)| {
+                Line::raw(format!("{key:<key_width$}: {}", b.label))
                     .style(state.theme.heading)
                     .reversed()
             })
@@ -1119,6 +1157,7 @@ impl KeyActions for UtilList {
             UtilListAction::Instruments => open_instrument_dialog(state),
             UtilListAction::Velocity => open_velocity_dialog(state),
             UtilListAction::Config => open_config_dialog(state),
+            UtilListAction::Clear => open_clear_dialog(state),
         }
         return Ok(());
     }
@@ -1128,6 +1167,7 @@ impl KeyActions for UtilList {
             UtilListAction::Instruments => "Edit the current instrument",
             UtilListAction::Velocity => "Set the global velocity",
             UtilListAction::Config => "Choose the MIDI output",
+            UtilListAction::Clear => "Clear part of the current pattern",
         };
     }
 }
