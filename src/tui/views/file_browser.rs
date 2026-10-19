@@ -201,7 +201,10 @@ impl FileBrowser {
                 return Ok(());
             }
             OpenFile { .. } => {
-                let Some(file) = self.selected_file.clone().or_else(|| self.highlighted_file())
+                let Some(file) = self
+                    .selected_file
+                    .clone()
+                    .or_else(|| self.highlighted_file())
                 else {
                     state.open_dialog(Dialog::popup(
                         PopupLevel::Warning,
@@ -215,7 +218,9 @@ impl FileBrowser {
         };
     }
     fn highlighted_file(&self) -> Option<PathBuf> {
-        let entry = self.current_folder_contents.get(self.selected_index.checked_sub(1)?)?;
+        let entry = self
+            .current_folder_contents
+            .get(self.selected_index.checked_sub(1)?)?;
         return Some(entry.path()).filter(|p| p.is_file());
     }
     fn finish(&mut self, state: &mut AppState, path: PathBuf) -> Result<()> {
