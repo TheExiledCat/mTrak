@@ -22,6 +22,7 @@ num = "0.4.3"
 ureq = { version = "3.4.2", default-features = false, features = ["native-tls"] }
 serde_json = "1.0.143"
 zip = { version = "7.2.0", default-features = false, features = ["deflate-flate2"] }
+rand = "0.10.3"
 
 [profile.release]
 opt-level = "z"
