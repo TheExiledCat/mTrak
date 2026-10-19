@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::{
-    data::effect::{EFFECT_COMMAND_LOOKUP, MIDI_COMMAND_LOOKUP},
+    data::effect::{CommandForm, EFFECT_COMMAND_LOOKUP, MIDI_COMMAND_LOOKUP},
     error::Result,
     tui::{
         app::AppState,
@@ -187,14 +187,33 @@ pub fn keybindings_dialog(mut sections: Vec<HelpSection>, height: u8) -> Dialog 
 }
 
 pub fn commands_dialog(height: u8) -> Dialog {
-    let midi = MIDI_COMMAND_LOOKUP.iter().fold(
-        HelpSection::new("MIDI commands"),
-        |section, (c, command)| section.entry(format!("{c}xx"), command.description()),
+    let midi = commands_section(
+        "MIDI commands",
+        MIDI_COMMAND_LOOKUP
+            .iter()
+            .map(|(c, command)| (*c, command.forms())),
     );
-    let effects = EFFECT_COMMAND_LOOKUP.iter().fold(
-        HelpSection::new("Effect commands"),
-        |section, (c, command)| section.entry(format!("{c}xx"), command.description()),
+    let effects = commands_section(
+        "Effect commands",
+        EFFECT_COMMAND_LOOKUP
+            .iter()
+            .map(|(c, command)| (*c, command.forms())),
     );
     let general = HelpSection::new("Values").entry("000", "No command");
     return table_dialog("Commands", vec![general, midi, effects], height);
+}
+
+/// One row per way to write each command, e.g. `30y` and `31y` for the legato command.
+fn commands_section(
+    title: &'static str,
+    commands: impl Iterator<Item = (char, &'static [CommandForm])>,
+) -> HelpSection {
+    return commands
+        .flat_map(|(c, forms)| forms.iter().map(move |form| (c, form)))
+        .fold(
+            HelpSection::new(title),
+            |section, (c, (syntax, description))| {
+                section.entry(format!("{c}{syntax}"), description)
+            },
+        );
 }
