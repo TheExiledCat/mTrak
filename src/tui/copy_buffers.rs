@@ -1,7 +1,7 @@
 use crate::{
     data::{
         note::Note,
-        pattern::{Block, Pattern, PatternRow},
+        pattern::{Block, ClearTarget, Pattern, PatternRow},
     },
     error::Result,
 };
@@ -56,11 +56,11 @@ impl CopyBuffers {
 
     pub fn cut_track(&mut self, pattern: &mut Pattern, track: u8) {
         self.copy_track(pattern, track);
-        clear(pattern, pattern.track_block(track));
+        pattern.clear(pattern.track_block(track), ClearTarget::All);
     }
     pub fn cut_pattern(&mut self, pattern: &mut Pattern) {
         self.copy_pattern(pattern);
-        clear(pattern, pattern.block());
+        pattern.clear(pattern.block(), ClearTarget::All);
     }
     pub fn cut_block(&mut self, pattern: &mut Pattern, block: Block) {
         let previous = self.block_buffer.take();
@@ -69,7 +69,7 @@ impl CopyBuffers {
             self.block_buffer = previous;
             return;
         }
-        clear(pattern, block);
+        pattern.clear(block, ClearTarget::All);
     }
 
     /// paste the buffered track into the pattern at a certain track offset. Truncates the rows to the pattern row length
@@ -149,14 +149,6 @@ impl CopyBuffers {
 impl Default for CopyBuffers {
     fn default() -> Self {
         return Self::new();
-    }
-}
-
-fn clear(pattern: &mut Pattern, block: Block) {
-    for row in block.rows() {
-        for track in block.tracks() {
-            pattern.set_event(row, track, Note::empty());
-        }
     }
 }
 

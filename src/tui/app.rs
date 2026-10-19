@@ -21,7 +21,7 @@ use crate::{
         effect::CommandKind,
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX, bytes_to_message},
         note::{Note, NoteKind, NotePitch},
-        pattern::{self, Block, Pattern, PatternId, PatternRow},
+        pattern::{self, Block, ClearOption, ClearTarget, Pattern, PatternId, PatternRow},
         project::{Project, SequenceRow},
     },
     engine::{engine::PlayMode, handle::EngineHandle},
@@ -428,6 +428,7 @@ pub struct AppState {
     pending_dialogs: Vec<Dialog>,
     help_requested: bool,
     commands_requested: bool,
+    clear_request: Option<(ClearOption, ClearTarget)>,
     project_load_request: Option<PathBuf>,
     open_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
     save_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
@@ -497,6 +498,7 @@ impl AppState {
             cursor_jump: None,
             help_requested: false,
             commands_requested: false,
+            clear_request: None,
             project_load_request: None,
         };
         for (channel, instrument) in state.project.instruments.iter().enumerate() {
@@ -933,7 +935,12 @@ impl AppState {
     pub fn decrease_line_add(&mut self) {
         self.line_add = self.line_add.saturating_sub(1);
     }
-
+    pub fn request_clear(&mut self, option: ClearOption, target: ClearTarget) {
+        self.clear_request = Some((option, target));
+    }
+    pub fn take_clear_request(&mut self) -> Option<(ClearOption, ClearTarget)> {
+        return self.clear_request.take();
+    }
     pub fn next_pattern(&mut self) {
         self.active_pattern.0 = self.active_pattern.0.saturating_add(1);
         self.ensure_pattern(self.active_pattern);
@@ -955,12 +962,13 @@ impl AppState {
         let id = self.edit_sequence(|project| {
             let row = &mut project.sequence[index];
             if increase {
-                row.increate_pattern()
+                row.increase_pattern()
             } else {
                 row.decrease_pattern()
             }
         });
         self.ensure_pattern(id);
+        self.active_pattern = id;
     }
     pub fn change_sequence_repeats(&mut self, index: usize, increase: bool) {
         self.edit_sequence(|project| {

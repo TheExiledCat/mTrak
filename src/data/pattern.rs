@@ -30,6 +30,19 @@ impl Block {
         return self.row as usize..self.row as usize + self.height as usize;
     }
 }
+#[derive(Clone, Copy)]
+pub enum ClearOption {
+    Block,
+    Track,
+    Pattern,
+}
+#[derive(Clone, Copy)]
+pub enum ClearTarget {
+    Note,
+    Velocity,
+    Command,
+    All,
+}
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Pattern {
     pub ticks_per_line: u8,
@@ -190,6 +203,25 @@ impl Pattern {
             }
         }
     }
+    pub fn clear(&mut self, block: Block, target: ClearTarget) {
+        for row in block.rows() {
+            for track in block.tracks() {
+                let Some(&current) = self.get_event(row, track) else {
+                    continue;
+                };
+                let mut note = current;
+                match target {
+                    ClearTarget::Note => note.clear_note(),
+                    ClearTarget::Velocity => note.clear_volume(),
+                    ClearTarget::Command => note.clear_command(),
+                    ClearTarget::All => note = Note::empty(),
+                }
+                if note != current {
+                    self.set_event(row, track, note);
+                }
+            }
+        }
+    }
     /// Shifts every track down one row from `row`, leaving an empty row at `row`.
     /// The last row falls off the end of the pattern.
     pub fn insert_line(&mut self, row: usize) {
@@ -317,7 +349,10 @@ impl PatternStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::note::{NoteKind, NotePitch};
+    use crate::data::{
+        effect::{Command, CommandKind},
+        note::{NoteKind, NotePitch},
+    };
 
     fn note() -> Note {
         let mut note = Note::empty();
@@ -351,6 +386,31 @@ mod tests {
         pattern.set_event(0, constants::TRACK_COUNT as usize, note());
         assert_eq!(pattern.get_event(4, 0), None);
         assert_eq!(pattern.get_event(0, constants::TRACK_COUNT as usize), None);
+    }
+
+    #[test]
+    fn clear_only_touches_target_inside_block() {
+        let mut pattern = Pattern::new(3);
+        let mut full = note();
+        full.velocity = Some(0x40);
+        full.command = Command::new(CommandKind::None, 0x10);
+        for row in 0..3 {
+            pattern.set_event(row, 0, full);
+            pattern.set_event(row, 1, full);
+        }
+        let block = Block {
+            track: 0,
+            width: 1,
+            row: 1,
+            height: 2,
+        };
+        pattern.clear(block, ClearTarget::Velocity);
+        assert_eq!(pattern.get_event(0, 0), Some(&full));
+        assert_eq!(pattern.get_event(1, 0).unwrap().velocity, None);
+        assert_eq!(pattern.get_event(1, 0).unwrap().kind, full.kind);
+        assert_eq!(pattern.get_event(1, 1), Some(&full));
+        pattern.clear(block, ClearTarget::All);
+        assert_eq!(pattern.get_event(2, 0), Some(&Note::empty()));
     }
 
     #[test]
