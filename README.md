@@ -137,8 +137,16 @@ Planned features, in no particular order:
     - [x] Tempo (BPM) and speed change (`F`)
     - [X] Note delay
     - [X] Note probability
-    - [ ] Portamento (overlap notes)
+    - [X] Note Cut
+    - [X] Portamento (overlap notes)
     - [ ] Shorthand commands for common CCs (mod wheel, filter cutoff, etc.)
+    - [ ] Song modification
+        - [ ] Pattern break
+        - [ ] Jump song position
+        - [ ] Pattern delay
+        - [ ] Set global velocity
+        - [ ] Set track velocity
+        - [ ] Glide global velocity
 - [ ] **Autosave and crash recovery**
 - [ ] **Custom themes**
 - [ ] **Keyboard remapping**, with default layouts per OS/shell

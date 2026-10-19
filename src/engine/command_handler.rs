@@ -7,7 +7,7 @@ use rand::RngExt;
 
 use crate::{
     data::{
-        effect::{EffectCommand, MidiCommand},
+        effect::{Effect, MidiCommand},
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX},
         note::Note,
     },
@@ -40,28 +40,12 @@ pub enum NoteAction {
         every: u8,
         volume: u8,
     },
-    /// Glide into it from the track's current note: start it `early` ticks before its row,
-    /// and keep the old note sounding `overlap` ticks after it starts.
-    Legato {
-        early: u8,
-        overlap: u8,
-    },
-}
-
-/// What a portamento command does: 0x starts the note x ticks early, 1x keeps the previous
-/// note x ticks longer. 20 and up are left for another command.
-pub fn portamento(value: u8) -> NoteAction {
-    return match value >> 4 {
-        0x0 => NoteAction::Legato {
-            early: value & 0x0F,
-            overlap: 0,
-        },
-        0x1 => NoteAction::Legato {
-            early: 0,
-            overlap: value & 0x0F,
-        },
-        _ => NoteAction::Play,
-    };
+    /// Glide into it from the track's current note, which keeps sounding this many ticks
+    /// after it starts.
+    Legato(u8),
+    /// Play it, then release the track's note this many ticks into the row. 0 releases it
+    /// straight away without playing the cell's note.
+    Cut(u8),
 }
 
 /// The velocity of a roll's next hit, from the previous one. Follows FT2's multi retrig
@@ -334,9 +318,6 @@ impl MidiCommandHandler {
         self.pressed = [false; MIDI_CHANNEL_COUNT];
     }
 }
-/// Values from 20 up set the BPM; lower values set the speed.
-const TEMPO_MIN_BPM: u8 = 0x20;
-
 /// Keeps the tempo set by effect commands, which carries over pattern boundaries until it is
 /// reset by 00 or by playback starting or stopping.
 pub struct EffectCommandHandler {
@@ -366,33 +347,37 @@ impl EffectCommandHandler {
         return self.speed;
     }
 
-    /// Runs an effect command and says what happens to the note on its cell.
-    pub fn apply(&mut self, command: EffectCommand, value: u8) -> NoteAction {
-        return match command {
-            EffectCommand::SetTempo => {
-                match value {
-                    0 => {
-                        self.bpm = None;
-                        self.speed = None;
-                    }
-                    value if value < TEMPO_MIN_BPM => self.speed = Some(value),
-                    value => self.bpm = Some(value),
-                }
+    /// Runs an effect and says what happens to the note on its cell.
+    pub fn apply(&mut self, effect: Effect) -> NoteAction {
+        return match effect {
+            Effect::ResetTempo => {
+                self.bpm = None;
+                self.speed = None;
                 NoteAction::Play
             }
-            EffectCommand::Probability => match value {
-                0 => NoteAction::Skip,
-                0xFF => NoteAction::Play,
-                chance if rand::rng().random_range(0..=0xFF) < chance => NoteAction::Play,
-                _ => NoteAction::Skip,
-            },
-            EffectCommand::Delay if value > 0 => NoteAction::Delay(value),
-            EffectCommand::Delay => NoteAction::Play,
-            EffectCommand::Roll => match (value & 0x0F, value >> 4) {
-                (0, _) => NoteAction::Play,
-                (every, volume) => NoteAction::Roll { every, volume },
-            },
-            EffectCommand::Portamento => portamento(value),
+            Effect::SetSpeed(speed) => {
+                self.speed = Some(speed);
+                NoteAction::Play
+            }
+            Effect::SetBpm(bpm) => {
+                self.bpm = Some(bpm);
+                NoteAction::Play
+            }
+            Effect::Probability(0) => NoteAction::Skip,
+            Effect::Probability(0xFF) => NoteAction::Play,
+            Effect::Probability(chance) if rand::rng().random_range(0..=0xFF) < chance => {
+                NoteAction::Play
+            }
+            Effect::Probability(_) => NoteAction::Skip,
+            Effect::DelayEarly(_) => NoteAction::Play,
+            Effect::DelayLate(0) => NoteAction::Play,
+            Effect::DelayLate(ticks) => NoteAction::Delay(ticks),
+            Effect::Roll { every: 0, .. } => NoteAction::Play,
+            Effect::Roll { every, volume } => NoteAction::Roll { every, volume },
+            Effect::LegatoEarly(_) => NoteAction::Legato(0),
+            Effect::LegatoHold(overlap) => NoteAction::Legato(overlap),
+            Effect::Cut(tick) => NoteAction::Cut(tick),
+            Effect::Unused => NoteAction::Play,
         };
     }
 
@@ -409,7 +394,7 @@ mod tests {
 
     use super::*;
     use crate::data::{
-        effect::{Command, CommandKind},
+        effect::{Command, CommandKind, EffectCommand},
         note::Note,
     };
 
@@ -504,7 +489,7 @@ mod tests {
 
     fn tempo(handler: &mut EffectCommandHandler, value: u8) {
         assert_eq!(
-            handler.apply(EffectCommand::SetTempo, value),
+            handler.apply(EffectCommand::SetTempo.decode(value)),
             NoteAction::Play
         );
     }
@@ -534,68 +519,54 @@ mod tests {
         let mut handler = EffectCommandHandler::new();
         for _ in 0..100 {
             assert_eq!(
-                handler.apply(EffectCommand::Probability, 0x00),
+                handler.apply(EffectCommand::Probability.decode(0x00)),
                 NoteAction::Skip
             );
             assert_eq!(
-                handler.apply(EffectCommand::Probability, 0xFF),
+                handler.apply(EffectCommand::Probability.decode(0xFF)),
                 NoteAction::Play
             );
         }
     }
 
     #[test]
-    fn delay_holds_the_note_back_unless_it_is_00() {
+    fn late_delay_holds_the_note_back_unless_it_is_10() {
         let mut handler = EffectCommandHandler::new();
-        assert_eq!(handler.apply(EffectCommand::Delay, 0), NoteAction::Play);
-        assert_eq!(handler.apply(EffectCommand::Delay, 3), NoteAction::Delay(3));
+        assert_eq!(
+            handler.apply(EffectCommand::Delay.decode(0x10)),
+            NoteAction::Play
+        );
+        assert_eq!(
+            handler.apply(EffectCommand::Delay.decode(0x13)),
+            NoteAction::Delay(3)
+        );
     }
 
     #[test]
     fn roll_00_just_plays() {
         let mut handler = EffectCommandHandler::new();
-        assert_eq!(handler.apply(EffectCommand::Roll, 0x00), NoteAction::Play);
-        assert_eq!(handler.apply(EffectCommand::Roll, 0x30), NoteAction::Play);
-    }
-
-    #[test]
-    fn portamento_splits_early_and_overlap() {
         assert_eq!(
-            portamento(0x00),
-            NoteAction::Legato {
-                early: 0,
-                overlap: 0
-            }
+            handler.apply(EffectCommand::Roll.decode(0x00)),
+            NoteAction::Play
         );
         assert_eq!(
-            portamento(0x03),
-            NoteAction::Legato {
-                early: 3,
-                overlap: 0
-            }
+            handler.apply(EffectCommand::Roll.decode(0x30)),
+            NoteAction::Play
         );
-        assert_eq!(
-            portamento(0x12),
-            NoteAction::Legato {
-                early: 0,
-                overlap: 2
-            }
-        );
-        assert_eq!(portamento(0x20), NoteAction::Play);
     }
 
     #[test]
     fn roll_splits_volume_and_interval() {
         let mut handler = EffectCommandHandler::new();
         assert_eq!(
-            handler.apply(EffectCommand::Roll, 0x02),
+            handler.apply(EffectCommand::Roll.decode(0x02)),
             NoteAction::Roll {
                 every: 2,
                 volume: 0
             }
         );
         assert_eq!(
-            handler.apply(EffectCommand::Roll, 0xA3),
+            handler.apply(EffectCommand::Roll.decode(0xA3)),
             NoteAction::Roll {
                 every: 3,
                 volume: 0xA

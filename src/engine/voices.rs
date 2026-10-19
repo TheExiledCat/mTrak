@@ -121,7 +121,7 @@ impl Voices {
     }
 
     /// Stops the track's note and any note still ringing after a legato note, straight away.
-    fn cut(&mut self, track: usize, out: &mut Vec<Message>) {
+    pub fn cut(&mut self, track: usize, out: &mut Vec<Message>) {
         if let Some(voice) = self.tracks.get_mut(track).and_then(Option::take) {
             self.note_off(voice, out);
         }
