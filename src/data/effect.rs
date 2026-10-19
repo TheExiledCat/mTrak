@@ -14,9 +14,10 @@ pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 8] = [
     ('A', AfterTouch),
     ('W', PitchBend),
 ];
-pub const EFFECT_COMMAND_LOOKUP: [(char, EffectCommand); 2] = [
+pub const EFFECT_COMMAND_LOOKUP: [(char, EffectCommand); 3] = [
     ('F', EffectCommand::SetTempo),
     ('Y', EffectCommand::Probability),
+    ('D', EffectCommand::Delay),
 ];
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
 pub enum CommandKind {
@@ -106,6 +107,7 @@ impl Display for MidiCommand {
 pub enum EffectCommand {
     SetTempo, // Sets the BPM from 20 up, the speed below that, and 00 goes back to the song's own
     Probability, // Decides whether or not this note plays based on a chance from 0 to FF
+    Delay,    //Delay the note by tick count equal to value
 }
 impl EffectCommand {
     /// A one line summary for the commands screen.
@@ -113,6 +115,7 @@ impl EffectCommand {
         return match self {
             EffectCommand::SetTempo => "Set tempo: 00 reset, 01-1F speed, 20-FF BPM",
             EffectCommand::Probability => "Note probability, 0 never plays, FF always plays",
+            EffectCommand::Delay => "Delay note, value determines the amount of ticks delayed by",
         };
     }
 

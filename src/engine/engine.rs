@@ -30,6 +30,7 @@ use crate::{
     engine::command_handler::{
         CommandContext, CommandHandler, EffectCommandHandler, MidiCommandHandler, SlideTarget,
     },
+    tui::constants::TRACK_COUNT,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -69,6 +70,13 @@ struct Clock {
     tick: u32,
 }
 
+/// A note held back by a note delay command until its tick in the row comes up.
+#[derive(Clone, Copy)]
+struct DelayedNote {
+    tick: u32,
+    note: Note,
+}
+
 pub struct MtrakEngine {
     commands: Receiver<EngineCommand>,
     events: Sender<MidiEvent>,
@@ -84,6 +92,7 @@ pub struct MtrakEngine {
     position: Position,
     clock: Option<Clock>,
     voices: Voices,
+    delayed_notes: [Option<DelayedNote>; TRACK_COUNT as usize],
 
     midi_command_handler: MidiCommandHandler,
     effect_command_handler: EffectCommandHandler,
@@ -114,6 +123,7 @@ impl MtrakEngine {
             pending_events: vec![],
             clock: None,
             voices: Voices::new(),
+            delayed_notes: [None; TRACK_COUNT as usize],
 
             midi_command_handler: MidiCommandHandler::new(),
             effect_command_handler: EffectCommandHandler::new(),
@@ -498,6 +508,7 @@ impl MtrakEngine {
     /// messages that undo what commands left set on the synth. These go out even on muted
     /// channels, like the all sound off on stop, so a synth is never left bent.
     fn reset_commands(&mut self) -> Vec<Message> {
+        self.delayed_notes = [None; TRACK_COUNT as usize];
         let mut events = vec![];
         self.midi_command_handler.reset(&mut events);
         self.effect_command_handler.reset(&mut events);
@@ -544,10 +555,13 @@ impl MtrakEngine {
         let Some(row) = pattern.rows.get(self.position.row) else {
             return;
         };
+        let tracks = row.tracks.clone();
         let mut out = vec![];
         self.voices.release_channels(&mutes, &mut out);
         out.extend(audible(row_tick, &mutes));
-        for (track, note) in row.tracks.iter().enumerate() {
+        // a delay that didn't fire was longer than the row, so its note never plays
+        self.delayed_notes = [None; TRACK_COUNT as usize];
+        for (track, note) in tracks.iter().enumerate() {
             let mut cancel_note = false;
             if note.command.kind != CommandKind::None {
                 let context = self.command_context(track, note);
@@ -561,23 +575,54 @@ impl MtrakEngine {
                 );
                 out.extend(audible(events, &mutes));
             }
-            match note.kind {
-                NoteKind::Empty => {}
-                NoteKind::On(_) if cancel_note => {}
-                NoteKind::Off => self.voices.release(track, &mut out),
-                NoteKind::On(pitch) => {
-                    let channel = note.instrument_id.unwrap_or(0).min(MIDI_CHANNEL_MAX);
-                    let glide = self.midi_command_handler.velocity(track);
-                    match velocity(note.velocity, glide) {
-                        Some(velocity) if !mutes[channel as usize] => self
-                            .voices
-                            .note_on(track, channel, pitch.0, velocity, &mut out),
-                        _ => self.voices.release(track, &mut out),
+            if cancel_note && matches!(note.kind, NoteKind::On(_)) {
+                continue;
+            }
+            let delay = note.command.value;
+            if note.command.kind == CommandKind::Effect(EffectCommand::Delay) && delay > 0 {
+                self.delayed_notes[track] = Some(DelayedNote {
+                    tick: delay as u32,
+                    note: *note,
+                });
+                continue;
+            }
+            self.play_note(track, note, &mutes, &mut out);
+        }
+        self.dispatch_messages(out);
+    }
+
+    /// Sends a cell's note, or releases the track's note for a note off.
+    fn play_note(&mut self, track: usize, note: &Note, mutes: &[bool; 16], out: &mut Vec<Message>) {
+        match note.kind {
+            NoteKind::Empty => {}
+            NoteKind::Off => self.voices.release(track, out),
+            NoteKind::On(pitch) => {
+                let channel = note.instrument_id.unwrap_or(0).min(MIDI_CHANNEL_MAX);
+                let glide = self.midi_command_handler.velocity(track);
+                match velocity(note.velocity, glide) {
+                    Some(velocity) if !mutes[channel as usize] => {
+                        self.voices.note_on(track, channel, pitch.0, velocity, out)
                     }
+                    _ => self.voices.release(track, out),
                 }
             }
         }
-        self.dispatch_messages(out);
+    }
+
+    /// Plays the delayed notes that are due on the current tick.
+    fn play_delayed_notes(&mut self, mutes: &[bool; 16], out: &mut Vec<Message>) {
+        let Some(tick) = self.clock.as_ref().map(|clock| clock.tick) else {
+            return;
+        };
+        for track in 0..self.delayed_notes.len() {
+            let Some(delayed) = self.delayed_notes[track] else {
+                continue;
+            };
+            if delayed.tick == tick {
+                self.delayed_notes[track] = None;
+                self.play_note(track, &delayed.note, mutes, out);
+            }
+        }
     }
 
     /// Cuts notes on channels muted in the current pattern.
@@ -594,7 +639,9 @@ impl MtrakEngine {
     /// Runs effects for the ticks between rows.
     fn effect_tick(&mut self) {
         let events = self.tick_commands();
-        let out = audible(events, &self.current_mutes());
+        let mutes = self.current_mutes();
+        let mut out = audible(events, &mutes);
+        self.play_delayed_notes(&mutes, &mut out);
         self.dispatch_messages(out);
     }
 
@@ -752,13 +799,19 @@ mod tests {
                 .collect();
         }
 
+        /// Moves to the next tick in the row and runs it, like the clock does.
+        fn effect_tick(&mut self) {
+            self.engine.clock.as_mut().unwrap().tick += 1;
+            self.engine.effect_tick();
+        }
+
         /// Runs the rest of the row's effect ticks, then pulses the clock until the next row has played.
         fn next_row(&mut self) {
             let ticks = self
                 .engine
                 .ticks_per_line(self.engine.current_pattern().unwrap());
             for _ in 1..ticks {
-                self.engine.effect_tick();
+                self.effect_tick();
             }
             for _ in 0..PULSES_PER_LINE {
                 self.engine.pulse();
@@ -1676,6 +1729,105 @@ mod tests {
         let mut note = Note::empty();
         note.command = Command::new(CommandKind::Effect(EffectCommand::SetTempo), value);
         return note;
+    }
+
+    fn delayed(mut cell: Note, ticks: u8) -> Note {
+        cell.command = Command::new(CommandKind::Effect(EffectCommand::Delay), ticks);
+        return cell;
+    }
+
+    #[test]
+    fn delayed_note_plays_on_its_tick() {
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 2))])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        assert_eq!(harness.messages(), vec![Message::Start]);
+        harness.effect_tick();
+        assert!(harness.messages().is_empty());
+        harness.effect_tick();
+        assert_eq!(
+            harness.messages(),
+            vec![Message::NoteOn(Channel::Ch1, 60, 0x40)]
+        );
+    }
+
+    #[test]
+    fn delayed_note_keeps_the_previous_note_until_it_plays() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[
+                (0, 0, note("C-4 0 40")),
+                (1, 0, delayed(note("D-4 0 40"), 3)),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.next_row();
+        harness.messages();
+        harness.effect_tick();
+        harness.effect_tick();
+        assert!(harness.messages().is_empty());
+        harness.effect_tick();
+        assert_eq!(
+            harness.messages(),
+            vec![
+                Message::NoteOff(Channel::Ch1, 60, 0),
+                Message::NoteOn(Channel::Ch1, 62, 0x40)
+            ]
+        );
+    }
+
+    #[test]
+    fn delayed_note_off_releases_on_its_tick() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[(0, 0, note("C-4 0 40")), (1, 0, delayed(note("==="), 1))],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.next_row();
+        harness.messages();
+        harness.effect_tick();
+        assert_eq!(
+            harness.messages(),
+            vec![Message::NoteOff(Channel::Ch1, 60, 0)]
+        );
+    }
+
+    #[test]
+    fn delay_longer_than_the_row_never_plays() {
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 6))])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.next_row();
+        harness.next_row();
+        assert!(note_velocities(&harness.messages()).is_empty());
+    }
+
+    #[test]
+    fn delay_zero_plays_straight_away() {
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0))])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        assert_eq!(
+            harness.messages(),
+            vec![Message::Start, Message::NoteOn(Channel::Ch1, 60, 0x40)]
+        );
+    }
+
+    #[test]
+    fn stopping_drops_a_pending_delayed_note() {
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 2))])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.engine.apply(EngineCommand::Stop);
+        assert!(harness.engine.delayed_notes.iter().all(Option::is_none));
     }
 
     #[test]

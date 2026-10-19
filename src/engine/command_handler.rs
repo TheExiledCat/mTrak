@@ -346,7 +346,7 @@ impl CommandHandler<EffectCommand> for EffectCommandHandler {
                 value if value < TEMPO_MIN_BPM => self.speed = Some(value),
                 value => self.bpm = Some(value),
             },
-            EffectCommand::Probability => {}
+            EffectCommand::Probability | EffectCommand::Delay => {}
         }
     }
 

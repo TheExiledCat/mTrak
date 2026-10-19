@@ -134,7 +134,7 @@ Planned features, in no particular order:
     - [ ] Roll
     - [ ] Roll with volume glide
     - [x] Tempo (BPM) and speed change (`F`)
-    - [ ] Note delay
+    - [X] Note delay
     - [X] Note probability
     - [ ] Shorthand commands for common CCs (mod wheel, filter cutoff, etc.)
 - [ ] **Autosave and crash recovery**
