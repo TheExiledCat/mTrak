@@ -61,6 +61,20 @@ impl MidiCommand {
         return matches!(self, CCSlide | CCVelocitySlide);
     }
 
+    /// A one line summary for the commands screen.
+    pub fn description(&self) -> &'static str {
+        return match self {
+            SetCC => "Set CC: select the CC number (hex) that C, G and H change",
+            ChangeCC => "Change CC: send the selected CC with this value",
+            CCSlide => "CC slide: slide the selected CC from this value to the next target",
+            CCVelocitySlide => "CC + velocity slide: a G that also sets the velocity of notes",
+            VelocitySlide => "Velocity slide: slide the velocity of notes played during it",
+            EndSlide => "End slide: land the running slide on this value and stop it",
+            AfterTouch => "Aftertouch: send channel pressure, 00 none to FF full",
+            PitchBend => "Pitch bend: bend the channel, 00 down, 80 centre, FF up",
+        };
+    }
+
     fn from_char(char: char) -> Result<Self, MTrakError> {
         return MIDI_COMMAND_LOOKUP
             .iter()
@@ -90,6 +104,13 @@ pub enum EffectCommand {
     SetTempo, // Sets the BPM from 20 up, the speed below that, and 00 goes back to the song's own
 }
 impl EffectCommand {
+    /// A one line summary for the commands screen.
+    pub fn description(&self) -> &'static str {
+        return match self {
+            EffectCommand::SetTempo => "Set tempo: 00 reset, 01-1F speed, 20-FF BPM",
+        };
+    }
+
     fn from_char(char: char) -> Result<Self, MTrakError> {
         return EFFECT_COMMAND_LOOKUP
             .iter()

@@ -32,7 +32,7 @@ impl SequenceRow {
         self.repeats = self.repeats.saturating_sub(1).max(1);
     }
 
-    pub fn increate_pattern(&mut self) -> PatternId {
+    pub fn increase_pattern(&mut self) -> PatternId {
         self.pattern_id.0 = self.pattern_id.0.saturating_add(1);
         return self.pattern_id;
     }
@@ -238,6 +238,6 @@ mod tests {
         };
         assert_eq!(row.decrease_pattern().0, 0);
         row.pattern_id = PatternId(u8::MAX);
-        assert_eq!(row.increate_pattern().0, u8::MAX);
+        assert_eq!(row.increase_pattern().0, u8::MAX);
     }
 }

@@ -35,6 +35,7 @@ pub enum MainAction {
     Undo,
     Redo,
     Help,
+    Commands,
     File, //Open a file
 }
 
@@ -75,7 +76,8 @@ impl MainView {
                     MainAction::Quit,
                     "Quit",
                 )
-                .bind(Key::char('?'), MainAction::Help, "Keys"),
+                .bind(Key::char('?'), MainAction::Help, "Keys")
+                .bind(Key::char('/'), MainAction::Commands, "Cmds"),
         };
     }
 }
@@ -107,6 +109,7 @@ impl KeyActions for MainView {
                 }
             }
             MainAction::Help => state.request_help(),
+            MainAction::Commands => state.request_commands(),
             MainAction::File => confirm_discard(state, "Open?", browse_to_open),
         }
         return Ok(());
@@ -122,6 +125,7 @@ impl KeyActions for MainView {
             MainAction::Undo => "Undo the last edit",
             MainAction::Redo => "Redo the last undone edit",
             MainAction::Help => "Show all keybindings",
+            MainAction::Commands => "Show all pattern commands",
             MainAction::File => "Load a file",
         };
     }
@@ -207,6 +211,7 @@ impl MtrakWidget for MainView {
 
     fn key_hints(&self, state: &AppState, hints: &mut Vec<KeyHint>) {
         hints.extend(self.keys.hint_for(MainAction::Help));
+        hints.extend(self.keys.hint_for(MainAction::Commands));
         self.content.key_hints(state, hints);
         hints.extend(
             self.keys
