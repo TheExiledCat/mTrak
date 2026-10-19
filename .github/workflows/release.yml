@@ -57,8 +57,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           ARCHIVE="${BIN_NAME}-${GITHUB_REF_NAME}-${{ matrix.target }}.zip"
-          cd target/${{ matrix.target }}/release
-          zip "$GITHUB_WORKSPACE/$ARCHIVE" "$BIN_NAME"
+          zip -j "$ARCHIVE" "target/${{ matrix.target }}/release/$BIN_NAME" docs/COMMANDS.md
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Package (Windows)
@@ -66,7 +65,7 @@ jobs:
         shell: pwsh
         run: |
           $archive = "$env:BIN_NAME-$env:GITHUB_REF_NAME-${{ matrix.target }}.zip"
-          Compress-Archive -Path "target/${{ matrix.target }}/release/$env:BIN_NAME.exe" -DestinationPath $archive
+          Compress-Archive -Path "target/${{ matrix.target }}/release/$env:BIN_NAME.exe", "docs/COMMANDS.md" -DestinationPath $archive
           "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - uses: actions/upload-artifact@v4
