@@ -86,8 +86,8 @@ release. Wait for approval and apply any edits they ask for.
   `Cargo.lock` picks up the new version (CI builds with `--locked`, which fails on a stale
   lock), then `cargo build --release --locked` to make sure it builds. If it doesn't build,
   stop and report; don't tag broken code.
-- Set the title on the first line of `README.md` to `# mTrak (X.Y.Z)`, replacing any version
-  already there (e.g. `# mTrak` or `# mTrak (0.2.0)`).
+- Set the title on the first line of `README.md` to `# mTrak vX.Y.Z`, replacing any version
+  already there (e.g. `# mTrak` or `# mTrak v0.2.0`).
 - Stage `Cargo.toml`, `Cargo.lock`, `README.md`, `docs/CHANGELOG.md` and whatever the user
   agreed to include.
 - Commit with the single-line message `vX.Y.Z` and nothing else: no body, no co-author
