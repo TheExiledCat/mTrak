@@ -189,11 +189,21 @@ pub fn keybindings_dialog(mut sections: Vec<HelpSection>, height: u8) -> Dialog 
 pub fn commands_dialog(height: u8) -> Dialog {
     let midi = MIDI_COMMAND_LOOKUP.iter().fold(
         HelpSection::new("MIDI commands"),
-        |section, (c, command)| section.entry(format!("{c}xx"), command.description()),
+        |section, (c, command)| {
+            section.entry(
+                format!("{c}{}", command.value_name()),
+                command.description(),
+            )
+        },
     );
     let effects = EFFECT_COMMAND_LOOKUP.iter().fold(
         HelpSection::new("Effect commands"),
-        |section, (c, command)| section.entry(format!("{c}xx"), command.description()),
+        |section, (c, command)| {
+            section.entry(
+                format!("{c}{}", command.value_name()),
+                command.description(),
+            )
+        },
     );
     let general = HelpSection::new("Values").entry("000", "No command");
     return table_dialog("Commands", vec![general, midi, effects], height);

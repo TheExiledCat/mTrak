@@ -12,9 +12,17 @@ struct Voice {
     pitch: u8,
 }
 
+/// A note replaced by a legato note that keeps sounding for a few more ticks.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Lingering {
+    voice: Voice,
+    ticks: u8,
+}
+
 /// Tracks which note each track is playing, so note offs reach the right channel and pitch.
 pub struct Voices {
     tracks: [Option<Voice>; TRACK_COUNT as usize],
+    lingering: [Option<Lingering>; TRACK_COUNT as usize],
     held: [[u8; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
     channel_volumes: [u8; MIDI_CHANNEL_COUNT],
     velocity: u8,
@@ -30,6 +38,7 @@ impl Voices {
     pub fn new() -> Self {
         return Self {
             tracks: [None; TRACK_COUNT as usize],
+            lingering: [None; TRACK_COUNT as usize],
             held: [[0; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
             channel_volumes: [0xFF; MIDI_CHANNEL_COUNT],
             velocity: 0xFF,
@@ -48,13 +57,56 @@ impl Voices {
         if track >= self.tracks.len() {
             return;
         }
+        self.release(track, out);
+        self.start(track, channel, pitch, velocity, out);
+    }
+
+    /// Starts the new note before releasing the track's current one, so a synth in legato
+    /// mode glides between them. The old note keeps sounding for `overlap` more ticks.
+    pub fn legato_on(
+        &mut self,
+        track: usize,
+        channel: u8,
+        pitch: u8,
+        velocity: u8,
+        overlap: u8,
+        out: &mut Vec<Message>,
+    ) {
+        if track >= self.tracks.len() {
+            return;
+        }
+        let previous = self.tracks[track].take();
+        self.start(track, channel, pitch, velocity, out);
+        let Some(previous) = previous else {
+            return;
+        };
+        if overlap == 0 {
+            self.note_off(previous, out);
+            return;
+        }
+        if let Some(lingering) = self.lingering[track].take() {
+            self.note_off(lingering.voice, out);
+        }
+        self.lingering[track] = Some(Lingering {
+            voice: previous,
+            ticks: overlap,
+        });
+    }
+
+    fn start(
+        &mut self,
+        track: usize,
+        channel: u8,
+        pitch: u8,
+        velocity: u8,
+        out: &mut Vec<Message>,
+    ) {
         let channel = channel.min(MIDI_CHANNEL_MAX);
         let pitch = pitch.min(PITCH_COUNT as u8 - 1);
         let velocity = (velocity as f32
             * (self.channel_volumes[channel as usize] as f32 / u8::MAX as f32)
             * (self.velocity as f32 / u8::MAX as f32))
             .ceil() as u8; // global volume and velocity work as velocity multipliers.
-        self.release(track, out);
         let held = &mut self.held[channel as usize][pitch as usize];
         *held = held.saturating_add(1);
         self.tracks[track] = Some(Voice { channel, pitch });
@@ -63,13 +115,42 @@ impl Voices {
 
     /// Stops the track's note; the note off is only sent once no other track holds that pitch.
     pub fn release(&mut self, track: usize, out: &mut Vec<Message>) {
-        let Some(voice) = self.tracks.get_mut(track).and_then(Option::take) else {
-            return;
-        };
+        if let Some(voice) = self.tracks.get_mut(track).and_then(Option::take) {
+            self.note_off(voice, out);
+        }
+    }
+
+    /// Stops the track's note and any note still ringing after a legato note, straight away.
+    fn cut(&mut self, track: usize, out: &mut Vec<Message>) {
+        if let Some(voice) = self.tracks.get_mut(track).and_then(Option::take) {
+            self.note_off(voice, out);
+        }
+        if let Some(lingering) = self.lingering.get_mut(track).and_then(Option::take) {
+            self.note_off(lingering.voice, out);
+        }
+    }
+
+    /// The note off is only sent once no other track holds that pitch.
+    fn note_off(&mut self, voice: Voice, out: &mut Vec<Message>) {
         let held = &mut self.held[voice.channel as usize][voice.pitch as usize];
         *held = held.saturating_sub(1);
         if *held == 0 {
             out.push(Message::NoteOff(to_channel(voice.channel), voice.pitch, 0));
+        }
+    }
+
+    /// Counts down notes ringing after a legato note and releases the ones that are done.
+    pub fn tick(&mut self, out: &mut Vec<Message>) {
+        for track in 0..self.lingering.len() {
+            let Some(lingering) = &mut self.lingering[track] else {
+                continue;
+            };
+            lingering.ticks = lingering.ticks.saturating_sub(1);
+            if lingering.ticks == 0 {
+                let voice = lingering.voice;
+                self.lingering[track] = None;
+                self.note_off(voice, out);
+            }
         }
     }
 
@@ -86,22 +167,29 @@ impl Voices {
         }
     }
 
-    /// Releases every track playing on a muted channel.
+    /// Cuts every note playing on a muted channel, overlapping ones included.
     pub fn release_channels(&mut self, muted: &[bool], out: &mut Vec<Message>) {
+        let is_muted = |voice: &Voice| muted.get(voice.channel as usize).copied().unwrap_or(false);
         for track in 0..self.tracks.len() {
-            let Some(voice) = self.tracks[track] else {
-                continue;
-            };
-            if muted.get(voice.channel as usize).copied().unwrap_or(false) {
-                self.release(track, out);
+            if let Some(voice) = self.tracks[track]
+                && is_muted(&voice)
+            {
+                self.tracks[track] = None;
+                self.note_off(voice, out);
+            }
+            if let Some(lingering) = self.lingering[track]
+                && is_muted(&lingering.voice)
+            {
+                self.lingering[track] = None;
+                self.note_off(lingering.voice, out);
             }
         }
     }
 
-    /// Releases every track.
+    /// Cuts every note, overlapping ones included.
     pub fn release_all(&mut self, out: &mut Vec<Message>) {
         for track in 0..self.tracks.len() {
-            self.release(track, out);
+            self.cut(track, out);
         }
     }
 
@@ -143,6 +231,77 @@ mod tests {
                 Message::NoteOn(Channel::Ch1, 62, 100),
             ]
         );
+    }
+
+    #[test]
+    fn legato_starts_the_new_note_before_releasing_the_old_one() {
+        let mut voices = Voices::new();
+        let mut out = vec![];
+        voices.note_on(0, 0, 60, 100, &mut out);
+        out.clear();
+        voices.legato_on(0, 0, 62, 100, 0, &mut out);
+        assert_eq!(
+            out,
+            vec![
+                Message::NoteOn(Channel::Ch1, 62, 100),
+                Message::NoteOff(Channel::Ch1, 60, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn legato_overlap_keeps_the_old_note_ringing() {
+        let mut voices = Voices::new();
+        let mut out = vec![];
+        voices.note_on(0, 0, 60, 100, &mut out);
+        out.clear();
+        voices.legato_on(0, 0, 62, 100, 2, &mut out);
+        assert_eq!(out, vec![Message::NoteOn(Channel::Ch1, 62, 100)]);
+        out.clear();
+        voices.tick(&mut out);
+        assert!(out.is_empty());
+        voices.tick(&mut out);
+        assert_eq!(out, vec![Message::NoteOff(Channel::Ch1, 60, 0)]);
+    }
+
+    #[test]
+    fn legato_on_the_same_pitch_is_released_once_both_are_done() {
+        let mut voices = Voices::new();
+        let mut out = vec![];
+        voices.note_on(0, 0, 60, 100, &mut out);
+        voices.legato_on(0, 0, 60, 100, 1, &mut out);
+        out.clear();
+        voices.tick(&mut out);
+        assert!(out.is_empty());
+        voices.release(0, &mut out);
+        assert_eq!(out, vec![Message::NoteOff(Channel::Ch1, 60, 0)]);
+    }
+
+    #[test]
+    fn release_all_cuts_ringing_notes() {
+        let mut voices = Voices::new();
+        let mut out = vec![];
+        voices.note_on(0, 0, 60, 100, &mut out);
+        voices.legato_on(0, 0, 62, 100, 4, &mut out);
+        out.clear();
+        voices.release_all(&mut out);
+        assert_eq!(note_offs(&out), 2);
+        out.clear();
+        voices.tick(&mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn muting_cuts_ringing_notes() {
+        let mut voices = Voices::new();
+        let mut out = vec![];
+        voices.note_on(0, 0, 60, 100, &mut out);
+        voices.legato_on(0, 0, 62, 100, 4, &mut out);
+        out.clear();
+        let mut muted = [false; 16];
+        muted[0] = true;
+        voices.release_channels(&muted, &mut out);
+        assert_eq!(note_offs(&out), 2);
     }
 
     #[test]

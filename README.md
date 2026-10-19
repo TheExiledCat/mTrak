@@ -114,7 +114,7 @@ Planned features, in no particular order:
 - [ ] **MIDI file import/export**
 - [ ] **MIDI input**:
     - [X] play notes into the pattern using a connected midi controller
-    - [ ] trigger mtrak to start and stop playback using a connected midi controller
+    - [ ] trigger mtrak to start and stop playback, change patterns using a connected midi controller
 - [X] **MIDI clock out**: send clock and start/stop to sync external sequencers, drum machines and arpeggiators
 - [ ] **Multiple output ports**: map instruments to different MIDI devices, not just channels on one port
 - [ ] **Program change and bank select per instrument**, so loading a project restores the right patches
@@ -128,14 +128,16 @@ Planned features, in no particular order:
 - [X] **Block operations**:
     - [X] select, copy, paste 
     - [X] transpose across rows and tracks
+    - [X] clearing blocks
 - [ ] **Swing/groove**, per pattern or global
 - [x] **Prebuilt binaries** for Linux, Windows and macOS on every release
 - [ ] **More commands**
-    - [ ] Roll
-    - [ ] Roll with volume glide
+    - [X] Roll
+    - [X] Roll with volume glide
     - [x] Tempo (BPM) and speed change (`F`)
     - [X] Note delay
     - [X] Note probability
+    - [ ] Portamento (overlap notes)
     - [ ] Shorthand commands for common CCs (mod wheel, filter cutoff, etc.)
 - [ ] **Autosave and crash recovery**
 - [ ] **Custom themes**

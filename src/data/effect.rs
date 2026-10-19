@@ -14,10 +14,12 @@ pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 8] = [
     ('A', AfterTouch),
     ('W', PitchBend),
 ];
-pub const EFFECT_COMMAND_LOOKUP: [(char, EffectCommand); 3] = [
+pub const EFFECT_COMMAND_LOOKUP: [(char, EffectCommand); 5] = [
     ('F', EffectCommand::SetTempo),
     ('Y', EffectCommand::Probability),
     ('D', EffectCommand::Delay),
+    ('R', EffectCommand::Roll),
+    ('3', EffectCommand::Portamento),
 ];
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
 pub enum CommandKind {
@@ -65,6 +67,14 @@ impl MidiCommand {
         return matches!(self, CCSlide | CCVelocitySlide);
     }
 
+    /// How the value is written on the commands screen, e.g. `xx` for one two digit value.
+    pub fn value_name(&self) -> &'static str {
+        return match self {
+            SetCC | ChangeCC | CCSlide | CCVelocitySlide | VelocitySlide | EndSlide
+            | AfterTouch | PitchBend => "xx",
+        };
+    }
+
     /// A one line summary for the commands screen.
     pub fn description(&self) -> &'static str {
         return match self {
@@ -108,14 +118,29 @@ pub enum EffectCommand {
     SetTempo, // Sets the BPM from 20 up, the speed below that, and 00 goes back to the song's own
     Probability, // Decides whether or not this note plays based on a chance from 0 to FF
     Delay,    //Delay the note by tick count equal to value
+    Roll,     // Replays the note every y ticks, changing its velocity by x each time
+    Portamento, // Glides into this note: 0x starts it x ticks early, 1x keeps the previous note x ticks longer
 }
 impl EffectCommand {
+    /// How the value is written on the commands screen, e.g. `xy` when each digit means
+    /// something different.
+    pub fn value_name(&self) -> &'static str {
+        return match self {
+            EffectCommand::Roll | EffectCommand::Portamento => "xy",
+            _ => "xx",
+        };
+    }
+
     /// A one line summary for the commands screen.
     pub fn description(&self) -> &'static str {
         return match self {
             EffectCommand::SetTempo => "Set tempo: 00 reset, 01-1F speed, 20-FF BPM",
             EffectCommand::Probability => "Note probability, 0 never plays, FF always plays",
             EffectCommand::Delay => "Delay note, value determines the amount of ticks delayed by",
+            EffectCommand::Roll => "Roll note: x changes velocity per hit, y is ticks apart",
+            EffectCommand::Portamento => {
+                "Portamento: 0y start y ticks early, 1y hold previous y ticks"
+            }
         };
     }
 

@@ -3,11 +3,12 @@ use midi::{
     Message::{ChannelPressure, ControlChange, PitchBend},
 };
 use num::FromPrimitive;
+use rand::RngExt;
 
 use crate::{
     data::{
         effect::{EffectCommand, MidiCommand},
-        midi::{MIDI_CHANNEL_MAX, MidiEvent},
+        midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX},
         note::Note,
     },
     tui::constants::TRACK_COUNT,
@@ -17,7 +18,6 @@ use crate::{
 #[derive(Default)]
 pub struct CommandContext {
     pub slide_target: Option<SlideTarget>,
-    pub cancel_note: bool,
 }
 
 /// The value a slide ends on and how many ticks away its row is.
@@ -27,20 +27,57 @@ pub struct SlideTarget {
     pub ticks: u32,
 }
 
-pub trait CommandHandler<T> {
-    fn handle_command(
-        &mut self,
-        events: &mut Vec<MidiEvent>,
-        track: usize,
-        command: T,
-        note: &Note,
-        context: &CommandContext,
-    );
-    /// Advances running effects by one tick; called at every row start and effect tick.
-    fn tick(&mut self, _events: &mut Vec<MidiEvent>) {}
-    /// Forgets all effect state, e.g. when playback starts or stops, and returns anything
-    /// it left set on the synth to its default.
-    fn reset(&mut self, _events: &mut Vec<MidiEvent>) {}
+/// What happens to the note on the same cell as an effect command.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NoteAction {
+    Play,
+    Skip,
+    /// Play it this many ticks into the row.
+    Delay(u8),
+    /// Play it now, then again every `every` ticks until the row ends, changing the velocity
+    /// of each repeat by `volume` (see `roll_velocity`).
+    Roll {
+        every: u8,
+        volume: u8,
+    },
+    /// Glide into it from the track's current note: start it `early` ticks before its row,
+    /// and keep the old note sounding `overlap` ticks after it starts.
+    Legato {
+        early: u8,
+        overlap: u8,
+    },
+}
+
+/// What a portamento command does: 0x starts the note x ticks early, 1x keeps the previous
+/// note x ticks longer. 20 and up are left for another command.
+pub fn portamento(value: u8) -> NoteAction {
+    return match value >> 4 {
+        0x0 => NoteAction::Legato {
+            early: value & 0x0F,
+            overlap: 0,
+        },
+        0x1 => NoteAction::Legato {
+            early: 0,
+            overlap: value & 0x0F,
+        },
+        _ => NoteAction::Play,
+    };
+}
+
+/// The velocity of a roll's next hit, from the previous one. Follows FT2's multi retrig
+/// table, with the steps doubled because MIDI velocity goes up to 127 instead of 64.
+pub fn roll_velocity(velocity: u8, volume: u8) -> u8 {
+    let velocity = velocity as i32;
+    let next = match volume {
+        0x1..=0x5 => velocity - (2 << (volume - 0x1)),
+        0x6 => velocity * 2 / 3,
+        0x7 => velocity / 2,
+        0x9..=0xD => velocity + (2 << (volume - 0x9)),
+        0xE => velocity * 3 / 2,
+        0xF => velocity * 2,
+        _ => velocity,
+    };
+    return next.clamp(0, VELOCITY_MAX as i32) as u8;
 }
 
 /// Command values are 00-FF but MIDI data is 7 bit, so FF maps to 127.
@@ -175,9 +212,8 @@ impl MidiCommandHandler {
             .map(|glide| glide.current);
         return glide.or(state.row_velocity).map(cc_value);
     }
-}
-impl CommandHandler<MidiCommand> for MidiCommandHandler {
-    fn handle_command(
+
+    pub fn handle_command(
         &mut self,
         events: &mut Vec<MidiEvent>,
         track: usize,
@@ -250,7 +286,8 @@ impl CommandHandler<MidiCommand> for MidiCommandHandler {
         }
     }
 
-    fn tick(&mut self, events: &mut Vec<MidiEvent>) {
+    /// Advances running slides by one tick; called at every row start and effect tick.
+    pub fn tick(&mut self, events: &mut Vec<MidiEvent>) {
         for state in self.tracks.iter_mut() {
             state.row_velocity = None;
             state.landed = None;
@@ -280,7 +317,9 @@ impl CommandHandler<MidiCommand> for MidiCommandHandler {
         }
     }
 
-    fn reset(&mut self, events: &mut Vec<MidiEvent>) {
+    /// Forgets all command state, e.g. when playback starts or stops, and returns anything
+    /// it left set on the synth to its default.
+    pub fn reset(&mut self, events: &mut Vec<MidiEvent>) {
         self.tracks = Default::default();
         for index in 0..MIDI_CHANNEL_COUNT {
             let channel = Channel::from_u8(index as u8).unwrap();
@@ -326,31 +365,39 @@ impl EffectCommandHandler {
     pub fn speed(&self) -> Option<u8> {
         return self.speed;
     }
-}
-impl CommandHandler<EffectCommand> for EffectCommandHandler {
-    fn handle_command(
-        &mut self,
-        _events: &mut Vec<MidiEvent>,
-        _track: usize,
-        command: EffectCommand,
-        note: &Note,
-        _context: &CommandContext,
-    ) {
-        let value = note.command.value;
-        match command {
-            EffectCommand::SetTempo => match value {
-                0 => {
-                    self.bpm = None;
-                    self.speed = None;
+
+    /// Runs an effect command and says what happens to the note on its cell.
+    pub fn apply(&mut self, command: EffectCommand, value: u8) -> NoteAction {
+        return match command {
+            EffectCommand::SetTempo => {
+                match value {
+                    0 => {
+                        self.bpm = None;
+                        self.speed = None;
+                    }
+                    value if value < TEMPO_MIN_BPM => self.speed = Some(value),
+                    value => self.bpm = Some(value),
                 }
-                value if value < TEMPO_MIN_BPM => self.speed = Some(value),
-                value => self.bpm = Some(value),
+                NoteAction::Play
+            }
+            EffectCommand::Probability => match value {
+                0 => NoteAction::Skip,
+                0xFF => NoteAction::Play,
+                chance if rand::rng().random_range(0..=0xFF) < chance => NoteAction::Play,
+                _ => NoteAction::Skip,
             },
-            EffectCommand::Probability | EffectCommand::Delay => {}
-        }
+            EffectCommand::Delay if value > 0 => NoteAction::Delay(value),
+            EffectCommand::Delay => NoteAction::Play,
+            EffectCommand::Roll => match (value & 0x0F, value >> 4) {
+                (0, _) => NoteAction::Play,
+                (every, volume) => NoteAction::Roll { every, volume },
+            },
+            EffectCommand::Portamento => portamento(value),
+        };
     }
 
-    fn reset(&mut self, _events: &mut Vec<MidiEvent>) {
+    /// Forgets the tempo, e.g. when playback starts or stops.
+    pub fn reset(&mut self) {
         self.bpm = None;
         self.speed = None;
     }
@@ -456,17 +503,10 @@ mod tests {
     }
 
     fn tempo(handler: &mut EffectCommandHandler, value: u8) {
-        let mut note = Note::empty();
-        note.command = Command::new(CommandKind::Effect(EffectCommand::SetTempo), value);
-        let mut events = vec![];
-        handler.handle_command(
-            &mut events,
-            0,
-            EffectCommand::SetTempo,
-            &note,
-            &CommandContext::default(),
+        assert_eq!(
+            handler.apply(EffectCommand::SetTempo, value),
+            NoteAction::Play
         );
-        assert!(events.is_empty());
     }
 
     #[test]
@@ -485,8 +525,100 @@ mod tests {
         let mut handler = EffectCommandHandler::new();
         tempo(&mut handler, 0x90);
         tempo(&mut handler, 0x03);
-        handler.reset(&mut vec![]);
+        handler.reset();
         assert_eq!((handler.bpm(), handler.speed()), (None, None));
+    }
+
+    #[test]
+    fn probability_00_never_plays_and_ff_always_plays() {
+        let mut handler = EffectCommandHandler::new();
+        for _ in 0..100 {
+            assert_eq!(
+                handler.apply(EffectCommand::Probability, 0x00),
+                NoteAction::Skip
+            );
+            assert_eq!(
+                handler.apply(EffectCommand::Probability, 0xFF),
+                NoteAction::Play
+            );
+        }
+    }
+
+    #[test]
+    fn delay_holds_the_note_back_unless_it_is_00() {
+        let mut handler = EffectCommandHandler::new();
+        assert_eq!(handler.apply(EffectCommand::Delay, 0), NoteAction::Play);
+        assert_eq!(handler.apply(EffectCommand::Delay, 3), NoteAction::Delay(3));
+    }
+
+    #[test]
+    fn roll_00_just_plays() {
+        let mut handler = EffectCommandHandler::new();
+        assert_eq!(handler.apply(EffectCommand::Roll, 0x00), NoteAction::Play);
+        assert_eq!(handler.apply(EffectCommand::Roll, 0x30), NoteAction::Play);
+    }
+
+    #[test]
+    fn portamento_splits_early_and_overlap() {
+        assert_eq!(
+            portamento(0x00),
+            NoteAction::Legato {
+                early: 0,
+                overlap: 0
+            }
+        );
+        assert_eq!(
+            portamento(0x03),
+            NoteAction::Legato {
+                early: 3,
+                overlap: 0
+            }
+        );
+        assert_eq!(
+            portamento(0x12),
+            NoteAction::Legato {
+                early: 0,
+                overlap: 2
+            }
+        );
+        assert_eq!(portamento(0x20), NoteAction::Play);
+    }
+
+    #[test]
+    fn roll_splits_volume_and_interval() {
+        let mut handler = EffectCommandHandler::new();
+        assert_eq!(
+            handler.apply(EffectCommand::Roll, 0x02),
+            NoteAction::Roll {
+                every: 2,
+                volume: 0
+            }
+        );
+        assert_eq!(
+            handler.apply(EffectCommand::Roll, 0xA3),
+            NoteAction::Roll {
+                every: 3,
+                volume: 0xA
+            }
+        );
+    }
+
+    #[test]
+    fn roll_velocity_follows_the_ft2_table() {
+        let steps: Vec<u8> = (0..=0xF).map(|volume| roll_velocity(60, volume)).collect();
+        assert_eq!(
+            steps,
+            vec![
+                60, 58, 56, 52, 44, 28, 40, 30, 60, 62, 64, 68, 76, 92, 90, 120
+            ]
+        );
+    }
+
+    #[test]
+    fn roll_velocity_stays_in_midi_range() {
+        assert_eq!(roll_velocity(10, 0x5), 0);
+        assert_eq!(roll_velocity(100, 0xF), VELOCITY_MAX);
+        assert_eq!(roll_velocity(120, 0xD), VELOCITY_MAX);
     }
 
     #[test]
