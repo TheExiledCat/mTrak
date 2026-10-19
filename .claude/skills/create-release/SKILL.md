@@ -76,9 +76,9 @@ If the previous release has no entry in the file, don't backfill it unless asked
 
 ## 4. Get approval
 
-Show the user the full changelog entry and summarize what will happen: version bump, the
-commit, the tag, and that pushing publishes a release. Wait for approval and apply any edits
-they ask for.
+Show the user the full changelog entry and summarize what will happen: version bump (in
+`Cargo.toml` and the README title), the commit, the tag, and that pushing publishes a
+release. Wait for approval and apply any edits they ask for.
 
 ## 5. Bump, commit, tag, push
 
@@ -86,7 +86,10 @@ they ask for.
   `Cargo.lock` picks up the new version (CI builds with `--locked`, which fails on a stale
   lock), then `cargo build --release --locked` to make sure it builds. If it doesn't build,
   stop and report; don't tag broken code.
-- Stage `Cargo.toml`, `Cargo.lock`, `docs/CHANGELOG.md` and whatever the user agreed to include.
+- Set the title on the first line of `README.md` to `# mTrak (X.Y.Z)`, replacing any version
+  already there (e.g. `# mTrak` or `# mTrak (0.2.0)`).
+- Stage `Cargo.toml`, `Cargo.lock`, `README.md`, `docs/CHANGELOG.md` and whatever the user
+  agreed to include.
 - Commit with the single-line message `vX.Y.Z` and nothing else: no body, no co-author
   trailer. The author is the repo's configured git user.
 - `git tag vX.Y.Z`, then `git push origin main` and `git push origin vX.Y.Z`.
