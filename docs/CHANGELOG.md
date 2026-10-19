@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.3.0 - 2026-10-19
+
+### Added
+
+Five new effect commands. Several of them work in ticks: each row is split into as many ticks
+as the speed (6 by default). Full details and examples are in
+[docs/COMMANDS.md](docs/COMMANDS.md).
+
+- **`Y` Probability:** the note plays `xx` times out of 256, so `Y80` plays about half the
+  time. `Y00` never plays and `YFF` always does. A note off with `Y` is also only sent when
+  the roll succeeds.
+- **`D` Note delay:** moves the note off its row.
+  - `D1y` starts it `y` ticks into its row, e.g. `C-4|1|--|D13` starts halfway through the
+    row at speed 6.
+  - `D0y` starts it `y` ticks *before* its row, during the row before.
+  - Note offs can be moved too.
+- **`R` Roll:** `Rxy` plays the note, then again every `y` ticks until the row ends. `x`
+  changes the velocity of each repeat, using FastTracker 2's multi retrig table (e.g. `R92`
+  gets louder by 2 per hit, `R52` quieter by 32).
+- **`3` Legato:** glides into the note from the track's previous note. The new note starts
+  before the old one is released, so a synth in mono/legato mode with portamento switched on
+  glides between them.
+  - `30y` starts the note `y` ticks before its row.
+  - `31y` starts it on its row and keeps the previous note sounding `y` more ticks.
+- **`33y` Note cut:** releases the track's note on tick `y` of the row. `330` releases it
+  straight away. On a cell with no note, it cuts the note that's already playing.
+
+### Changed
+
+- The commands screen (`/`) lists each form of a command on its own row, e.g. `F00` and `Fxx`,
+  or `30y`, `31y` and `33y`.
+- Projects saved with v0.2.0 open in v0.3.0; the project file format didn't change.
+
 ## v0.2.0 - 2026-10-19
 
 ### Added
