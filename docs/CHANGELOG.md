@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.2.0 - 2026-10-19
+
+### Added
+
+- Commands screen: press `/` to see every pattern command with a one line description of
+  what it does. `/` is shown in the footer next to `?`. For examples and the details of
+  slides, see [docs/COMMANDS.md](docs/COMMANDS.md).
+- Clear part of a pattern: press `Alt+Z` to open the Clear dialog. Pick what to clear:
+  - **Selection:** `Block` (the marked block, or the cell under the cursor if nothing is
+    marked), `Track` (the current track) or `Pattern` (the whole pattern).
+  - **Target:** `All`, `Note` (the note and its instrument), `Vel` (the volume column) or
+    `Cmd` (the command column).
+
+  Clearing can be undone with `Ctrl+Z`. It only works while playback is stopped; during
+  playback mTrak shows "CANT CLR".
+- Release downloads now include `COMMANDS.md` next to the mTrak program.
+
+### Changed
+
+- Changing the pattern at a song position (`Alt+,` / `Alt+.`) now also shows that pattern
+  in the pattern editor.
+- The keys in the list at the top right are lined up in one column.
+- Projects saved with v0.1.9 open in v0.2.0; the project file format didn't change.
+
 ## v0.1.9 - 2026-10-15
 
 ### Added
