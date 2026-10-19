@@ -9,6 +9,7 @@ use std::{
 use chrono::Utc;
 use midi::{Message, ToRawMessages};
 use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
+use rand::RngExt;
 
 use super::{
     handle::{EngineCommand, EngineStatus},
@@ -17,7 +18,7 @@ use super::{
 use crate::{
     data::{
         config::TITLE,
-        effect::{CommandKind, MidiCommand},
+        effect::{CommandKind, EffectCommand, MidiCommand},
         midi::{
             DEFAULT_BPM, MIDI_CHANNEL_MAX, MidiEvent, PULSES_PER_LINE, VELOCITY_MAX,
             pulse_duration, raw_message_to_bytes, tick_duration,
@@ -474,15 +475,23 @@ impl MtrakEngine {
 
     /// Looks ahead in the song for commands that need it.
     fn command_context(&self, track: usize, note: &Note) -> CommandContext {
+        let mut context = CommandContext::default();
+
+        if let CommandKind::Effect(EffectCommand::Probability) = note.command.kind {
+            context.cancel_note = match note.command.value {
+                0 => true,
+                0xFF => false,
+                probability => rand::rng().random_range(0..=0xFF) >= probability,
+            };
+        }
         let CommandKind::MidiCommand(command) = note.command.kind else {
-            return CommandContext::default();
+            return context;
         };
         if !command.is_slide() {
-            return CommandContext::default();
+            return context;
         }
-        return CommandContext {
-            slide_target: self.find_slide_target(track, command.slides_cc()),
-        };
+        context.slide_target = self.find_slide_target(track, command.slides_cc());
+        return context;
     }
 
     /// Clears effect state so nothing carries over between playbacks, and returns the
@@ -539,8 +548,10 @@ impl MtrakEngine {
         self.voices.release_channels(&mutes, &mut out);
         out.extend(audible(row_tick, &mutes));
         for (track, note) in row.tracks.iter().enumerate() {
+            let mut cancel_note = false;
             if note.command.kind != CommandKind::None {
                 let context = self.command_context(track, note);
+                cancel_note = context.cancel_note;
                 let events = Self::handle_command(
                     &mut self.midi_command_handler,
                     &mut self.effect_command_handler,
@@ -552,6 +563,7 @@ impl MtrakEngine {
             }
             match note.kind {
                 NoteKind::Empty => {}
+                NoteKind::On(_) if cancel_note => {}
                 NoteKind::Off => self.voices.release(track, &mut out),
                 NoteKind::On(pitch) => {
                     let channel = note.instrument_id.unwrap_or(0).min(MIDI_CHANNEL_MAX);

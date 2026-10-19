@@ -17,6 +17,7 @@ use crate::{
 #[derive(Default)]
 pub struct CommandContext {
     pub slide_target: Option<SlideTarget>,
+    pub cancel_note: bool,
 }
 
 /// The value a slide ends on and how many ticks away its row is.
@@ -345,6 +346,7 @@ impl CommandHandler<EffectCommand> for EffectCommandHandler {
                 value if value < TEMPO_MIN_BPM => self.speed = Some(value),
                 value => self.bpm = Some(value),
             },
+            EffectCommand::Probability => {}
         }
     }
 
