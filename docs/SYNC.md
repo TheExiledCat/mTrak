@@ -45,8 +45,8 @@ What mTrak does with the device's transport messages:
 - Song position counts from the top of the song, using the song's speed. It doesn't follow
   `F` speed changes, so a song that changes speed can pick up a little off after the device
   jumps. Start, Stop and Continue on their own stay exact.
-- If the clock stops without a Stop message, playback holds on the current row until pulses
-  come back.
+- If the clock stops without a Stop message, playback stops after two beats without pulses
+  (at least half a second), as if it had received Stop. A Continue then picks up from there.
 
 ### Playing on your own while synced
 

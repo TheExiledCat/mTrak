@@ -72,6 +72,9 @@ struct Clock {
     tick: u32,
 }
 
+/// The shortest wait for a pulse before a silent clock input counts as stopped.
+const CLOCK_DROPOUT_MIN: Duration = Duration::from_millis(500);
+
 /// What the clock input asked for, waiting on its next pulse.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PendingTransport {
@@ -141,6 +144,8 @@ pub struct MtrakEngine {
     external_pulses: VecDeque<u64>,
     /// The average time between pulses from the clock input over the last beat.
     external_period: Duration,
+    /// When the last pulse from the clock input arrived.
+    last_external_pulse_at: Option<Instant>,
     voices: Voices,
     scheduled_notes: [Option<ScheduledNote>; TRACK_COUNT as usize],
     early_notes: [Option<EarlyNote>; TRACK_COUNT as usize],
@@ -190,6 +195,7 @@ impl MtrakEngine {
             pending_jump: None,
             external_pulses: VecDeque::with_capacity(PULSES_PER_QUARTER as usize + 1),
             external_period: pulse_duration(DEFAULT_BPM),
+            last_external_pulse_at: None,
             voices: Voices::new(),
             scheduled_notes: [None; TRACK_COUNT as usize],
             early_notes: [None; TRACK_COUNT as usize],
@@ -392,6 +398,7 @@ impl MtrakEngine {
     /// One pulse from the clock input. A pending Start or Continue begins on it, otherwise it
     /// moves playback along like an internal pulse.
     fn external_pulse(&mut self, timestamp: u64) {
+        self.last_external_pulse_at = Some(Instant::now());
         self.measure_external_pulse(timestamp);
         if self.clock_source != ClockSource::External {
             return;
@@ -641,14 +648,28 @@ impl MtrakEngine {
     fn next_deadline(&self) -> Option<Instant> {
         let clock = self.clock.as_ref()?;
         if clock.follows_input {
-            return None;
+            return self.clock_dropout_deadline();
         }
         return Some(clock.next_pulse);
+    }
+
+    /// When following the clock input stops, if no pulse arrives before then.
+    fn clock_dropout_deadline(&self) -> Option<Instant> {
+        let timeout = (self.external_period * PULSES_PER_QUARTER * 2).max(CLOCK_DROPOUT_MIN);
+        return Some(self.last_external_pulse_at? + timeout);
     }
 
     /// Catches up on every pulse that is due by now.
     fn advance_clock(&mut self) {
         let now = Instant::now();
+        if self.clock.as_ref().is_some_and(|clock| clock.follows_input)
+            && self
+                .clock_dropout_deadline()
+                .is_some_and(|deadline| deadline <= now)
+        {
+            self.stop();
+            return;
+        }
         while self
             .clock
             .as_ref()
@@ -3478,5 +3499,24 @@ mod tests {
         );
         assert_eq!(cc_values(&messages).last(), Some(&127));
         assert!(cc_values(&messages).len() > 3);
+    }
+
+    #[test]
+    fn a_silent_clock_input_stops_playback_after_two_beats() {
+        let mut harness = synced(vec![pattern(4, &[(0, 0, note("C-4 0 40"))])]);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        external_pulses(&mut harness, 0, 3);
+        harness.engine.advance_clock();
+        assert_eq!(harness.engine.mode, PlayMode::SongLoop);
+        harness.engine.last_external_pulse_at = Some(Instant::now() - Duration::from_secs(5));
+        harness.messages();
+        harness.engine.advance_clock();
+        assert_eq!(harness.engine.mode, PlayMode::Paused);
+        assert!(
+            harness
+                .messages()
+                .contains(&Message::NoteOff(Channel::Ch1, 60, 0))
+        );
+        assert!(harness.engine.resume.is_some());
     }
 }
