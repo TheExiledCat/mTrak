@@ -10,7 +10,7 @@ pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 9] = [
     ('W', ModWheel),
     ('V', CCSlide),
     ('J', CCVelocitySlide),
-    ('A', VelocitySlide),
+    ('U', VelocitySlide),
     ('N', EndSlide),
     ('T', AfterTouch),
     ('P', PitchBend),
@@ -149,7 +149,7 @@ const TEMPO_MIN_BPM: u8 = 0x20;
 /// What an effect command does, decoded from its letter and value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effect {
-    /// Goes back to the song's BPM and the pattern's speed.
+    /// Goes back to the song's BPM and speed.
     ResetTempo,
     SetSpeed(u8),
     SetBpm(u8),
@@ -209,10 +209,7 @@ impl EffectCommand {
     pub fn forms(&self) -> &'static [CommandForm] {
         return match self {
             EffectCommand::SetTempo => &[
-                (
-                    "00",
-                    "Reset tempo: back to the song's BPM and the pattern's speed",
-                ),
+                ("00", "Reset tempo: back to the song's BPM and speed"),
                 ("xx", "Set tempo: 01-1F sets the speed, 20-FF the BPM"),
             ],
             EffectCommand::Probability => &[(
@@ -384,7 +381,7 @@ mod tests {
 
     #[test]
     fn display_round_trips() {
-        for text in ["000", "0FF", "S4A", "M7F", "A00", "T00", "P80", "F7D"] {
+        for text in ["000", "0FF", "S4A", "M7F", "U00", "T00", "P80", "F7D"] {
             assert_eq!(Command::from_str(text).unwrap().to_string(), text);
         }
     }

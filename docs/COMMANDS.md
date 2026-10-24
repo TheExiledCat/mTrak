@@ -90,7 +90,7 @@ Sends the given value, then slides the selected CC smoothly to the target value
 
 ### `J` CC and velocity slide
 
-A `V` and an `A` in one: the same slide moves the selected CC and sets the velocity of the
+A `V` and a `U` in one: the same slide moves the selected CC and sets the velocity of the
 notes played during it.
 
 ```
@@ -100,13 +100,13 @@ C-4|1|--|000   CC 7 still rising, note at velocity 79
 ---|1|--|MFF   CC 7 arrives at 127
 ```
 
-### `A` Velocity slide
+### `U` Velocity slide
 
 Slides the velocity of the track's notes, like typing a ramp of values into the volume
 column. It sends nothing by itself; it only changes notes that play while it runs.
 
 ```
-C-4|1|--|A20   velocity 16
+C-4|1|--|U20   velocity 16
 C-4|1|--|000   velocity 32
 C-4|1|--|000   velocity 48
 C-4|1|--|000   velocity 64
@@ -117,7 +117,7 @@ C-4|1|--|000   velocity 127 (volume column empty)
 - A note with its own volume value plays at that volume; the slide carries on underneath.
 - After the slide reaches its target row, notes use their volume column again (full velocity
   when it's empty).
-- A velocity of 0 (`A00` or `A01`) makes notes silent, like volume `00`.
+- A velocity of 0 (`U00` or `U01`) makes notes silent, like volume `00`.
 - End a velocity slide with `N`, not `M`: an `M` would also send a CC, which on a track
   without an `S` is the instrument's default CC (CC 0, bank select on many synths, unless
   you changed it).
@@ -162,7 +162,8 @@ Effect commands change playback, or how the cell's note plays, instead of sendin
 work on any track and on muted channels.
 
 Several of them work in ticks. A row lasts as many ticks as the speed, 6 by default: the
-song's `SPD` in the header, or an `F` below `20` to change it from a row onwards. Tick 0 is the start of the row.
+song's `SPD` in the header, or an `F` below `20` to change it from a row onwards. Tick 0 is
+the start of the row.
 
 As in FastTracker 2, a tick is one MIDI clock pulse: there are 24 per beat, so at 125 BPM a
 tick lasts 20 ms. The speed therefore sets how fast rows go by: at speed 6 a beat is 4 rows,
@@ -188,6 +189,8 @@ Changes the BPM or the speed, starting on its own row:
 - BPM and speed are separate: setting one leaves the other as it is.
 - Both change how fast the song plays: the BPM sets how long a tick is, the speed how many
   ticks a row lasts. `F03` plays the rows below it twice as fast.
+- While following an external MIDI clock, BPM values have no effect, since the clock sets the
+  tempo; speed values still apply (see [SYNC.md](SYNC.md)).
 
 ### `Y` Probability
 
