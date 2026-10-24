@@ -24,7 +24,10 @@ use crate::{
         pattern::{self, Block, ClearOption, ClearTarget, Pattern, PatternId, PatternRow},
         project::{Project, SequenceRow},
     },
-    engine::{engine::PlayMode, handle::EngineHandle},
+    engine::{
+        engine::PlayMode,
+        handle::{ClockSource, EngineCommand, EngineHandle},
+    },
     error::{MTrakError, Result},
     tui::{
         copy_buffers::CopyBuffers,
@@ -392,6 +395,11 @@ impl UndoAction for AppStateAction {
         self.apply(state, true);
     }
 }
+/// Where a MIDI input connection sends what it receives.
+struct InputRoute {
+    notes: Option<Sender<Message>>,
+    clock: Option<Sender<EngineCommand>>,
+}
 pub struct AppState {
     pub config: Config,
     project: Project,
@@ -404,6 +412,7 @@ pub struct AppState {
     pub active_sequence_index: usize,
     pub active_pattern: PatternId,
     pub active_in_port: Option<MidiInputPort>,
+    pub active_clock_port: Option<MidiInputPort>,
     pub active_out_port: Option<MidiOutputPort>,
     pub line_add: u8,
     pub active_instrument: u8,
@@ -415,7 +424,7 @@ pub struct AppState {
     pub project_path: Option<PathBuf>,
     pub copy_buffers: CopyBuffers,
     pub notification: Option<String>,
-    midi_in_connection: Option<MidiInputConnection<Sender<Message>>>,
+    midi_in_connections: Vec<MidiInputConnection<InputRoute>>,
     midi_in_sender: Sender<Message>,
     midi_in_receiver: Receiver<Message>,
     pending_midi_input: Vec<Message>,
@@ -470,9 +479,10 @@ impl AppState {
             exit_requested: false,
             active_sequence_index: 0,
             active_in_port: None,
+            active_clock_port: None,
             active_out_port: None,
             midi_in_client,
-            midi_in_connection: None,
+            midi_in_connections: Vec::new(),
             midi_in_sender,
             midi_in_receiver,
             pending_midi_input: vec![],
@@ -513,6 +523,7 @@ impl AppState {
         state.engine.set_midi_clock(state.project.send_midi_clock);
         state.restore_midi_output();
         state.restore_midi_input();
+        state.restore_clock_input();
         return Ok(state);
     }
     pub fn update(&mut self) {
@@ -582,6 +593,23 @@ impl AppState {
             self.report_error(e);
         }
     }
+    fn restore_clock_input(&mut self) {
+        let Some(name) = self.project.clock_input.clone() else {
+            return;
+        };
+        let port = self.midi_in_client.as_ref().and_then(|client| {
+            client
+                .ports()
+                .into_iter()
+                .find(|p| client.port_name(p).is_ok_and(|n| n == name))
+        });
+        if port.is_none() {
+            self.project.clock_input = None;
+        }
+        if let Err(e) = self.set_clock_input(port) {
+            self.report_error(e);
+        }
+    }
     fn restore_midi_output(&mut self) {
         let Some(name) = self.project.midi_output.clone() else {
             return;
@@ -607,41 +635,102 @@ impl AppState {
         {
             self.project_mut().midi_input = name;
         }
-        if let Some(connection) = self.midi_in_connection.take() {
+        self.active_in_port = port;
+        return self.reconnect_inputs();
+    }
+    fn set_clock_input(&mut self, port: Option<MidiInputPort>) -> Result<()> {
+        let name = self
+            .midi_in_client
+            .as_ref()
+            .map(|client| port.as_ref().and_then(|p| client.port_name(p).ok()));
+        if let Some(name) = name
+            && name != self.project.clock_input
+        {
+            self.project_mut().clock_input = name;
+        }
+        self.engine.set_clock_source(match port {
+            Some(_) => ClockSource::External,
+            None => ClockSource::Internal,
+        });
+        self.active_clock_port = port;
+        return self.reconnect_inputs();
+    }
+    /// Reopens the input connections, one per port: a device used for both notes and clock
+    /// shares a connection, since some backends (WinMM) only let a port be opened once.
+    fn reconnect_inputs(&mut self) -> Result<()> {
+        for connection in self.midi_in_connections.drain(..) {
             connection.close();
         }
-        self.active_in_port = None;
-        let Some(port) = port else {
-            return Ok(());
-        };
-        match self.connect_input_port(&port) {
-            Ok(connection) => {
-                self.midi_in_connection = Some(connection);
-                self.active_in_port = Some(port);
-                return Ok(());
-            }
-            Err(e) => {
-                self.project_mut().midi_input = None;
-                return Err(e);
+        let shared = self.active_in_port.is_some() && self.active_in_port == self.active_clock_port;
+        let mut ports = Vec::new();
+        if let Some(port) = &self.active_in_port {
+            ports.push((port.clone(), true, shared));
+        }
+        if let Some(port) = &self.active_clock_port
+            && !shared
+        {
+            ports.push((port.clone(), false, true));
+        }
+        let mut result = Ok(());
+        for (port, notes, clock) in ports {
+            let route = InputRoute {
+                notes: notes.then(|| self.midi_in_sender.clone()),
+                clock: clock.then(|| self.engine.clock_sender()).flatten(),
+            };
+            match self.connect_input_port(&port, route) {
+                Ok(connection) => self.midi_in_connections.push(connection),
+                Err(e) => {
+                    if notes {
+                        self.active_in_port = None;
+                        self.project_mut().midi_input = None;
+                    }
+                    if clock {
+                        self.active_clock_port = None;
+                        self.project_mut().clock_input = None;
+                        self.engine.set_clock_source(ClockSource::Internal);
+                    }
+                    result = Err(e);
+                }
             }
         }
+        return result;
     }
     /// Connects to an input port with a fresh `MidiInput`, since `connect` consumes the client.
-    /// Incoming messages are sent to `midi_in_receiver` and picked up in `update`.
+    /// Notes go to `midi_in_receiver` and are picked up in `update`; clock and transport go
+    /// straight to the engine.
     fn connect_input_port(
         &self,
         port: &MidiInputPort,
-    ) -> Result<MidiInputConnection<Sender<Message>>> {
+        route: InputRoute,
+    ) -> Result<MidiInputConnection<InputRoute>> {
         return MidiInput::new(TITLE)?
             .connect(
                 port,
                 TITLE,
-                |_, bytes, sender| {
-                    if let Some(message) = bytes_to_message(bytes) {
-                        let _ = sender.send(message);
+                |timestamp, bytes, route| {
+                    let command = match *bytes {
+                        [0xF8, ..] => EngineCommand::ExternalClock(timestamp),
+                        [0xFA, ..] => EngineCommand::ExternalStart,
+                        [0xFB, ..] => EngineCommand::ExternalContinue,
+                        [0xFC, ..] => EngineCommand::ExternalStop,
+                        [0xF2, lsb, msb, ..] => {
+                            EngineCommand::ExternalSongPosition(lsb as u16 | (msb as u16) << 7)
+                        }
+                        [0xF2, ..] | [0xF9..=0xFF, ..] => return,
+                        _ => {
+                            if let Some(notes) = &route.notes
+                                && let Some(message) = bytes_to_message(bytes)
+                            {
+                                let _ = notes.send(message);
+                            }
+                            return;
+                        }
+                    };
+                    if let Some(clock) = &route.clock {
+                        let _ = clock.send(command);
                     }
                 },
-                self.midi_in_sender.clone(),
+                route,
             )
             .map_err(|e| MTrakError::Midi(e.to_string()));
     }
@@ -657,6 +746,22 @@ impl AppState {
         }
         self.engine.set_output_port(port.clone());
         self.active_out_port = port;
+    }
+    /// Picks the input port the clock follows; `0` is the internal clock, anything else is
+    /// an index into the input ports, offset by one.
+    /// Picks the input port the clock follows; `0` is the internal clock, anything else is
+    /// an index into the input ports, offset by one.
+    pub fn set_midi_sync(&mut self, choice: usize) -> Result<()> {
+        let port = choice.checked_sub(1).and_then(|index| {
+            self.midi_in_client
+                .as_ref()
+                .and_then(|client| client.ports().get(index).cloned())
+        });
+        return self.set_clock_input(port);
+    }
+    pub fn active_clock_name(&self) -> Option<String> {
+        let port = self.active_clock_port.as_ref()?;
+        return self.midi_in_client.as_ref()?.port_name(port).ok();
     }
     pub fn set_midi_clock(&mut self, enabled: bool) {
         self.project_mut().send_midi_clock = enabled;
@@ -899,7 +1004,7 @@ impl AppState {
     fn shut_down(&mut self) {
         self.engine.stop();
         self.engine.shut_down();
-        if let Some(connection) = self.midi_in_connection.take() {
+        for connection in self.midi_in_connections.drain(..) {
             connection.close();
         }
     }

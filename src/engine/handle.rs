@@ -47,6 +47,20 @@ pub enum EngineCommand {
     },
     SetGlobalVelocity(u8),
     SetMidiClock(bool),
+    SetClockSource(ClockSource),
+    /// A clock pulse from the clock input, with midir's timestamp in microseconds.
+    ExternalClock(u64),
+    /// A song position pointer from the clock input, in sixteenth notes.
+    ExternalSongPosition(u16),
+    ExternalStart,
+    ExternalContinue,
+    ExternalStop,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ClockSource {
+    Internal,
+    External,
 }
 
 #[derive(Default)]
@@ -56,6 +70,7 @@ pub struct EngineStatus {
     pattern: AtomicUsize,
     row: AtomicUsize,
     output_connected: AtomicBool,
+    synced_bpm: AtomicU8,
 }
 impl EngineStatus {
     pub fn play_mode(&self) -> PlayMode {
@@ -73,6 +88,10 @@ impl EngineStatus {
     pub fn output_connected(&self) -> bool {
         return self.output_connected.load(Ordering::Relaxed);
     }
+    /// The tempo measured from the clock input.
+    pub fn synced_bpm(&self) -> u8 {
+        return self.synced_bpm.load(Ordering::Relaxed);
+    }
 
     pub fn set_play_mode(&self, mode: PlayMode) {
         self.play_mode.store(mode as u8, Ordering::Relaxed);
@@ -81,6 +100,9 @@ impl EngineStatus {
         self.sequence_index.store(sequence_index, Ordering::Relaxed);
         self.pattern.store(pattern, Ordering::Relaxed);
         self.row.store(row, Ordering::Relaxed);
+    }
+    pub fn set_synced_bpm(&self, bpm: u8) {
+        self.synced_bpm.store(bpm, Ordering::Relaxed);
     }
     pub fn set_output_connected(&self, connected: bool) {
         self.output_connected.store(connected, Ordering::Relaxed);
@@ -116,6 +138,14 @@ impl EngineHandle {
     }
     pub fn set_midi_clock(&self, enabled: bool) {
         self.send(EngineCommand::SetMidiClock(enabled));
+    }
+    pub fn set_clock_source(&self, source: ClockSource) {
+        self.send(EngineCommand::SetClockSource(source));
+    }
+    /// A sender for the clock input's callback, so pulses reach the engine without going
+    /// through the UI.
+    pub fn clock_sender(&self) -> Option<Sender<EngineCommand>> {
+        return self.commands.clone();
     }
     pub fn set_output_port(&self, port: Option<MidiOutputPort>) {
         self.send(EngineCommand::SetOutputPort(port));

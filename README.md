@@ -114,7 +114,8 @@ Planned features, in no particular order:
 - [ ] **MIDI file import/export**
 - [ ] **MIDI input**:
     - [X] play notes into the pattern using a connected midi controller
-    - [ ] trigger mtrak to start and stop playback, change patterns using a connected midi controller
+    - [X] trigger mtrak to start and stop playback, sync to midi controller
+    - [ ] Change sequence/pattern using Program Select In
 - [X] **MIDI clock out**: send clock and start/stop to sync external sequencers, drum machines and arpeggiators
 - [ ] **Multiple output ports**: map instruments to different MIDI devices, not just channels on one port
 - [ ] **Program change and bank select per instrument**, so loading a project restores the right patches

@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     sync::{
         Arc,
         mpsc::{Receiver, RecvTimeoutError, Sender},
@@ -11,7 +12,7 @@ use midi::{Message, ToRawMessages};
 use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
 
 use super::{
-    handle::{EngineCommand, EngineStatus},
+    handle::{ClockSource, EngineCommand, EngineStatus},
     voices::Voices,
 };
 use crate::{
@@ -19,8 +20,8 @@ use crate::{
         config::TITLE,
         effect::{CommandKind, Effect, MidiCommand},
         midi::{
-            DEFAULT_BPM, MIDI_CHANNEL_MAX, MidiEvent, PULSES_PER_LINE, VELOCITY_MAX,
-            pulse_duration, raw_message_to_bytes, tick_duration,
+            DEFAULT_BPM, MIDI_CHANNEL_MAX, MidiEvent, PULSES_PER_LINE, PULSES_PER_QUARTER,
+            VELOCITY_MAX, pulse_duration, raw_message_to_bytes, tick_duration,
         },
         note::{Note, NoteKind},
         pattern::{Pattern, PatternId},
@@ -64,10 +65,19 @@ struct Position {
 }
 
 struct Clock {
+    /// Whether pulses come from the clock input rather than the engine's own timer.
+    follows_input: bool,
     next_pulse: Instant,
     pulse_in_row: u32,
     row_start: Instant,
     tick: u32,
+}
+
+/// What the clock input asked for, waiting on its next pulse.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingTransport {
+    Start,
+    Continue,
 }
 
 /// Something a track does later in the current row.
@@ -112,6 +122,14 @@ pub struct MtrakEngine {
     mode: PlayMode,
     position: Position,
     clock: Option<Clock>,
+    clock_source: ClockSource,
+    /// Where the clock input's Continue picks up in the song, kept when playback stops.
+    resume: Option<Position>,
+    pending_transport: Option<PendingTransport>,
+    /// Timestamps of the clock input's last beat of pulses, oldest first.
+    external_pulses: VecDeque<u64>,
+    /// The average time between pulses from the clock input over the last beat.
+    external_period: Duration,
     voices: Voices,
     scheduled_notes: [Option<ScheduledNote>; TRACK_COUNT as usize],
     early_notes: [Option<EarlyNote>; TRACK_COUNT as usize],
@@ -146,6 +164,11 @@ impl MtrakEngine {
             },
             pending_events: vec![],
             clock: None,
+            clock_source: ClockSource::Internal,
+            resume: None,
+            pending_transport: None,
+            external_pulses: VecDeque::with_capacity(PULSES_PER_QUARTER as usize + 1),
+            external_period: pulse_duration(DEFAULT_BPM),
             voices: Voices::new(),
             scheduled_notes: [None; TRACK_COUNT as usize],
             early_notes: [None; TRACK_COUNT as usize],
@@ -216,6 +239,19 @@ impl MtrakEngine {
             }
             EngineCommand::SetGlobalVelocity(velocity) => self.voices.set_global_velocity(velocity),
             EngineCommand::SetMidiClock(enabled) => self.send_midi_clock = enabled,
+            EngineCommand::SetClockSource(source) => self.set_clock_source(source),
+            EngineCommand::ExternalClock(timestamp) => self.external_pulse(timestamp),
+            EngineCommand::ExternalStart => self.pending_transport = Some(PendingTransport::Start),
+            EngineCommand::ExternalContinue => {
+                self.pending_transport = Some(PendingTransport::Continue)
+            }
+            EngineCommand::ExternalSongPosition(sixteenths) => self.song_position(sixteenths),
+            EngineCommand::ExternalStop => {
+                self.pending_transport = None;
+                if self.clock.as_ref().is_some_and(|clock| clock.follows_input) {
+                    self.stop();
+                }
+            }
         }
     }
 
@@ -250,23 +286,206 @@ impl MtrakEngine {
             .max(1);
     }
 
+    /// The time between pulses: from the BPM, or measured from the clock input when synced,
+    /// which also sets the tempo of playback started locally.
     fn pulse_duration(&self) -> Duration {
-        return pulse_duration(self.bpm());
+        return match self.clock_source {
+            ClockSource::Internal => pulse_duration(self.bpm()),
+            ClockSource::External => self.external_period,
+        };
+    }
+
+    fn set_clock_source(&mut self, source: ClockSource) {
+        if source == self.clock_source {
+            return;
+        }
+        if self.clock.is_some() {
+            self.stop();
+        }
+        self.clock_source = source;
+        self.external_period = pulse_duration(self.bpm);
+        self.publish_synced_bpm();
+        self.resume = None;
+        self.pending_transport = None;
+        self.external_pulses.clear();
+    }
+
+    /// Plays from `position` on the engine's own timer.
+    fn play_from(&mut self, mode: PlayMode, position: Position) {
+        self.position = position;
+        self.start(mode, Message::Start, false);
+    }
+
+    /// Shows the measured tempo, holding the shown value until it is clearly off so jitter
+    /// around a half BPM doesn't flicker between two values.
+    fn publish_synced_bpm(&self) {
+        let bpm = 60.0 / (self.external_period.as_secs_f64() * PULSES_PER_QUARTER as f64);
+        if (bpm - self.status.synced_bpm() as f64).abs() < 0.75 {
+            return;
+        }
+        self.status
+            .set_synced_bpm(bpm.round().clamp(1.0, u8::MAX as f64) as u8);
+    }
+
+    /// Averages the time between pulses over the last beat. A gap long enough to be a stopped
+    /// clock starts the measurement over, and so does a timestamp going backwards, since each
+    /// new input connection counts from zero again.
+    fn measure_external_pulse(&mut self, timestamp: u64) {
+        if self
+            .external_pulses
+            .back()
+            .is_some_and(|&last| timestamp < last || timestamp - last >= 250_000)
+        {
+            self.external_pulses.clear();
+        }
+        if self.external_pulses.len() > PULSES_PER_QUARTER as usize {
+            self.external_pulses.pop_front();
+        }
+        self.external_pulses.push_back(timestamp);
+        let (Some(&first), Some(&last)) =
+            (self.external_pulses.front(), self.external_pulses.back())
+        else {
+            return;
+        };
+        let intervals = self.external_pulses.len() as u32 - 1;
+        if intervals == 0 {
+            return;
+        }
+        self.external_period = Duration::from_micros(last - first) / intervals;
+        self.publish_synced_bpm();
+    }
+
+    /// One pulse from the clock input. A pending Start or Continue begins on it, otherwise it
+    /// moves playback along like an internal pulse.
+    fn external_pulse(&mut self, timestamp: u64) {
+        self.measure_external_pulse(timestamp);
+        if self.clock_source != ClockSource::External {
+            return;
+        }
+        match self.pending_transport.take() {
+            Some(PendingTransport::Start) => return self.start_cued(),
+            Some(PendingTransport::Continue) => return self.continue_cued(),
+            None => {}
+        }
+        if !self.clock.as_ref().is_some_and(|clock| clock.follows_input) {
+            return;
+        }
+        self.advance_clock();
+        if self
+            .clock
+            .as_ref()
+            .is_some_and(|clock| clock.pulse_in_row + 1 >= PULSES_PER_LINE)
+        {
+            self.finish_row_ticks();
+        }
+        if let Some(clock) = &mut self.clock {
+            clock.next_pulse = Instant::now();
+        }
+        self.pulse();
+    }
+
+    /// The first row of the song.
+    fn song_start(&self) -> Position {
+        return Position {
+            sequence_index: 0,
+            repeat: 0,
+            pattern: self
+                .sequence
+                .first()
+                .map_or(PatternId(0), |row| row.pattern_id),
+            row: 0,
+        };
+    }
+
+    /// Following the clock input always plays the song on loop, since the master decides
+    /// when it ends.
+    fn start_cued(&mut self) {
+        self.position = self.song_start();
+        self.start(PlayMode::SongLoop, Message::Start, true);
+    }
+
+    /// Picks up where the clock input stopped, or where its song position pointed.
+    fn continue_cued(&mut self) {
+        let Some(position) = self.resume.take() else {
+            return self.start_cued();
+        };
+        self.position = position;
+        self.start(PlayMode::SongLoop, Message::Continue, true);
+    }
+
+    /// Moves where the clock input's Continue picks up to `sixteenths` sixteenth notes into
+    /// the song.
+    fn song_position(&mut self, sixteenths: u16) {
+        let rows =
+            sixteenths as usize * (PULSES_PER_QUARTER / 4) as usize / PULSES_PER_LINE as usize;
+        self.resume = self.song_position_at(rows);
+    }
+
+    /// The position `rows` rows from the start of the song, wrapping around at its end.
+    fn song_position_at(&self, rows: usize) -> Option<Position> {
+        let row_count = |id: PatternId| {
+            self.patterns
+                .get(id.0 as usize)
+                .map_or(0, |p| p.row_count as usize)
+        };
+        let total: usize = self
+            .sequence
+            .iter()
+            .map(|row| row_count(row.pattern_id) * row.repeats as usize)
+            .sum();
+        if total == 0 {
+            return None;
+        }
+        let mut remaining = rows % total;
+        for (sequence_index, sequence_row) in self.sequence.iter().enumerate() {
+            let count = row_count(sequence_row.pattern_id);
+            for repeat in 0..sequence_row.repeats {
+                if remaining < count {
+                    return Some(Position {
+                        sequence_index,
+                        repeat,
+                        pattern: sequence_row.pattern_id,
+                        row: remaining,
+                    });
+                }
+                remaining -= count;
+            }
+        }
+        return None;
+    }
+
+    /// Runs the effect ticks left in the row, so a clock input that speeds up never skips any.
+    fn finish_row_ticks(&mut self) {
+        loop {
+            let Some(pattern) = self.current_pattern() else {
+                return;
+            };
+            let ticks_per_line = self.ticks_per_line(pattern) as u32;
+            let Some(clock) = &mut self.clock else {
+                return;
+            };
+            if clock.tick + 1 >= ticks_per_line {
+                return;
+            }
+            clock.tick += 1;
+            self.effect_tick();
+        }
     }
 
     /// Plays a single pattern from row 0, once or on repeat.
     fn play_pattern(&mut self, id: PatternId, looping: bool) {
-        self.position = Position {
+        let position = Position {
             sequence_index: 0,
             repeat: 0,
             pattern: id,
             row: 0,
         };
-        self.start(if looping {
+        let mode = if looping {
             PlayMode::PatternLoop
         } else {
             PlayMode::Pattern
-        });
+        };
+        self.play_from(mode, position);
     }
 
     /// Plays the sequence starting at the given index.
@@ -274,21 +493,22 @@ impl MtrakEngine {
         let Some(sequence_row) = self.sequence.get(sequence_index) else {
             return;
         };
-        self.position = Position {
+        let position = Position {
             sequence_index,
             repeat: 0,
             pattern: sequence_row.pattern_id,
             row: 0,
         };
-        self.start(if looping {
+        let mode = if looping {
             PlayMode::SongLoop
         } else {
             PlayMode::Song
-        });
+        };
+        self.play_from(mode, position);
     }
 
-    /// Resets voices and the clock, then plays the first row.
-    fn start(&mut self, mode: PlayMode) {
+    /// Resets voices and the clock, sends `transport`, then plays the row at the position.
+    fn start(&mut self, mode: PlayMode, transport: Message, follows_input: bool) {
         if self.current_pattern().is_none() {
             self.stop();
             return;
@@ -299,6 +519,7 @@ impl MtrakEngine {
         self.dispatch_messages(out);
         let now = Instant::now();
         self.clock = Some(Clock {
+            follows_input,
             next_pulse: now,
             pulse_in_row: 0,
             row_start: now,
@@ -307,7 +528,7 @@ impl MtrakEngine {
         self.mode = mode;
         self.status.set_play_mode(mode);
         self.publish_position();
-        self.dispatch(MidiEvent::Message(Message::Start));
+        self.dispatch(MidiEvent::Message(transport));
         self.send_clock();
         self.play_row();
         self.time_next_pulse(now);
@@ -324,6 +545,12 @@ impl MtrakEngine {
 
     /// Stops playback and releases every sounding note.
     fn stop(&mut self) {
+        if self.clock.is_some() {
+            self.resume = match self.mode {
+                PlayMode::Song | PlayMode::SongLoop => self.next_position(&self.position),
+                _ => None,
+            };
+        }
         self.clock = None;
         self.mode = PlayMode::Paused;
         self.status.set_play_mode(PlayMode::Paused);
@@ -337,7 +564,11 @@ impl MtrakEngine {
 
     /// When the engine next needs to wake up, either for a pulse or an effect tick.
     fn next_deadline(&self) -> Option<Instant> {
-        let next_pulse = self.clock.as_ref()?.next_pulse;
+        let clock = self.clock.as_ref()?;
+        if clock.follows_input {
+            return self.next_effect_tick();
+        }
+        let next_pulse = clock.next_pulse;
         return Some(match self.next_effect_tick() {
             Some(tick) => tick.min(next_pulse),
             None => next_pulse,
@@ -353,7 +584,7 @@ impl MtrakEngine {
         if next >= ticks_per_line as u32 {
             return None;
         }
-        return Some(clock.row_start + tick_duration(self.bpm(), ticks_per_line) * next);
+        return Some(clock.row_start + tick_duration(self.pulse_duration(), ticks_per_line) * next);
     }
 
     /// Catches up on every pulse and effect tick that is due by now.
@@ -364,6 +595,7 @@ impl MtrakEngine {
                 return;
             };
             let next_pulse = clock.next_pulse;
+            let follows_input = clock.follows_input;
             match self.next_effect_tick() {
                 Some(tick) if tick <= next_pulse && tick <= now => {
                     if let Some(clock) = &mut self.clock {
@@ -371,7 +603,7 @@ impl MtrakEngine {
                     }
                     self.effect_tick();
                 }
-                _ if next_pulse <= now => self.pulse(),
+                _ if next_pulse <= now && !follows_input => self.pulse(),
                 _ => return,
             }
         }
@@ -2431,5 +2663,246 @@ mod tests {
         assert_eq!(velocity(Some(0x10), Some(0x60)), Some(0x10));
         assert_eq!(velocity(None, Some(0x60)), Some(0x60));
         assert_eq!(velocity(None, Some(0)), None);
+    }
+    /// A harness following the clock input, with a song playing each pattern once.
+    fn synced(patterns: Vec<Pattern>) -> Harness {
+        let sequence = (0..patterns.len())
+            .map(|id| SequenceRow {
+                pattern_id: PatternId(id as u8),
+                repeats: 1,
+            })
+            .collect();
+        let mut harness = Harness::new(patterns);
+        harness.engine.apply(EngineCommand::SetSequence(sequence));
+        harness
+            .engine
+            .apply(EngineCommand::SetClockSource(ClockSource::External));
+        return harness;
+    }
+
+    /// Sends `count` clock input pulses, 20ms apart, after `from` microseconds.
+    fn external_pulses(harness: &mut Harness, from: u64, count: u64) {
+        for i in 0..count {
+            harness
+                .engine
+                .apply(EngineCommand::ExternalClock(from + i * 20_000));
+        }
+    }
+
+    #[test]
+    fn synced_start_waits_for_its_first_pulse() {
+        let mut harness = synced(vec![pattern(2, &[(0, 0, note("C-4 0 40"))])]);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        assert!(harness.messages().is_empty());
+        external_pulses(&mut harness, 0, 1);
+        assert_eq!(
+            harness.messages(),
+            vec![Message::Start, Message::NoteOn(Channel::Ch1, 60, 0x40)]
+        );
+    }
+
+    #[test]
+    fn synced_rows_follow_the_clock_input() {
+        let mut harness = synced(vec![pattern(2, &[(1, 0, note("D-4 0 40"))])]);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        external_pulses(&mut harness, 0, PULSES_PER_LINE as u64);
+        harness.messages();
+        assert_eq!(harness.engine.position.row, 0);
+        external_pulses(&mut harness, 120_000, 1);
+        assert_eq!(harness.engine.position.row, 1);
+        assert_eq!(
+            harness.messages(),
+            vec![Message::NoteOn(Channel::Ch1, 62, 0x40)]
+        );
+    }
+
+    #[test]
+    fn synced_row_runs_its_effect_ticks_before_the_next_row() {
+        let mut harness = synced(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0x12))])]);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        external_pulses(&mut harness, 0, PULSES_PER_LINE as u64 + 1);
+        assert!(
+            harness
+                .messages()
+                .contains(&Message::NoteOn(Channel::Ch1, 60, 0x40))
+        );
+    }
+
+    #[test]
+    fn synced_continue_picks_up_on_the_next_row() {
+        let mut harness = synced(vec![pattern(4, &[(2, 0, note("E-4 0 40"))])]);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        external_pulses(&mut harness, 0, PULSES_PER_LINE as u64 + 1);
+        harness.engine.apply(EngineCommand::ExternalStop);
+        assert_eq!(harness.engine.mode, PlayMode::Paused);
+        harness.messages();
+        harness.engine.apply(EngineCommand::ExternalContinue);
+        external_pulses(&mut harness, 1_000_000, 1);
+        let messages = harness.messages();
+        assert_eq!(messages[0], Message::Continue);
+        assert!(messages.contains(&Message::NoteOn(Channel::Ch1, 64, 0x40)));
+        assert_eq!(harness.engine.position.row, 2);
+    }
+
+    #[test]
+    fn synced_start_plays_the_song_after_a_local_pattern_play() {
+        let mut harness = synced(vec![pattern(1, &[]), pattern(1, &[])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(1), true));
+        harness.engine.apply(EngineCommand::Stop);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        external_pulses(&mut harness, 0, 1);
+        assert_eq!(harness.engine.mode, PlayMode::SongLoop);
+        assert!(harness.engine.position.pattern == PatternId(0));
+        external_pulses(&mut harness, 20_000, PULSES_PER_LINE as u64);
+        assert!(harness.engine.position.pattern == PatternId(1));
+    }
+
+    #[test]
+    fn synced_continue_after_a_local_pattern_play_starts_the_song() {
+        let mut harness = synced(vec![pattern(4, &[]), pattern(4, &[])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(1), true));
+        harness.engine.apply(EngineCommand::Stop);
+        harness.engine.apply(EngineCommand::ExternalContinue);
+        external_pulses(&mut harness, 0, 1);
+        assert_eq!(harness.engine.mode, PlayMode::SongLoop);
+        assert!(harness.engine.position.pattern == PatternId(0));
+        assert_eq!(harness.engine.position.row, 0);
+    }
+
+    #[test]
+    fn synced_pulse_period_follows_the_clock_input() {
+        let mut harness = synced(vec![pattern(2, &[])]);
+        for i in 0..100 {
+            harness
+                .engine
+                .apply(EngineCommand::ExternalClock(i * 10_000));
+        }
+        let period = harness.engine.pulse_duration();
+        assert!(period > Duration::from_micros(9_900) && period < Duration::from_micros(10_100));
+    }
+
+    #[test]
+    fn internal_clock_ignores_the_clock_input() {
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, note("C-4 0 40"))])]);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        external_pulses(&mut harness, 0, 1);
+        assert!(harness.messages().is_empty());
+        assert_eq!(harness.engine.mode, PlayMode::Paused);
+    }
+
+    #[test]
+    fn local_play_while_synced_keeps_the_measured_tempo() {
+        let mut harness = synced(vec![pattern(4, &[])]);
+        for i in 0..100 {
+            harness
+                .engine
+                .apply(EngineCommand::ExternalClock(i * 10_000));
+        }
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        assert_eq!(harness.engine.mode, PlayMode::PatternLoop);
+        assert!(!harness.engine.clock.as_ref().unwrap().follows_input);
+        let period = harness.engine.pulse_duration();
+        assert!(period > Duration::from_micros(9_900) && period < Duration::from_micros(10_100));
+        external_pulses(&mut harness, 2_000_000, PULSES_PER_LINE as u64);
+        assert_eq!(harness.engine.position.row, 0);
+        harness.engine.apply(EngineCommand::ExternalStop);
+        assert_eq!(harness.engine.mode, PlayMode::PatternLoop);
+    }
+
+    #[test]
+    fn switching_to_sync_starts_from_the_song_tempo() {
+        let mut harness = Harness::new(vec![pattern(2, &[])]);
+        harness.engine.apply(EngineCommand::SetBpm(150));
+        harness
+            .engine
+            .apply(EngineCommand::SetClockSource(ClockSource::External));
+        assert_eq!(harness.engine.pulse_duration(), pulse_duration(150));
+        assert_eq!(harness.engine.status.synced_bpm(), 150);
+    }
+
+    #[test]
+    fn synced_bpm_is_measured_from_the_clock_input() {
+        let mut harness = synced(vec![pattern(2, &[])]);
+        for i in 0..100 {
+            harness
+                .engine
+                .apply(EngineCommand::ExternalClock(i * 20_000));
+        }
+        assert_eq!(harness.engine.status.synced_bpm(), 125);
+    }
+
+    #[test]
+    fn song_position_sets_where_continue_plays() {
+        let mut harness = Harness::new(vec![
+            pattern(4, &[]),
+            pattern(4, &[(1, 0, note("G-4 0 40"))]),
+        ]);
+        harness.engine.apply(EngineCommand::SetSequence(vec![
+            SequenceRow {
+                pattern_id: PatternId(0),
+                repeats: 2,
+            },
+            SequenceRow {
+                pattern_id: PatternId(1),
+                repeats: 1,
+            },
+        ]));
+        harness
+            .engine
+            .apply(EngineCommand::SetClockSource(ClockSource::External));
+        harness.engine.apply(EngineCommand::ExternalSongPosition(9));
+        harness.engine.apply(EngineCommand::ExternalContinue);
+        external_pulses(&mut harness, 0, 1);
+        assert_eq!(harness.engine.position.sequence_index, 1);
+        assert_eq!(harness.engine.position.row, 1);
+        assert!(
+            harness
+                .messages()
+                .contains(&Message::NoteOn(Channel::Ch1, 67, 0x40))
+        );
+    }
+
+    #[test]
+    fn song_position_wraps_around_the_song() {
+        let mut harness = synced(vec![pattern(4, &[]), pattern(2, &[])]);
+        harness.engine.apply(EngineCommand::ExternalSongPosition(8));
+        harness.engine.apply(EngineCommand::ExternalContinue);
+        external_pulses(&mut harness, 0, 1);
+        assert_eq!(harness.engine.mode, PlayMode::SongLoop);
+        assert!(harness.engine.position.pattern == PatternId(0));
+        assert_eq!(harness.engine.position.row, 2);
+    }
+
+    #[test]
+    fn synced_bpm_holds_steady_through_jitter() {
+        let mut harness = synced(vec![pattern(2, &[])]);
+        let mut shown = Vec::new();
+        for i in 0..200u64 {
+            let jitter = [0, 1_000, 0, 0, 1_000, 0, 0, 0][i as usize % 8];
+            harness
+                .engine
+                .apply(EngineCommand::ExternalClock(i * 20_833 + jitter));
+            if i > PULSES_PER_QUARTER as u64 {
+                shown.push(harness.engine.status.synced_bpm());
+            }
+        }
+        assert!(shown.iter().all(|&bpm| bpm == 120));
+    }
+
+    #[test]
+    fn reconnecting_the_clock_input_restarts_the_measurement() {
+        let mut harness = synced(vec![pattern(2, &[])]);
+        external_pulses(&mut harness, 5_000_000, 30);
+        external_pulses(&mut harness, 0, 30);
+        assert_eq!(
+            harness.engine.pulse_duration(),
+            Duration::from_micros(20_000)
+        );
     }
 }

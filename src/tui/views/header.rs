@@ -576,13 +576,18 @@ impl MtrakWidget for PatternInfo {
             .patterns
             .get_pattern_by_id(state.active_pattern)
             .unwrap();
+        let (tempo_label, tempo) = match state.active_clock_port {
+            Some(_) => ("SYN", state.engine.status().synced_bpm()),
+            None => ("BPM", state.project().bpm),
+        };
         let mut width: u16 = 0;
         let bindings = &self.keymap;
         let left_content = Paragraph::new(
             [
                 format!(
-                    "BPM {:03} {}/{}: DN/UP",
-                    state.project().bpm,
+                    "{} {:03} {}/{}: DN/UP",
+                    tempo_label,
+                    tempo,
                     bindings.key_for(BpmDown).unwrap(),
                     bindings.key_for(BpmUp).unwrap()
                 ),
@@ -784,6 +789,9 @@ fn open_config_dialog(state: &mut AppState) {
     in_names.insert(0, "(none)".into());
     let mut out_names = state.get_midi_out_port_names();
     out_names.insert(0, "(none)".into());
+
+    let mut clock_names = state.get_midi_in_port_names();
+    clock_names.insert(0, "(internal)".into());
     let current_in = state
         .active_in_port
         .as_ref()
@@ -791,6 +799,12 @@ fn open_config_dialog(state: &mut AppState) {
         .and_then(|(p, client)| client.port_name(p).ok())
         .and_then(|name| in_names.iter().position(|n| *n == name))
         .unwrap_or(0);
+
+    let current_clock = state
+        .active_clock_name()
+        .and_then(|name| clock_names.iter().position(|n| *n == name))
+        .unwrap_or(0);
+
     let current_out = state
         .active_out_port
         .as_ref()
@@ -805,6 +819,10 @@ fn open_config_dialog(state: &mut AppState) {
                 .label("MIDI input")
                 .selected(current_in)
                 .boxed(),
+            Select::new("clock", clock_names)
+                .label("Clock SRC")
+                .selected(current_clock)
+                .boxed(),
             Checkbox::new("velocity", "Record Velocity")
                 .checked(state.project().record_input_velocity)
                 .boxed(),
@@ -818,6 +836,9 @@ fn open_config_dialog(state: &mut AppState) {
         ],
     )
     .on_submit(|state, result| {
+        if let Some(clock_in) = result.choice("clock") {
+            state.set_midi_sync(clock_in)?;
+        }
         if let Some(midi_clock) = result.bool("midi_clock") {
             state.set_midi_clock(midi_clock);
         }
@@ -900,6 +921,7 @@ fn open_instrument_dialog(state: &mut AppState) {
                 .boxed(),
         ],
     )
+    .focus_first()
     .on_submit(move |state, result| {
         if let Some(name) = result.text("name") {
             state.project_mut().instruments[instrument as usize].name = name.into();
@@ -926,6 +948,7 @@ fn open_velocity_dialog(state: &mut AppState) {
                 .boxed(),
         ],
     )
+    .focus_first()
     .on_submit(move |state, result| {
         if let Some(text) = result.text("velocity") {
             let velocity = u8::from_str_radix(text, 16).unwrap_or(velocity);
@@ -1166,7 +1189,7 @@ impl KeyActions for UtilList {
         return match action {
             UtilListAction::Instruments => "Edit the current instrument",
             UtilListAction::Velocity => "Set the global velocity",
-            UtilListAction::Config => "Choose the MIDI output",
+            UtilListAction::Config => "Edit Configuration",
             UtilListAction::Clear => "Clear part of the current pattern",
         };
     }

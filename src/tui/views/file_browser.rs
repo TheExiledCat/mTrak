@@ -190,6 +190,7 @@ impl FileBrowser {
                             .boxed(),
                     ],
                 )
+                .focus_first()
                 .on_submit(move |_, result| {
                     pending.replace(Some(PendingInput::FileName {
                         name: result.text("name").unwrap_or_default().to_owned(),
