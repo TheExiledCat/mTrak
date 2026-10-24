@@ -24,10 +24,15 @@ pub enum EngineCommand {
     SetOutputPort(Option<MidiOutputPort>),
     PlayPattern(PatternId, bool),
     PlaySong(usize, bool),
+    /// While playing a pattern, carries on in another one from the next row.
+    SwitchPattern(PatternId),
+    /// While playing the song, jumps to the start of a sequence position on the next row.
+    JumpToSequence(usize),
     Stop,
     SetPattern(PatternId, Pattern),
     SetSequence(Vec<SequenceRow>),
     SetBpm(u8),
+    SetSpeed(u8),
     Event(MidiEvent),
     PlayNote {
         track: usize,
@@ -46,6 +51,15 @@ pub enum EngineCommand {
         volume: u8,
     },
     SetGlobalVelocity(u8),
+    SetTranspose(i8),
+    SetChannelTranspose {
+        channel: u8,
+        transpose: i8,
+    },
+    SetDefaultCC {
+        channel: u8,
+        control: u8,
+    },
     SetMidiClock(bool),
     SetClockSource(ClockSource),
     /// A clock pulse from the clock input, with midir's timestamp in microseconds.
@@ -156,6 +170,12 @@ impl EngineHandle {
     pub fn play_song(&self, sequence_index: usize, looping: bool) {
         self.send(EngineCommand::PlaySong(sequence_index, looping));
     }
+    pub fn switch_pattern(&self, id: PatternId) {
+        self.send(EngineCommand::SwitchPattern(id));
+    }
+    pub fn jump_to_sequence(&self, sequence_index: usize) {
+        self.send(EngineCommand::JumpToSequence(sequence_index));
+    }
     pub fn stop(&self) {
         self.send(EngineCommand::Stop);
     }
@@ -167,6 +187,9 @@ impl EngineHandle {
     }
     pub fn set_bpm(&self, bpm: u8) {
         self.send(EngineCommand::SetBpm(bpm));
+    }
+    pub fn set_speed(&self, speed: u8) {
+        self.send(EngineCommand::SetSpeed(speed));
     }
     pub fn send_event(&self, message: MidiEvent) {
         self.send(EngineCommand::Event(message));
@@ -201,6 +224,15 @@ impl EngineHandle {
 
     pub fn set_global_volume(&self, channel: u8, volume: u8) {
         self.send(EngineCommand::SetGlobalVolume { channel, volume });
+    }
+    pub fn set_default_cc(&self, channel: u8, control: u8) {
+        self.send(EngineCommand::SetDefaultCC { channel, control });
+    }
+    pub fn set_transpose(&self, transpose: i8) {
+        self.send(EngineCommand::SetTranspose(transpose));
+    }
+    pub fn set_channel_transpose(&self, channel: u8, transpose: i8) {
+        self.send(EngineCommand::SetChannelTranspose { channel, transpose });
     }
     pub fn set_global_velocity(&self, velocity: u8) {
         self.send(EngineCommand::SetGlobalVelocity(velocity));

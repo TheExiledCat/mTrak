@@ -175,7 +175,8 @@ impl DialogComponent for KeyTable {
 
 fn table_dialog(title: &str, sections: Vec<HelpSection>, height: u8) -> Dialog {
     return Dialog::new(title, vec![KeyTable::new(sections, height.max(1)).boxed()])
-        .width(u16::MAX);
+        .width(u16::MAX)
+        .focus_first();
 }
 
 pub fn keybindings_dialog(mut sections: Vec<HelpSection>, height: u8) -> Dialog {

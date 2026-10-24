@@ -19,7 +19,9 @@ use crate::{
     data::{
         config::{Config, TITLE},
         effect::CommandKind,
-        midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX, bytes_to_message},
+        midi::{
+            MAX_SPEED, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX, bytes_to_message,
+        },
         note::{Note, NoteKind, NotePitch},
         pattern::{self, Block, ClearOption, ClearTarget, Pattern, PatternId, PatternRow},
         project::{Project, SequenceRow},
@@ -274,7 +276,6 @@ enum AppStateAction {
         new: Vec<SequenceRow>,
     },
     SetSpeed {
-        pattern: PatternId,
         previous: u8,
         new: u8,
     },
@@ -327,13 +328,10 @@ impl AppStateAction {
                     .unwrap_or(previous.len().min(new.len()));
                 state.active_sequence_index = changed.min(sequence.len() - 1);
             }
-            AppStateAction::SetSpeed {
-                pattern,
-                previous,
-                new,
-            } => {
-                state.active_pattern = *pattern;
-                state.pattern_mut(*pattern).ticks_per_line = if undo { *previous } else { *new };
+            AppStateAction::SetSpeed { previous, new } => {
+                let speed = if undo { *previous } else { *new };
+                state.project.speed = speed;
+                state.engine.set_speed(speed);
             }
             AppStateAction::ChangeLength {
                 pattern,
@@ -515,8 +513,16 @@ impl AppState {
             state
                 .engine
                 .set_global_volume(channel as u8, instrument.volume);
+            state
+                .engine
+                .set_default_cc(channel as u8, instrument.default_cc);
+            state
+                .engine
+                .set_channel_transpose(channel as u8, instrument.transpose);
         }
+        state.engine.set_transpose(state.project.transpose);
         state.engine.set_bpm(state.project.bpm);
+        state.engine.set_speed(state.project.speed);
         state
             .engine
             .set_global_velocity(state.project.global_velocity);
@@ -907,20 +913,14 @@ impl AppState {
         return result;
     }
     pub fn change_speed(&mut self, increase: bool) {
-        let (_, pattern) = self.copy_buffers_and_active_pattern_mut();
-        let previous = pattern.ticks_per_line;
-        if increase {
-            pattern.increase_ticks_per_line();
+        let previous = self.project.speed;
+        let new = if increase {
+            previous.saturating_add(1).min(MAX_SPEED)
         } else {
-            pattern.decrease_ticks_per_line();
-        }
-        let new = pattern.ticks_per_line;
+            previous.saturating_sub(1).max(1)
+        };
         if new != previous {
-            self.track(AppStateAction::SetSpeed {
-                pattern: self.active_pattern,
-                previous,
-                new,
-            });
+            self.track_and_do(AppStateAction::SetSpeed { previous, new });
         }
     }
     pub fn change_length(&mut self, increase: bool) {
@@ -1049,11 +1049,24 @@ impl AppState {
     pub fn next_pattern(&mut self) {
         self.active_pattern.0 = self.active_pattern.0.saturating_add(1);
         self.ensure_pattern(self.active_pattern);
+        self.switch_playing_pattern();
     }
 
     pub fn prev_pattern(&mut self) {
         self.active_pattern.0 = self.active_pattern.0.saturating_sub(1);
         self.ensure_pattern(self.active_pattern);
+        self.switch_playing_pattern();
+    }
+
+    /// While a pattern plays, carries playback on in the active pattern, as in FT2.
+    fn switch_playing_pattern(&mut self) {
+        if matches!(
+            self.engine.status().play_mode(),
+            PlayMode::PatternLoop | PlayMode::Pattern
+        ) {
+            self.send_changes_to_engine();
+            self.engine.switch_pattern(self.active_pattern);
+        }
     }
 
     fn ensure_pattern(&mut self, id: PatternId) {
@@ -1063,6 +1076,22 @@ impl AppState {
         self.changed_patterns.insert(id);
     }
 
+    /// Moves the sequence cursor and shows the pattern at that position. While the song plays,
+    /// playback jumps there too, as in FT2.
+    pub fn select_sequence(&mut self, index: usize) {
+        let Some(row) = self.project.sequence.get(index) else {
+            return;
+        };
+        self.active_pattern = row.pattern_id;
+        self.active_sequence_index = index;
+        if matches!(
+            self.engine.status().play_mode(),
+            PlayMode::SongLoop | PlayMode::Song
+        ) {
+            self.send_changes_to_engine();
+            self.engine.jump_to_sequence(index);
+        }
+    }
     pub fn change_sequence_pattern(&mut self, index: usize, increase: bool) {
         let id = self.edit_sequence(|project| {
             let row = &mut project.sequence[index];
@@ -1260,6 +1289,18 @@ impl AppState {
     pub fn set_global_volume(&mut self, channel: u8, vol: u8) {
         self.project_mut().instruments[channel as usize].volume = vol;
         self.engine.set_global_volume(channel, vol);
+    }
+    pub fn set_transpose(&mut self, transpose: i8) {
+        self.project_mut().transpose = transpose;
+        self.engine.set_transpose(transpose);
+    }
+    pub fn set_instrument_transpose(&mut self, channel: u8, transpose: i8) {
+        self.project_mut().instruments[channel as usize].transpose = transpose;
+        self.engine.set_channel_transpose(channel, transpose);
+    }
+    pub fn set_default_cc(&mut self, channel: u8, control: u8) {
+        self.project_mut().instruments[channel as usize].default_cc = control;
+        self.engine.set_default_cc(channel, control);
     }
     pub fn is_saved(&self) -> bool {
         return !self.has_changes && self.saved_position == self.undo_stack.position();

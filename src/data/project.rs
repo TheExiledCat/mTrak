@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     data::{
-        midi::{DEFAULT_BPM, MIDI_CHANNEL_MAX},
+        midi::{DEFAULT_BPM, DEFAULT_SPEED, MIDI_CHANNEL_MAX},
         pattern::PatternId,
     },
     error::{MTrakError, Result},
@@ -47,7 +47,11 @@ pub struct Project {
     pub version: u16,
     pub name: Option<String>,
     pub bpm: u8,
+    /// Ticks per row, so how many rows play per beat: 6 is 4 rows per beat.
+    pub speed: u8,
     pub global_velocity: u8,
+    /// Semitones added to every note.
+    pub transpose: i8,
     pub sequence: Vec<SequenceRow>,
     pub patterns: PatternStore,
     pub instruments: [Instrument; MIDI_CHANNEL_MAX as usize + 1],
@@ -63,7 +67,9 @@ impl Project {
             version: PROJECT_VERSION,
             name: None,
             bpm: DEFAULT_BPM,
+            speed: DEFAULT_SPEED,
             global_velocity: 0xFF,
+            transpose: 0,
             sequence: vec![SequenceRow {
                 pattern_id: PatternId(0),
                 repeats: 1,

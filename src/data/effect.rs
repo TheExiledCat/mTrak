@@ -18,7 +18,7 @@ pub const EFFECT_COMMAND_LOOKUP: [(char, EffectCommand); 5] = [
     ('F', EffectCommand::SetTempo),
     ('Y', EffectCommand::Probability),
     ('D', EffectCommand::Delay),
-    ('R', EffectCommand::Roll),
+    ('R', EffectCommand::Retrig),
     ('3', EffectCommand::Legato),
 ];
 /// A way to write a command's value, e.g. `xy`, and what it does.
@@ -134,7 +134,7 @@ pub enum EffectCommand {
     SetTempo, // Sets the BPM from 20 up, the speed below that, and 00 goes back to the song's own
     Probability, // Decides whether or not this note plays based on a chance from 0 to FF
     Delay,    // Moves the note: 0x starts it x ticks before its row, 1x x ticks into it
-    Roll,     // Replays the note every y ticks, changing its velocity by x each time
+    Retrig,   // Replays the note every y ticks, changing its velocity by x each time
     Legato, // Glides into this note: 0x starts it x ticks early, 1x keeps the previous note x ticks longer, 3x cuts the note on tick x
 }
 /// Values from 20 up set the BPM; lower values set the speed.
@@ -154,7 +154,7 @@ pub enum Effect {
     /// Starts the note this many ticks into its row.
     DelayLate(u8),
     /// Replays the note every `every` ticks, changing its velocity by `volume` each time.
-    Roll {
+    Retrig {
         every: u8,
         volume: u8,
     },
@@ -183,7 +183,7 @@ impl EffectCommand {
                 0x1 => Effect::DelayLate(low),
                 _ => Effect::Unused,
             },
-            EffectCommand::Roll => Effect::Roll {
+            EffectCommand::Retrig => Effect::Retrig {
                 every: low,
                 volume: high,
             },
@@ -214,9 +214,9 @@ impl EffectCommand {
                 ("0y", "Delay: start the note y ticks before its row"),
                 ("1y", "Delay: start the note y ticks into its row"),
             ],
-            EffectCommand::Roll => &[(
+            EffectCommand::Retrig => &[(
                 "xy",
-                "Roll: replay the note every y ticks, x changes velocity per hit",
+                "Retrig: replay the note every y ticks, x changes velocity per hit",
             )],
             EffectCommand::Legato => &[
                 (
@@ -341,10 +341,10 @@ mod tests {
     }
 
     #[test]
-    fn roll_decodes_volume_and_interval() {
+    fn retrig_decodes_volume_and_interval() {
         assert_eq!(
-            EffectCommand::Roll.decode(0xA3),
-            Effect::Roll {
+            EffectCommand::Retrig.decode(0xA3),
+            Effect::Retrig {
                 every: 3,
                 volume: 0xA
             }

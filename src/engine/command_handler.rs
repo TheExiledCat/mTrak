@@ -35,8 +35,8 @@ pub enum NoteAction {
     /// Play it this many ticks into the row.
     Delay(u8),
     /// Play it now, then again every `every` ticks until the row ends, changing the velocity
-    /// of each repeat by `volume` (see `roll_velocity`).
-    Roll {
+    /// of each repeat by `volume` (see `retrig_velocity`).
+    Retrig {
         every: u8,
         volume: u8,
     },
@@ -48,9 +48,9 @@ pub enum NoteAction {
     Cut(u8),
 }
 
-/// The velocity of a roll's next hit, from the previous one. Follows FT2's multi retrig
+/// The velocity of a retrig's next hit, from the previous one. Follows FT2's multi retrig
 /// table, with the steps doubled because MIDI velocity goes up to 127 instead of 64.
-pub fn roll_velocity(velocity: u8, volume: u8) -> u8 {
+pub fn retrig_velocity(velocity: u8, volume: u8) -> u8 {
     let velocity = velocity as i32;
     let next = match volume {
         0x1..=0x5 => velocity - (2 << (volume - 0x1)),
@@ -120,7 +120,8 @@ impl Glide {
 
 #[derive(Default)]
 struct TrackState {
-    active_control: u8,
+    /// The CC selected by an `S`; until then the instrument's default CC is used.
+    active_control: Option<u8>,
     glide: Option<Glide>,
     /// A velocity for notes on this row only: a glide's start value without a target,
     /// or the end value of a glide that just reached its target row.
@@ -170,6 +171,8 @@ pub struct MidiCommandHandler {
     /// Channels that were sent a pitch bend or pressure, so stopping can undo it.
     bent: [bool; MIDI_CHANNEL_COUNT],
     pressed: [bool; MIDI_CHANNEL_COUNT],
+    /// Each instrument's default CC, by channel.
+    default_controls: [u8; MIDI_CHANNEL_COUNT],
 }
 impl Default for MidiCommandHandler {
     fn default() -> Self {
@@ -183,7 +186,14 @@ impl MidiCommandHandler {
             tracks: Default::default(),
             bent: [false; MIDI_CHANNEL_COUNT],
             pressed: [false; MIDI_CHANNEL_COUNT],
+            default_controls: [0; MIDI_CHANNEL_COUNT],
         };
+    }
+
+    pub fn set_default_control(&mut self, channel: usize, control: u8) {
+        if let Some(default) = self.default_controls.get_mut(channel) {
+            *default = control;
+        }
     }
 
     /// The 7 bit velocity a velocity glide gives notes on this track's current row, if any.
@@ -226,9 +236,11 @@ impl MidiCommandHandler {
         }
         let value = note.command.value;
         let channel = Channel::from_u8(note.instrument_id.unwrap_or(0)).unwrap();
-        let control = state.active_control;
+        let control = state
+            .active_control
+            .unwrap_or(self.default_controls[channel as usize]);
         match command {
-            MidiCommand::SetCC => state.active_control = value,
+            MidiCommand::SetCC => state.active_control = Some(value),
             MidiCommand::ChangeCC => events.push(MidiEvent::Message(ControlChange(
                 channel,
                 control,
@@ -372,8 +384,7 @@ impl EffectCommandHandler {
             Effect::DelayEarly(_) => NoteAction::Play,
             Effect::DelayLate(0) => NoteAction::Play,
             Effect::DelayLate(ticks) => NoteAction::Delay(ticks),
-            Effect::Roll { every: 0, .. } => NoteAction::Play,
-            Effect::Roll { every, volume } => NoteAction::Roll { every, volume },
+            Effect::Retrig { every, volume } => NoteAction::Retrig { every, volume },
             Effect::LegatoEarly(_) => NoteAction::Legato(0),
             Effect::LegatoHold(overlap) => NoteAction::Legato(overlap),
             Effect::Cut(tick) => NoteAction::Cut(tick),
@@ -427,6 +438,43 @@ mod tests {
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 100, 2)),
             vec![Message::ControlChange(Channel::Ch3, 74, 50)]
+        );
+    }
+
+    #[test]
+    fn change_cc_without_set_cc_uses_the_instruments_default() {
+        let mut handler = MidiCommandHandler::new();
+        handler.set_default_control(2, 74);
+        assert_eq!(
+            handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 100, 2)),
+            vec![Message::ControlChange(Channel::Ch3, 74, 50)]
+        );
+        assert_eq!(
+            handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 100, 1)),
+            vec![Message::ControlChange(Channel::Ch2, 0, 50)]
+        );
+    }
+
+    #[test]
+    fn set_cc_overrides_the_instruments_default() {
+        let mut handler = MidiCommandHandler::new();
+        handler.set_default_control(0, 74);
+        handle(&mut handler, 0, cc_note(MidiCommand::SetCC, 71, 0));
+        assert_eq!(
+            handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 100, 0)),
+            vec![Message::ControlChange(Channel::Ch1, 71, 50)]
+        );
+    }
+
+    #[test]
+    fn reset_goes_back_to_the_instruments_default() {
+        let mut handler = MidiCommandHandler::new();
+        handler.set_default_control(0, 74);
+        handle(&mut handler, 0, cc_note(MidiCommand::SetCC, 71, 0));
+        handler.reset(&mut vec![]);
+        assert_eq!(
+            handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 100, 0)),
+            vec![Message::ControlChange(Channel::Ch1, 74, 50)]
         );
     }
 
@@ -543,31 +591,30 @@ mod tests {
     }
 
     #[test]
-    fn roll_00_just_plays() {
+    fn retrig_with_zeros_is_still_a_retrig() {
         let mut handler = EffectCommandHandler::new();
         assert_eq!(
-            handler.apply(EffectCommand::Roll.decode(0x00)),
-            NoteAction::Play
-        );
-        assert_eq!(
-            handler.apply(EffectCommand::Roll.decode(0x30)),
-            NoteAction::Play
+            handler.apply(EffectCommand::Retrig.decode(0x00)),
+            NoteAction::Retrig {
+                every: 0,
+                volume: 0
+            }
         );
     }
 
     #[test]
-    fn roll_splits_volume_and_interval() {
+    fn retrig_splits_volume_and_interval() {
         let mut handler = EffectCommandHandler::new();
         assert_eq!(
-            handler.apply(EffectCommand::Roll.decode(0x02)),
-            NoteAction::Roll {
+            handler.apply(EffectCommand::Retrig.decode(0x02)),
+            NoteAction::Retrig {
                 every: 2,
                 volume: 0
             }
         );
         assert_eq!(
-            handler.apply(EffectCommand::Roll.decode(0xA3)),
-            NoteAction::Roll {
+            handler.apply(EffectCommand::Retrig.decode(0xA3)),
+            NoteAction::Retrig {
                 every: 3,
                 volume: 0xA
             }
@@ -575,8 +622,10 @@ mod tests {
     }
 
     #[test]
-    fn roll_velocity_follows_the_ft2_table() {
-        let steps: Vec<u8> = (0..=0xF).map(|volume| roll_velocity(60, volume)).collect();
+    fn retrig_velocity_follows_the_ft2_table() {
+        let steps: Vec<u8> = (0..=0xF)
+            .map(|volume| retrig_velocity(60, volume))
+            .collect();
         assert_eq!(
             steps,
             vec![
@@ -586,10 +635,10 @@ mod tests {
     }
 
     #[test]
-    fn roll_velocity_stays_in_midi_range() {
-        assert_eq!(roll_velocity(10, 0x5), 0);
-        assert_eq!(roll_velocity(100, 0xF), VELOCITY_MAX);
-        assert_eq!(roll_velocity(120, 0xD), VELOCITY_MAX);
+    fn retrig_velocity_stays_in_midi_range() {
+        assert_eq!(retrig_velocity(10, 0x5), 0);
+        assert_eq!(retrig_velocity(100, 0xF), VELOCITY_MAX);
+        assert_eq!(retrig_velocity(120, 0xD), VELOCITY_MAX);
     }
 
     #[test]

@@ -45,7 +45,6 @@ pub enum ClearTarget {
 }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Pattern {
-    pub ticks_per_line: u8,
     pub row_count: u16,
     pub track_count: u8,
     pub rows: Vec<PatternRow>,
@@ -83,8 +82,6 @@ impl Pattern {
             row_count,
             track_count: constants::TRACK_COUNT,
             rows: Vec::new(),
-
-            ticks_per_line: 6,
             channel_mutes: [false; MIDI_CHANNEL_MAX as usize + 1],
         };
         pattern.initialize_rows();
@@ -167,16 +164,13 @@ impl Pattern {
         }
     }
 
-    /// checks if 2 patterns are equal, that is, they have the same notes and ticks per line
+    /// checks if 2 patterns are equal, that is, they have the same length and notes
     pub fn same_content(&self, other: &Pattern) -> bool {
-        return self.ticks_per_line == other.ticks_per_line
-            && self.row_count == other.row_count
-            && same_cells(&self.rows, &other.rows);
+        return self.row_count == other.row_count && same_cells(&self.rows, &other.rows);
     }
 
-    // swaps this pattern's notes and ticks per line with another pattern's
+    // swaps this pattern's length and notes with another pattern's
     pub fn swap_content(&mut self, other: &mut Pattern) {
-        std::mem::swap(&mut self.ticks_per_line, &mut other.ticks_per_line);
         std::mem::swap(&mut self.row_count, &mut other.row_count);
         std::mem::swap(&mut self.rows, &mut other.rows);
         for row in &mut self.rows {
@@ -259,14 +253,6 @@ impl Pattern {
         for r in &mut self.rows[row..] {
             r.dirty = true;
         }
-    }
-
-    pub fn increase_ticks_per_line(&mut self) {
-        self.ticks_per_line = self.ticks_per_line.saturating_add(1);
-    }
-
-    pub fn decrease_ticks_per_line(&mut self) {
-        self.ticks_per_line = self.ticks_per_line.saturating_sub(1);
     }
 
     pub fn increase_length(&mut self) {

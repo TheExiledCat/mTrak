@@ -392,22 +392,17 @@ impl KeyActions for SequenceList {
         let sequence_length = state.project().sequence.len();
         match action {
             NextPattern => {
-                state.active_sequence_index = state
-                    .active_sequence_index
-                    .saturating_add(1)
-                    .clamp(0, sequence_length - 1)
+                state.select_sequence((state.active_sequence_index + 1).min(sequence_length - 1))
             }
-            PrevPattern => {
-                state.active_sequence_index = state
-                    .active_sequence_index
-                    .saturating_sub(1)
-                    .clamp(0, sequence_length - 1)
+            PrevPattern => state.select_sequence(state.active_sequence_index.saturating_sub(1)),
+            Insert => {
+                let index = state.active_sequence_index;
+                let pattern = state.project().sequence[index].pattern_id;
+                state.insert_sequence(index + 1, pattern);
             }
-            Insert => state.insert_sequence(state.active_sequence_index + 1, state.active_pattern),
             Delete => {
-                state.active_sequence_index = state
-                    .active_sequence_index
-                    .clamp(0, state.delete_sequence(state.active_sequence_index) - 1)
+                let remaining = state.delete_sequence(state.active_sequence_index);
+                state.select_sequence(state.active_sequence_index.min(remaining - 1))
             }
             IncRepeats => state.change_sequence_repeats(state.active_sequence_index, true),
             DecRepeats => state.change_sequence_repeats(state.active_sequence_index, false),
@@ -421,7 +416,7 @@ impl KeyActions for SequenceList {
         return match action {
             NextPattern => "Next sequence position",
             PrevPattern => "Previous sequence position",
-            Insert => "Insert the current pattern after this position",
+            Insert => "Insert this position's pattern after it",
             Delete => "Delete this sequence position",
             IncPattern => "Next pattern at this position",
             DecPattern => "Previous pattern at this position",
@@ -571,11 +566,6 @@ impl MtrakWidget for PatternInfo {
             )
             .render(vertical_layout[0], buf);
 
-        let active_pattern = state
-            .project()
-            .patterns
-            .get_pattern_by_id(state.active_pattern)
-            .unwrap();
         let (tempo_label, tempo) = match state.active_clock_port {
             Some(_) => ("SYN", state.engine.status().synced_bpm()),
             None => ("BPM", state.project().bpm),
@@ -593,7 +583,7 @@ impl MtrakWidget for PatternInfo {
                 ),
                 format!(
                     "SPD {:>3} {}/{}: DN/UP",
-                    active_pattern.ticks_per_line,
+                    state.project().speed,
                     bindings.key_for(SpeedDown).unwrap(),
                     bindings.key_for(SpeedUp).unwrap()
                 ),
@@ -711,8 +701,8 @@ impl KeyActions for PatternInfo {
         return match action {
             PatternInfoActions::BpmUp => "Increase BPM",
             PatternInfoActions::BpmDown => "Decrease BPM",
-            PatternInfoActions::SpeedUp => "Increase ticks per row",
-            PatternInfoActions::SpeedDown => "Decrease ticks per row",
+            PatternInfoActions::SpeedUp => "Increase the song speed (ticks per row)",
+            PatternInfoActions::SpeedDown => "Decrease the song speed (ticks per row)",
             PatternInfoActions::LineAddUp => "Increase rows skipped after entering a note",
             PatternInfoActions::LineAddDown => "Decrease rows skipped after entering a note",
             PatternInfoActions::PatternUp => "Next pattern",
@@ -909,6 +899,8 @@ fn open_instrument_dialog(state: &mut AppState) {
     let name = &state.project().instruments[instrument as usize].name;
     let volume = state.project().instruments[instrument as usize].volume;
     let pitch_wheel_range = state.project().instruments[instrument as usize].pitch_wheel_range;
+    let default_cc = state.project().instruments[instrument as usize].default_cc;
+    let transpose = state.project().instruments[instrument as usize].transpose;
     let dialog = Dialog::new(
         format!("Instrument {:1X}", instrument),
         vec![
@@ -918,6 +910,12 @@ fn open_instrument_dialog(state: &mut AppState) {
                 .boxed(),
             TextPrompt::new("pitch_wheel_range", "Bend range (semitones)")
                 .initial(pitch_wheel_range.to_string())
+                .boxed(),
+            TextPrompt::new("default_cc", "Default CC")
+                .initial(format!("{:02X}", default_cc))
+                .boxed(),
+            TextPrompt::new("transpose", "Transpose (semitones)")
+                .initial(transpose.to_string())
                 .boxed(),
         ],
     )
@@ -934,17 +932,28 @@ fn open_instrument_dialog(state: &mut AppState) {
             state.project_mut().instruments[instrument as usize].pitch_wheel_range =
                 range.parse().unwrap_or(pitch_wheel_range);
         }
+        if let Some(control) = result.text("default_cc") {
+            let control = u8::from_str_radix(control, 16).map_or(default_cc, |c| c.min(0x7F));
+            state.set_default_cc(instrument, control);
+        }
+        if let Some(text) = result.text("transpose") {
+            state.set_instrument_transpose(instrument, text.trim().parse().unwrap_or(transpose));
+        }
         return Ok(());
     });
     state.open_dialog(dialog);
 }
-fn open_velocity_dialog(state: &mut AppState) {
+fn open_global_dialog(state: &mut AppState) {
     let velocity = state.project().global_velocity;
+    let transpose = state.project().transpose;
     let dialog = Dialog::new(
-        "Velocity",
+        "Global",
         vec![
             TextPrompt::new("velocity", "Velocity")
                 .initial(format!("{:02X}", velocity))
+                .boxed(),
+            TextPrompt::new("transpose", "Transpose (semitones)")
+                .initial(transpose.to_string())
                 .boxed(),
         ],
     )
@@ -953,6 +962,9 @@ fn open_velocity_dialog(state: &mut AppState) {
         if let Some(text) = result.text("velocity") {
             let velocity = u8::from_str_radix(text, 16).unwrap_or(velocity);
             state.set_global_velocity(velocity);
+        }
+        if let Some(text) = result.text("transpose") {
+            state.set_transpose(text.trim().parse().unwrap_or(transpose));
         }
         return Ok(());
     });
@@ -1039,9 +1051,10 @@ impl MtrakWidget for InstrumentList {
             .render(layout[1], buf);
 
         Paragraph::new(format!(
-            "OCT: {}, GLB VEL: {:02X}",
+            "OCT: {}, GLB VEL: {:02X}, GLB TRSP: {:+03}",
             state.current_octave,
-            state.project().global_velocity
+            state.project().global_velocity,
+            state.project().transpose
         ))
         .render(layout[2], buf);
     }
@@ -1116,7 +1129,7 @@ impl MtrakWidget for MidiEventList {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum UtilListAction {
     Instruments,
-    Velocity,
+    Global,
     Config,
     Clear,
 }
@@ -1128,7 +1141,7 @@ impl UtilList {
         use UtilListAction::*;
         let keymap = Keymap::new()
             .bind(Key::ctrl('r'), Instruments, "Instrument")
-            .bind(Key::ctrl('e'), Velocity, "GLB Velocity")
+            .bind(Key::ctrl('e'), Global, "GLOBAL")
             .bind(Key::alt('z'), Clear, "Clear")
             .bind(Key::ctrl('o'), Config, "Config");
         return Self { keymap };
@@ -1178,7 +1191,7 @@ impl KeyActions for UtilList {
     fn perform(&mut self, action: Self::Action, state: &mut AppState) -> Result<()> {
         match action {
             UtilListAction::Instruments => open_instrument_dialog(state),
-            UtilListAction::Velocity => open_velocity_dialog(state),
+            UtilListAction::Global => open_global_dialog(state),
             UtilListAction::Config => open_config_dialog(state),
             UtilListAction::Clear => open_clear_dialog(state),
         }
@@ -1188,7 +1201,7 @@ impl KeyActions for UtilList {
     fn describe(action: UtilListAction) -> &'static str {
         return match action {
             UtilListAction::Instruments => "Edit the current instrument",
-            UtilListAction::Velocity => "Set the global velocity",
+            UtilListAction::Global => "Set the global velocity and transpose",
             UtilListAction::Config => "Edit Configuration",
             UtilListAction::Clear => "Clear part of the current pattern",
         };

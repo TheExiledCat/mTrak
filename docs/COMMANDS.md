@@ -45,7 +45,12 @@ velocity 64, and `7F` and `80` both play at 127.
 Selects which controller (CC number) the track's `C`, `G` and `H` commands change. The value
 is the CC number in hex, e.g. `S4A` selects CC 74. Sends nothing by itself.
 
-Until a track has an `S`, its CC commands change CC 0.
+Until a track has an `S`, its CC commands change the instrument's default CC, set in the
+instrument dialog (`Default CC`, in hex like `S`). It is `00` (CC 0) unless you change it.
+
+```
+---|1|--|C80   instrument 1's default CC = 64, no S needed
+```
 
 ### `C` Change CC
 
@@ -99,7 +104,8 @@ C-4|1|--|000   velocity 127 (volume column empty)
   when it's empty).
 - A velocity of 0 (`V00` or `V01`) makes notes silent, like volume `00`.
 - End a velocity slide with `E`, not `C`: a `C` would also send a CC, which on a track
-  without an `S` is CC 0 (bank select on many synths).
+  without an `S` is the instrument's default CC (CC 0, bank select on many synths, unless
+  you changed it).
 
 ### `E` End slide
 
@@ -140,8 +146,12 @@ C-4|1|--|WFF   note starts fully bent up
 Effect commands change playback, or how the cell's note plays, instead of sending MIDI. They
 work on any track and on muted channels.
 
-Several of them work in ticks: each row is split into as many ticks as the speed (`SPD`, or an
-`F` below `20`), 6 by default. Tick 0 is the start of the row.
+Several of them work in ticks. A row lasts as many ticks as the speed, 6 by default: the
+song's `SPD` in the header, or an `F` below `20` to change it from a row onwards. Tick 0 is the start of the row.
+
+As in FastTracker 2, a tick is one MIDI clock pulse: there are 24 per beat, so at 125 BPM a
+tick lasts 20 ms. The speed therefore sets how fast rows go by: at speed 6 a beat is 4 rows,
+at speed 3 it is 8 rows (double speed), and at speed 12 it is 2 rows (half speed).
 
 ### `F` Set tempo
 
@@ -149,20 +159,20 @@ Changes the BPM or the speed, starting on its own row:
 
 | Value     | Does                                                        |
 |-----------|-------------------------------------------------------------|
-| `00`      | Back to the song's BPM and the pattern's speed              |
+| `00`      | Back to the song's BPM and speed                            |
 | `01`-`1F` | Sets the speed (ticks per row) to that value                |
 | `20`-`FF` | Sets the BPM to that value in hex, e.g. `F7D` is 125 BPM    |
 
 ```
 ---|1|--|F8C   140 BPM from here on
 ---|1|--|F03   speed 3, still at 140 BPM
----|1|--|F00   back to the song's BPM and the pattern's speed
+---|1|--|F00   back to the song's BPM and speed
 ```
 
 - The change keeps going into the next patterns until an `F00` or until playback stops.
 - BPM and speed are separate: setting one leaves the other as it is.
-- The speed only sets how many ticks a row has, for slides and for `D`, `R` and `3`; rows
-  last the same time at any speed, so only the BPM changes how fast the song plays.
+- Both change how fast the song plays: the BPM sets how long a tick is, the speed how many
+  ticks a row lasts. `F03` plays the rows below it twice as fast.
 
 ### `Y` Probability
 
@@ -196,16 +206,16 @@ D-4|1|--|D02   at speed 6, the note starts on tick 4 of the row above
   `D16` at speed 6) means the note doesn't play.
 - Early notes work like early `3` notes: the earliest start is tick 1 of the row before, they
   follow the play order across patterns, and they use the mutes of their own pattern. When
-  one starts, anything still planned on that track in the row before (more roll hits, a note
+  one starts, anything still planned on that track in the row before (more retrig hits, a note
   cut, a late `D` that hasn't started yet) is dropped.
 - The note's velocity is worked out when it starts, so a running velocity slide gives it the
   velocity of that tick.
 - `20` and up do nothing yet; the note plays normally.
 
-### `R` Roll
+### `R` Retrig
 
-`Rxy` plays the note at the start of the row and then again every `y` ticks until the row
-ends. `x` changes the velocity of each repeat:
+`Rxy` replays the note every `y` ticks, like FastTracker 2's multi retrig. `x` changes the
+velocity of each repeat:
 
 | `x` | Each repeat | `x` | Each repeat |
 |-----|-------------|-----|-------------|
@@ -219,14 +229,27 @@ ends. `x` changes the velocity of each repeat:
 | `7` | ×1/2        | `F` | ×2          |
 
 ```
-C-4|1|40|R92   at speed 6: hits on ticks 0, 2 and 4, at velocity 64, 66 and 68
+C-4|1|--|R13   at speed 6: hits on ticks 0, 2 and 5 at velocity 127, 125 and 123
+---|1|--|RA6   no note: repeats the C-4 above every 6 ticks, 4 louder each time
+C-4|1|40|R92   with a volume: hits on ticks 0, 2 and 4, all at velocity 64
 ```
 
-- This is FastTracker 2's multi retrig table, with the steps doubled since MIDI velocity goes
-  up to 127.
-- Velocity stays between 0 and 127; once it reaches 0 the repeats are silent.
+It works like FT2's:
+
+- **Counting:** each track counts ticks since its last note or repeat, and repeats the note
+  when the count reaches `y`. The count carries on across rows, so a `y` as long as the row
+  or longer still repeats on later rows. Only rows with an `R` count, and the row start only
+  counts when the cell has no volume. A new note starts the count over.
+- **No note:** `R` repeats the last note the track played, carrying on from its velocity.
+  If the track hasn't played a note since playback started, nothing happens.
+- **Volume column:** with a volume on the `R` cell, every repeat plays at that volume and
+  `x` has no effect.
+- **Memory:** an `x` or `y` of `0` keeps the track's previous one, so `R00` carries on the
+  last retrig. With no previous `y`, a `y` of `0` repeats on every tick.
+- The `x` table is FastTracker 2's, with the steps doubled since MIDI velocity goes up to
+  127. Velocity stays between 0 and 127; once it reaches 0 the repeats are silent.
 - With `x` at `0` or `8`, a running velocity slide still sets the velocity of each hit.
-- `y` of `0` (e.g. `R00` or `R30`) just plays the note once.
+- Starting or stopping playback forgets the counts, the last notes and the memory.
 
 ### `3` Legato
 
@@ -254,7 +277,7 @@ E-4|1|--|312   E-4 starts on its row, D-4 keeps sounding 2 more ticks
 - Early notes follow the play order, so they work across patterns and when a pattern loops back
   to its top.
 - When an early note starts, anything still planned on that track in the row before (more
-  roll hits, a note cut, a late `D` that hasn't started yet) is dropped, as with an early `D`.
+  retrig hits, a note cut, a late `D` that hasn't started yet) is dropped, as with an early `D`.
 - `330` releases the note straight away and the cell's own note doesn't play. On a cell
   without a note, a cut releases the note that's playing. A cut also stops a previous note
   still sounding from a `31y`. A cut past the end of the row
@@ -264,7 +287,8 @@ E-4|1|--|312   E-4 starts on its row, D-4 keeps sounding 2 more ticks
 ## Slides
 
 A slide moves from its own value to a target, updating once per tick. With a speed (`SPD`, or
-an `F` below `20`) of 6 that is 6 updates per row, so a higher speed gives a smoother slide.
+an `F` below `20`) of 6 that is 6 updates per row. Since ticks always last the same time at a
+given BPM, a slide over the same amount of time is equally smooth at any speed.
 
 - **Target:** the track's next `C`, `E`, or command that starts a slide. The slide reaches
   that value on that row.
@@ -286,14 +310,14 @@ would have been had you never muted it.
 
 Commands on rows with volume `00` still run, even though the note doesn't play.
 
-Delayed notes and rolls check the mutes when they play, so muting a channel mid-row silences
+Delayed notes and retrigs check the mutes when they play, so muting a channel mid-row silences
 them too. Early `D` and `3` notes use the mutes of the pattern they belong to, even when they
 start during the pattern before. Muting also cuts notes still sounding from a `31y`.
 
 ## Playback
 
-Starting or stopping playback resets all command state: selected CCs go back to 0, running
-slides end, delayed notes, rolls and cuts that haven't happened yet are dropped, notes still
-sounding from a `31y` are cut, and the tempo goes back to the song's BPM and the pattern's
-speed. Channels that were sent a pitch bend or aftertouch get them reset to no bend and no
-pressure, even when muted, so your synth is never left out of tune.
+Starting or stopping playback resets all command state: selected CCs go back to each
+instrument's default CC, running slides end, delayed notes, retrigs and cuts that haven't
+happened yet are dropped, notes still sounding from a `31y` are cut, and the tempo goes back
+to the song's BPM and speed. Channels that were sent a pitch bend or aftertouch get them
+reset to no bend and no pressure, even when muted, so your synth is never left out of tune.

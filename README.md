@@ -31,7 +31,7 @@ any hardware or software synth.
 
 Download the binary for your platform from the
 [releases page](https://github.com/TheExiledCat/mTrak/releases) and put it somewhere on
-your `PATH`.
+your `PATH` or run it directly.
 
 ### From source
 
@@ -133,8 +133,8 @@ Planned features, in no particular order:
 - [ ] **Swing/groove**, per pattern or global
 - [x] **Prebuilt binaries** for Linux, Windows and macOS on every release
 - [ ] **More commands**
-    - [X] Roll
-    - [X] Roll with volume glide
+    - [X] Retrig
+    - [X] Retrig with volume change
     - [x] Tempo (BPM) and speed change (`F`)
     - [X] Note delay
     - [X] Note probability

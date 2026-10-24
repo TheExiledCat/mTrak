@@ -261,21 +261,38 @@ fn edit_keymap() -> Keymap<TimelineAction> {
     )));
 }
 
-fn open_paste_overflow_dialog(state: &mut AppState, row_count: u16, overflow_length: u16) {
-    let buffer_length = row_count.saturating_add(overflow_length);
-    let options = vec![
-        format!("Resize pattern to {:02X} rows", buffer_length),
-        format!("Truncate to {:02X} rows", row_count),
-        "Cancel".to_owned(),
-    ];
-    let dialog = Dialog::new(
-        "Paste overflow",
-        vec![
-            Label::new(format!(
+/// Asks whether pasting a pattern of a different length changes this pattern's length to the
+/// copy's, or keeps it.
+fn open_paste_length_dialog(state: &mut AppState, row_count: u16, copied_length: u16) {
+    let (text, options) = if copied_length > row_count {
+        (
+            format!(
                 "The copied pattern is {:02X} rows longer than this one.",
-                overflow_length
-            ))
-            .boxed(),
+                copied_length - row_count
+            ),
+            vec![
+                format!("Resize pattern to {:02X} rows", copied_length),
+                format!("Truncate to {:02X} rows", row_count),
+                "Cancel".to_owned(),
+            ],
+        )
+    } else {
+        (
+            format!(
+                "The copied pattern is {:02X} rows shorter than this one.",
+                row_count - copied_length
+            ),
+            vec![
+                format!("Trim pattern to {:02X} rows", copied_length),
+                format!("Keep {:02X} rows, clearing the rest", row_count),
+                "Cancel".to_owned(),
+            ],
+        )
+    };
+    let dialog = Dialog::new(
+        "Paste pattern",
+        vec![
+            Label::new(text).boxed(),
             Select::new("action", options).boxed(),
         ],
     )
@@ -288,9 +305,9 @@ fn open_paste_overflow_dialog(state: &mut AppState, row_count: u16, overflow_len
         };
         state.edit_pattern(|buffers, pattern| {
             if set_length {
-                pattern.set_length(buffer_length);
+                pattern.set_length(copied_length);
             }
-            buffers.paste_pattern_truncated(pattern);
+            buffers.paste_pattern_keeping_length(pattern);
         });
         state.notify("PTN PASTE");
         return Ok(());
@@ -671,8 +688,8 @@ impl KeyActions for TimeLineView {
                 let block = state.active_pattern().block();
                 let row_count = block.height;
                 match state.edit_block(block, |buffers, pattern| buffers.paste_pattern(pattern)) {
-                    Err(MTrakError::PatternPasteOverflow { overflow_length }) => {
-                        open_paste_overflow_dialog(state, row_count, overflow_length);
+                    Err(MTrakError::PatternPasteLength { copied_length }) => {
+                        open_paste_length_dialog(state, row_count, copied_length);
                     }
                     result => {
                         self.refresh_rows_from(state, 0);
@@ -880,13 +897,27 @@ impl TimeLineView {
         let Ok(volume) = u8::from_str_radix(&digits, 16) else {
             return false;
         };
-        state.enter_volume(
-            self.track_index as usize,
-            self.row_index as usize,
-            volume.min(VOLUME_MAX),
-        );
-        self.refresh_row_and_advance(state, self.row_index as usize);
+        let (track, row) = (self.track_index as usize, self.row_index as usize);
+        state.enter_volume(track, row, volume.min(VOLUME_MAX));
+        self.preview_cell(state, track, row);
+        self.refresh_row_and_advance(state, row);
         return true;
+    }
+    /// Plays the cell's note at its volume so a new volume can be heard; volume `00` silences it.
+    fn preview_cell(&self, state: &AppState, track: usize, row: usize) {
+        let Some(&cell) = state.active_pattern().get_event(row, track) else {
+            return;
+        };
+        let NoteKind::On(pitch) = cell.kind else {
+            return;
+        };
+        let velocity = cell.velocity.map_or(VELOCITY_MAX, |v| v.min(VELOCITY_MAX));
+        if velocity == 0 {
+            state.engine.release_note(track);
+            return;
+        }
+        let instrument = cell.instrument_id.unwrap_or(state.active_instrument);
+        state.play_note(track, instrument, pitch, velocity);
     }
     fn enter_command(&mut self, state: &mut AppState, digits: [char; 3]) -> bool {
         let Ok(command) = digits.iter().collect::<String>().parse::<Command>() else {

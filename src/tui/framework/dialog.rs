@@ -116,7 +116,7 @@ pub struct Dialog {
 
 impl Dialog {
     pub fn new(title: impl Into<String>, components: Vec<Box<dyn DialogComponent>>) -> Self {
-        let mut dialog = Self {
+        let dialog = Self {
             title: title.into(),
             width: 50,
             level: PopupLevel::Info,

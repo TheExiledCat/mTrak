@@ -5,17 +5,15 @@ use num::FromPrimitive;
 
 pub const MIDI_CHANNEL_MAX: u8 = 0xF;
 pub const PULSES_PER_QUARTER: u32 = 24;
-pub const LINES_PER_QUARTER: u32 = 4;
-pub const PULSES_PER_LINE: u32 = PULSES_PER_QUARTER / LINES_PER_QUARTER;
 pub const VELOCITY_MAX: u8 = 0x7F;
 pub const VOLUME_MAX: u8 = 0x80;
 pub const DEFAULT_BPM: u8 = 125;
+pub const DEFAULT_SPEED: u8 = 6;
+/// The highest speed, as in FastTracker 2; `F` values above it set the BPM instead.
+pub const MAX_SPEED: u8 = 0x1F;
 
 pub fn pulse_duration(bpm: u8) -> Duration {
     return Duration::from_secs_f64(60.0 / (bpm.max(1) as f64 * PULSES_PER_QUARTER as f64));
-}
-pub fn tick_duration(pulse: Duration, ticks_per_line: u8) -> Duration {
-    return pulse * PULSES_PER_LINE / ticks_per_line.max(1) as u32;
 }
 #[derive(Clone)]
 pub enum MidiEvent {
@@ -141,16 +139,11 @@ mod tests {
     #[test]
     fn durations_follow_bpm() {
         assert_eq!(pulse_duration(125), Duration::from_millis(20));
-        assert_eq!(
-            tick_duration(pulse_duration(125), 6),
-            Duration::from_millis(20)
-        );
     }
 
     #[test]
-    fn zero_bpm_and_ticks_do_not_divide_by_zero() {
+    fn zero_bpm_does_not_divide_by_zero() {
         assert!(pulse_duration(0) > Duration::ZERO);
-        assert!(tick_duration(pulse_duration(0), 0) > Duration::ZERO);
     }
 
     #[test]
