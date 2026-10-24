@@ -814,10 +814,6 @@ impl TimeLineView {
         };
     }
     fn clear(&mut self, state: &mut AppState, option: ClearOption, target: ClearTarget) {
-        if state.engine.status().play_mode() != PlayMode::Paused {
-            state.notify("CANT CLR");
-            return;
-        }
         let pattern = state.active_pattern();
         let marked_block = self.marked_block(state);
         let block = match option {

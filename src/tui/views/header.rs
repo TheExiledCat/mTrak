@@ -19,13 +19,12 @@ use crate::{
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, midi_to_string},
         pattern::{ClearOption, ClearTarget},
     },
-    engine::engine::PlayMode,
     error::Result,
     tui::{
         app::AppState,
         framework::{
             core_extensions::Boxed,
-            dialog::{Checkbox, Dialog, Select, TextPrompt},
+            dialog::{Checkbox, Dialog, NumberBox, Select, TextPrompt},
             keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::{MtrakWidget, clicked_in},
         },
@@ -528,10 +527,6 @@ impl PatternInfo {
     }
 
     fn shrink_pattern(&self, state: &mut AppState) {
-        if state.engine.status().play_mode() != PlayMode::Paused {
-            state.notify("CANT SRNK");
-            return;
-        }
         if !state.edit_pattern(|_, pattern| pattern.shrink()) {
             state.notify("PTN TOO SHORT");
         }
@@ -896,26 +891,26 @@ fn open_clear_dialog(state: &mut AppState) {
 }
 fn open_instrument_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
-    let name = &state.project().instruments[instrument as usize].name;
-    let volume = state.project().instruments[instrument as usize].volume;
-    let pitch_wheel_range = state.project().instruments[instrument as usize].pitch_wheel_range;
-    let default_cc = state.project().instruments[instrument as usize].default_cc;
-    let transpose = state.project().instruments[instrument as usize].transpose;
+    let settings = &state.project().instruments[instrument as usize];
     let dialog = Dialog::new(
         format!("Instrument {:1X}", instrument),
         vec![
-            TextPrompt::new("name", "Name").initial(name).boxed(),
-            TextPrompt::new("volume", "Volume")
-                .initial(format!("{:02X}", volume))
+            TextPrompt::new("name", "Name")
+                .initial(&settings.name)
                 .boxed(),
-            TextPrompt::new("pitch_wheel_range", "Bend range (semitones)")
-                .initial(pitch_wheel_range.to_string())
+            NumberBox::new("volume", "Volume", 2)
+                .value(settings.volume as i32)
                 .boxed(),
-            TextPrompt::new("default_cc", "Default CC")
-                .initial(format!("{:02X}", default_cc))
+            NumberBox::new("pitch_wheel_range", "Bend range (semitones)", 2)
+                .value(settings.pitch_wheel_range as i32)
                 .boxed(),
-            TextPrompt::new("transpose", "Transpose (semitones)")
-                .initial(transpose.to_string())
+            NumberBox::new("default_cc", "Default CC", 2)
+                .range(0, 0x7F)
+                .value(settings.default_cc as i32)
+                .boxed(),
+            NumberBox::new("transpose", "Transpose (semitones)", 2)
+                .range(i8::MIN as i32, i8::MAX as i32)
+                .value(settings.transpose as i32)
                 .boxed(),
         ],
     )
@@ -924,47 +919,42 @@ fn open_instrument_dialog(state: &mut AppState) {
         if let Some(name) = result.text("name") {
             state.project_mut().instruments[instrument as usize].name = name.into();
         }
-        if let Some(vol) = result.text("volume") {
-            let vol = u8::from_str_radix(vol, 16).unwrap_or(volume);
-            state.set_global_volume(instrument, vol);
+        if let Some(volume) = result.number("volume") {
+            state.set_global_volume(instrument, volume as u8);
         }
-        if let Some(range) = result.text("pitch_wheel_range") {
-            state.project_mut().instruments[instrument as usize].pitch_wheel_range =
-                range.parse().unwrap_or(pitch_wheel_range);
+        if let Some(range) = result.number("pitch_wheel_range") {
+            state.project_mut().instruments[instrument as usize].pitch_wheel_range = range as u8;
         }
-        if let Some(control) = result.text("default_cc") {
-            let control = u8::from_str_radix(control, 16).map_or(default_cc, |c| c.min(0x7F));
-            state.set_default_cc(instrument, control);
+        if let Some(control) = result.number("default_cc") {
+            state.set_default_cc(instrument, control as u8);
         }
-        if let Some(text) = result.text("transpose") {
-            state.set_instrument_transpose(instrument, text.trim().parse().unwrap_or(transpose));
+        if let Some(transpose) = result.number("transpose") {
+            state.set_instrument_transpose(instrument, transpose as i8);
         }
         return Ok(());
     });
     state.open_dialog(dialog);
 }
 fn open_global_dialog(state: &mut AppState) {
-    let velocity = state.project().global_velocity;
-    let transpose = state.project().transpose;
     let dialog = Dialog::new(
         "Global",
         vec![
-            TextPrompt::new("velocity", "Velocity")
-                .initial(format!("{:02X}", velocity))
+            NumberBox::new("velocity", "Velocity", 2)
+                .value(state.project().global_velocity as i32)
                 .boxed(),
-            TextPrompt::new("transpose", "Transpose (semitones)")
-                .initial(transpose.to_string())
+            NumberBox::new("transpose", "Transpose (semitones)", 2)
+                .range(i8::MIN as i32, i8::MAX as i32)
+                .value(state.project().transpose as i32)
                 .boxed(),
         ],
     )
     .focus_first()
     .on_submit(move |state, result| {
-        if let Some(text) = result.text("velocity") {
-            let velocity = u8::from_str_radix(text, 16).unwrap_or(velocity);
-            state.set_global_velocity(velocity);
+        if let Some(velocity) = result.number("velocity") {
+            state.set_global_velocity(velocity as u8);
         }
-        if let Some(text) = result.text("transpose") {
-            state.set_transpose(text.trim().parse().unwrap_or(transpose));
+        if let Some(transpose) = result.number("transpose") {
+            state.set_transpose(transpose as i8);
         }
         return Ok(());
     });
@@ -1051,10 +1041,15 @@ impl MtrakWidget for InstrumentList {
             .render(layout[1], buf);
 
         Paragraph::new(format!(
-            "OCT: {}, GLB VEL: {:02X}, GLB TRSP: {:+03}",
+            "OCT: {}, GLB VEL: {:02X}, GLB TRSP: {}{:02X}",
             state.current_octave,
             state.project().global_velocity,
-            state.project().transpose
+            if state.project().transpose < 0 {
+                "-"
+            } else {
+                "+"
+            },
+            state.project().transpose.unsigned_abs()
         ))
         .render(layout[2], buf);
     }

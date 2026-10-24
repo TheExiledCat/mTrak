@@ -19,6 +19,7 @@ use crate::{
             widget::MtrakWidget,
             widgets::footer::Footer,
         },
+        glyphs,
     },
 };
 
@@ -28,6 +29,7 @@ pub enum DialogValue {
     Text(String),
     Bool(bool),
     Choice(usize),
+    Number(i32),
 }
 
 /// The values of every input component when the dialog was submitted, keyed by component id.
@@ -50,6 +52,13 @@ impl DialogResult {
     pub fn bool(&self, id: &str) -> Option<bool> {
         return match self.values.get(id) {
             Some(DialogValue::Bool(b)) => Some(*b),
+            _ => None,
+        };
+    }
+
+    pub fn number(&self, id: &str) -> Option<i32> {
+        return match self.values.get(id) {
+            Some(DialogValue::Number(n)) => Some(*n),
             _ => None,
         };
     }
@@ -201,11 +210,13 @@ impl Dialog {
         let dialog = Dialog::new("", Vec::new());
         let select = Select::new("", Vec::<String>::new());
         let checkbox = Checkbox::new("", "");
+        let number = NumberBox::new("", "", 2);
         sections.push(
             dialog
                 .help_section("Dialogs")
                 .entries(select.keys.help_entries(Select::describe))
                 .entries(checkbox.keys.help_entries(Checkbox::describe))
+                .entries(number.keys.help_entries(NumberBox::describe))
                 .entry("Bksp", "Delete the last character of a text field"),
         );
     }
@@ -465,6 +476,183 @@ impl DialogComponent for TextPrompt {
     }
     fn value(&self) -> Option<(&'static str, DialogValue)> {
         return Some((self.id, DialogValue::Text(self.text.clone())));
+    }
+}
+
+/// A hex number input. Typing fills in up to `digits` hex digits, dropping the first one once
+/// it is full, and Up and Down step the value within its range. A range below 0 also takes a
+/// `-` to flip the sign.
+pub struct NumberBox {
+    id: &'static str,
+    label: String,
+    digits: usize,
+    min: i32,
+    max: i32,
+    negative: bool,
+    text: String,
+    focused: bool,
+    keys: Keymap<NumberBoxAction>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum NumberBoxAction {
+    Increment,
+    Decrement,
+}
+
+impl NumberBox {
+    pub fn new(id: &'static str, label: impl Into<String>, digits: usize) -> Self {
+        let digits = digits.clamp(1, 7);
+        let mut number = Self {
+            id,
+            label: label.into(),
+            digits,
+            min: 0,
+            max: (1 << (4 * digits)) - 1,
+            negative: false,
+            text: String::new(),
+            focused: false,
+            keys: Keymap::new()
+                .bind(Key::plain(KeyCode::Up), NumberBoxAction::Increment, "+/-")
+                .bind(Key::plain(KeyCode::Down), NumberBoxAction::Decrement, "+/-"),
+        };
+        number.set(0);
+        return number;
+    }
+
+    pub fn range(mut self, min: i32, max: i32) -> Self {
+        self.min = min;
+        self.max = max.max(min);
+        let value = self.number();
+        self.set(value);
+        return self;
+    }
+
+    pub fn value(mut self, value: i32) -> Self {
+        self.set(value);
+        return self;
+    }
+
+    /// The typed value, kept within the range.
+    fn number(&self) -> i32 {
+        let magnitude = i32::from_str_radix(&self.text, 16).unwrap_or(0);
+        let value = if self.negative { -magnitude } else { magnitude };
+        return value.clamp(self.min, self.max);
+    }
+
+    fn set(&mut self, value: i32) {
+        let value = value.clamp(self.min, self.max);
+        self.negative = value < 0;
+        self.text = format!("{:0width$X}", value.unsigned_abs(), width = self.digits);
+    }
+
+    /// Arrows showing which ways Up and Down can still move the value.
+    fn arrows(&self) -> &'static str {
+        let value = self.number();
+        return match (value < self.max, value > self.min) {
+            (true, true) => glyphs::pick("\u{2195}", "^v"),
+            (true, false) => glyphs::pick("\u{25B2}", "^ "),
+            (false, true) => glyphs::pick("\u{25BC}", " v"),
+            (false, false) => glyphs::pick(" ", "  "),
+        };
+    }
+
+    /// Applies a typed key, returning whether it was one the box takes.
+    fn type_key(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Char(c) if c.is_ascii_hexdigit() => {
+                if self.text.len() >= self.digits {
+                    self.text.remove(0);
+                }
+                self.text.push(c.to_ascii_uppercase());
+            }
+            KeyCode::Char('-') if self.min < 0 => self.negative = !self.negative,
+            KeyCode::Backspace => {
+                self.text.pop();
+            }
+            _ => return false,
+        }
+        return true;
+    }
+}
+
+impl KeyActions for NumberBox {
+    type Action = NumberBoxAction;
+
+    fn keymap(&self) -> &Keymap<NumberBoxAction> {
+        return &self.keys;
+    }
+
+    fn perform(&mut self, action: NumberBoxAction, _state: &mut AppState) -> Result<()> {
+        let value = self.number();
+        self.set(match action {
+            NumberBoxAction::Increment => value.saturating_add(1),
+            NumberBoxAction::Decrement => value.saturating_sub(1),
+        });
+        return Ok(());
+    }
+
+    fn describe(action: NumberBoxAction) -> &'static str {
+        return match action {
+            NumberBoxAction::Increment => "Increase a number field",
+            NumberBoxAction::Decrement => "Decrease a number field",
+        };
+    }
+}
+
+impl MtrakWidget for NumberBox {
+    fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
+        if self.dispatch(state, event) {
+            return true;
+        }
+        let Event::Key(key) = event else {
+            return false;
+        };
+        if key.kind == KeyEventKind::Release
+            || key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return false;
+        }
+        return self.type_key(key.code);
+    }
+
+    fn key_hints(&self, _state: &AppState, hints: &mut Vec<KeyHint>) {
+        self.keys.hints(hints);
+    }
+
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
+        let mut spans = label_spans(state, &self.label, self.focused).to_vec();
+        let sign = match (self.negative, self.min < 0) {
+            (true, _) => "-",
+            (false, true) => "+",
+            (false, false) => "",
+        };
+        let style = if self.focused {
+            state.theme.selection
+        } else {
+            Style::new()
+        };
+        spans.push(Span::styled(format!("{sign}{}", self.text), style));
+        spans.push(Span::raw(format!(" {}", self.arrows())));
+        Line::from(spans).render(area, buf);
+    }
+}
+
+impl DialogComponent for NumberBox {
+    fn focusable(&self) -> bool {
+        return true;
+    }
+    fn set_focused(&mut self, focused: bool) {
+        if !focused {
+            let value = self.number();
+            self.set(value);
+        }
+        self.focused = focused;
+    }
+    fn value(&self) -> Option<(&'static str, DialogValue)> {
+        return Some((self.id, DialogValue::Number(self.number())));
     }
 }
 
@@ -822,5 +1010,66 @@ mod tests {
     fn focus_first_starts_on_the_first_field() {
         let dialog = Dialog::text_field("", "", "name");
         assert_eq!(focused(&dialog), Some(0));
+    }
+
+    fn number_box(digits: usize) -> NumberBox {
+        let mut number = NumberBox::new("n", "", digits);
+        number.focused = true;
+        return number;
+    }
+
+    fn type_keys(number: &mut NumberBox, keys: &str) {
+        for c in keys.chars() {
+            number.type_key(KeyCode::Char(c));
+        }
+    }
+
+    #[test]
+    fn number_box_typing_shifts_in_hex_digits() {
+        let mut number = number_box(2).value(0xFF);
+        type_keys(&mut number, "4a");
+        assert_eq!(number.number(), 0x4A);
+        type_keys(&mut number, "g7");
+        assert_eq!(number.number(), 0xA7);
+    }
+
+    #[test]
+    fn number_box_keeps_the_value_in_range() {
+        let number = number_box(2).range(0, 0x7F).value(0xFF);
+        assert_eq!(number.number(), 0x7F);
+        let mut number = number_box(2).range(-0x80, 0x7F).value(-3);
+        assert_eq!(number.text, "03");
+        type_keys(&mut number, "-");
+        assert_eq!(number.number(), 3);
+        type_keys(&mut number, "-9F");
+        assert_eq!(number.number(), -0x80);
+    }
+
+    #[test]
+    fn number_box_steps_within_its_range() {
+        let mut number = number_box(2).range(-2, 2).value(1);
+        number.set(number.number() + 1);
+        number.set(number.number() + 1);
+        assert_eq!(number.number(), 2);
+        number.set(-5);
+        assert_eq!(number.number(), -2);
+        assert_eq!(number.text, "02");
+        assert!(number.negative);
+    }
+
+    #[test]
+    fn number_box_arrows_show_which_ways_it_can_move() {
+        let number = number_box(2).range(0, 2);
+        assert_eq!(number.clone_with(0).arrows(), "\u{25B2}");
+        assert_eq!(number.clone_with(1).arrows(), "\u{2195}");
+        assert_eq!(number.clone_with(2).arrows(), "\u{25BC}");
+    }
+
+    impl NumberBox {
+        fn clone_with(&self, value: i32) -> NumberBox {
+            return NumberBox::new(self.id, "", self.digits)
+                .range(self.min, self.max)
+                .value(value);
+        }
     }
 }
