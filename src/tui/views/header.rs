@@ -401,7 +401,7 @@ impl KeyActions for SequenceList {
             }
             Delete => {
                 let remaining = state.delete_sequence(state.active_sequence_index);
-                state.select_sequence(state.active_sequence_index.min(remaining - 1))
+                state.show_sequence(state.active_sequence_index.min(remaining - 1))
             }
             IncRepeats => state.change_sequence_repeats(state.active_sequence_index, true),
             DecRepeats => state.change_sequence_repeats(state.active_sequence_index, false),
@@ -821,25 +821,11 @@ fn open_config_dialog(state: &mut AppState) {
         ],
     )
     .on_submit(|state, result| {
-        if let Some(clock_in) = result.choice("clock") {
-            state.set_midi_sync(clock_in)?;
-        }
         if let Some(midi_clock) = result.bool("midi_clock") {
             state.set_midi_clock(midi_clock);
         }
         if let Some(velocity) = result.bool("velocity") {
             state.set_midi_velocity_record(velocity);
-        }
-        if let Some(input) = result.choice("input") {
-            let input = if input == 0 {
-                None
-            } else {
-                state
-                    .midi_in_client
-                    .as_ref()
-                    .and_then(|client| client.ports().get(input - 1).cloned())
-            };
-            state.set_midi_input(input)?;
         }
         if let Some(output) = result.choice("output") {
             let output = if output == 0 {
@@ -852,8 +838,17 @@ fn open_config_dialog(state: &mut AppState) {
             };
             state.set_midi_output(output);
         }
-
-        return Ok(());
+        // inputs go last and both get set, so a port that fails to open doesn't drop the
+        // other changes
+        let clock = result
+            .choice("clock")
+            .map(|clock| state.set_midi_sync(clock));
+        let input = result.choice("input").map(|input| {
+            let port = state.input_port_for_choice(input);
+            state.set_midi_input(port)
+        });
+        clock.unwrap_or(Ok(()))?;
+        return input.unwrap_or(Ok(()));
     });
     state.open_dialog(dialog);
 }

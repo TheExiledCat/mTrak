@@ -46,6 +46,8 @@ pub enum NoteAction {
     /// Play it, then release the track's note this many ticks into the row. 0 releases it
     /// straight away without playing the cell's note.
     Cut(u8),
+    /// Play it, then again every this many ticks until the row ends.
+    RetrigNote(u8),
 }
 
 /// The velocity of a retrig's next hit, from the previous one. Follows FT2's multi retrig
@@ -70,6 +72,7 @@ fn cc_value(value: u8) -> u8 {
 }
 
 const MIDI_CHANNEL_COUNT: usize = MIDI_CHANNEL_MAX as usize + 1;
+const MOD_WHEEL_CC: u8 = 1;
 const BEND_CENTER: u16 = 8192;
 
 /// Maps a 00-FF command value to a 14 bit pitch bend: 00 is full down, 80 is no bend and
@@ -246,6 +249,14 @@ impl MidiCommandHandler {
                 control,
                 cc_value(value),
             ))),
+            MidiCommand::ModWheel => {
+                state.active_control = Some(MOD_WHEEL_CC);
+                events.push(MidiEvent::Message(ControlChange(
+                    channel,
+                    MOD_WHEEL_CC,
+                    cc_value(value),
+                )));
+            }
             MidiCommand::CCSlide | MidiCommand::CCVelocitySlide | MidiCommand::VelocitySlide => {
                 let outputs = GlideOutputs {
                     cc: command.slides_cc().then_some(control),
@@ -388,6 +399,7 @@ impl EffectCommandHandler {
             Effect::LegatoEarly(_) => NoteAction::Legato(0),
             Effect::LegatoHold(overlap) => NoteAction::Legato(overlap),
             Effect::Cut(tick) => NoteAction::Cut(tick),
+            Effect::RetrigNote(every) => NoteAction::RetrigNote(every),
             Effect::Unused => NoteAction::Play,
         };
     }
@@ -438,6 +450,20 @@ mod tests {
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 100, 2)),
             vec![Message::ControlChange(Channel::Ch3, 74, 50)]
+        );
+    }
+
+    #[test]
+    fn mod_wheel_sends_cc_1_and_selects_it() {
+        let mut handler = MidiCommandHandler::new();
+        handler.set_default_control(0, 74);
+        assert_eq!(
+            handle(&mut handler, 0, cc_note(MidiCommand::ModWheel, 0x80, 0)),
+            vec![Message::ControlChange(Channel::Ch1, 1, 64)]
+        );
+        assert_eq!(
+            handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 0x40, 0)),
+            vec![Message::ControlChange(Channel::Ch1, 1, 32)]
         );
     }
 
@@ -581,11 +607,11 @@ mod tests {
     fn late_delay_holds_the_note_back_unless_it_is_10() {
         let mut handler = EffectCommandHandler::new();
         assert_eq!(
-            handler.apply(EffectCommand::Delay.decode(0x10)),
+            handler.apply(EffectCommand::Extended.decode(0xD0)),
             NoteAction::Play
         );
         assert_eq!(
-            handler.apply(EffectCommand::Delay.decode(0x13)),
+            handler.apply(EffectCommand::Extended.decode(0xD3)),
             NoteAction::Delay(3)
         );
     }

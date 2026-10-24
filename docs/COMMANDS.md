@@ -26,7 +26,7 @@ synth just before the note does.
 
 Command values go from `00` to `FF`, but MIDI controller values, velocities and aftertouch
 only go from 0 to 127, so command values are halved when used (pitch bend is the exception,
-see `W`):
+see `P`):
 
 | Value | Sent as |
 |-------|---------|
@@ -42,104 +42,119 @@ velocity 64, and `7F` and `80` both play at 127.
 
 ### `S` Set CC
 
-Selects which controller (CC number) the track's `C`, `G` and `H` commands change. The value
+Selects which controller (CC number) the track's `M`, `V` and `J` commands change. The value
 is the CC number in hex, e.g. `S4A` selects CC 74. Sends nothing by itself.
 
 Until a track has an `S`, its CC commands change the instrument's default CC, set in the
 instrument dialog (`Default CC`, in hex like `S`). It is `00` (CC 0) unless you change it.
 
 ```
----|1|--|C80   instrument 1's default CC = 64, no S needed
+---|1|--|M80   instrument 1's default CC = 64, no S needed
 ```
 
-### `C` Change CC
+### `M` Change CC
 
 Sends the track's selected CC with the given value.
 
 ```
 ---|1|--|S4A   select CC 74 (filter cutoff on many synths)
----|1|--|C80   send CC 74 = 64
+---|1|--|M80   send CC 74 = 64
 ```
 
-### `G` CC slide
+### `W` Mod wheel
+
+Sends the mod wheel (CC 1) with the given value and selects it, like an `S01` followed by an
+`M` on the same row. The track's later `M`, `V` and `J` commands then change the mod wheel
+too, so a `W` followed by a `V` glides it.
+
+```
+---|1|--|W00   mod wheel = 0, and selected
+---|1|--|V00   slide the mod wheel from 0 ...
+---|1|--|000
+---|1|--|MFF   ... to 127 here
+```
+
+- A running slide can land on a `W`, like on an `M`.
+
+### `V` CC slide
 
 Sends the given value, then slides the selected CC smoothly to the target value
 (see [Slides](#slides)).
 
 ```
 ---|1|--|S02   select CC 2
----|1|--|G00   start at 0 ...
+---|1|--|V00   start at 0 ...
 ---|1|--|000
----|1|--|CFF   ... arrive at 127 here
+---|1|--|MFF   ... arrive at 127 here
 ```
 
-### `H` CC and velocity slide
+### `J` CC and velocity slide
 
-A `G` and a `V` in one: the same slide moves the selected CC and sets the velocity of the
+A `V` and an `A` in one: the same slide moves the selected CC and sets the velocity of the
 notes played during it.
 
 ```
 ---|1|--|S07   select CC 7 (volume)
-C-4|1|--|H40   CC 7 = 32, note at velocity 32
+C-4|1|--|J40   CC 7 = 32, note at velocity 32
 C-4|1|--|000   CC 7 still rising, note at velocity 79
----|1|--|CFF   CC 7 arrives at 127
+---|1|--|MFF   CC 7 arrives at 127
 ```
 
-### `V` Velocity slide
+### `A` Velocity slide
 
 Slides the velocity of the track's notes, like typing a ramp of values into the volume
 column. It sends nothing by itself; it only changes notes that play while it runs.
 
 ```
-C-4|1|--|V20   velocity 16
+C-4|1|--|A20   velocity 16
 C-4|1|--|000   velocity 32
 C-4|1|--|000   velocity 48
 C-4|1|--|000   velocity 64
-C-4|1|--|EA0   velocity 80, slide ends
+C-4|1|--|NA0   velocity 80, slide ends
 C-4|1|--|000   velocity 127 (volume column empty)
 ```
 
 - A note with its own volume value plays at that volume; the slide carries on underneath.
 - After the slide reaches its target row, notes use their volume column again (full velocity
   when it's empty).
-- A velocity of 0 (`V00` or `V01`) makes notes silent, like volume `00`.
-- End a velocity slide with `E`, not `C`: a `C` would also send a CC, which on a track
+- A velocity of 0 (`A00` or `A01`) makes notes silent, like volume `00`.
+- End a velocity slide with `N`, not `M`: an `M` would also send a CC, which on a track
   without an `S` is the instrument's default CC (CC 0, bank select on many synths, unless
   you changed it).
 
-### `E` End slide
+### `N` End slide
 
 Lands the track's running slide on the given value and stops it there, without starting a new
-one. The value goes wherever the slide was going: its CC, the velocity of the note on the `E`
-row, or both. Without a running slide, `E` does nothing.
+one. The value goes wherever the slide was going: its CC, the velocity of the note on the `N`
+row, or both. Without a running slide, `N` does nothing.
 
 ```
 ---|1|--|S02   select CC 2
----|1|--|G00   start at 0 ...
+---|1|--|V00   start at 0 ...
 ---|1|--|000
----|1|--|EFF   ... arrive at 127 and stop
----|1|--|G40   a new, separate slide
+---|1|--|NFF   ... arrive at 127 and stop
+---|1|--|V40   a new, separate slide
 ```
 
-### `A` Aftertouch
+### `T` Aftertouch
 
-Sends channel aftertouch (pressure) with the given value, scaled like a CC: `A00` is no
-pressure, `AFF` is full pressure (127).
+Sends channel aftertouch (pressure) with the given value, scaled like a CC: `T00` is no
+pressure, `TFF` is full pressure (127).
 
-### `W` Pitch bend
+### `P` Pitch bend
 
 Bends the pitch of the whole channel. `80` is no bend, `00` is fully down and `FF` is fully
 up. How far "fully" is depends on the bend range set on your synth.
 
 ```
-C-4|1|--|WFF   note starts fully bent up
----|1|--|W80   back to normal pitch
+C-4|1|--|PFF   note starts fully bent up
+---|1|--|P80   back to normal pitch
 ```
 
-- The bend stays until the next `W`, so remember to bring it back to `W80`.
+- The bend stays until the next `P`, so remember to bring it back to `P80`.
 - Pitch bend affects every note on the channel, including notes from other tracks playing
   the same instrument.
-- `W` has 256 steps, so on large bend ranges you may hear the steps between values.
+- `P` has 256 steps, so on large bend ranges you may hear the steps between values.
 
 ## Effect commands
 
@@ -186,31 +201,53 @@ C-4|1|--|Y80   plays about every other time round
 
 - A note off with `Y` is also only sent when the roll succeeds.
 
-### `D` Note delay
+### `E` Extended
 
-Moves the cell's note earlier or later than its row:
+FastTracker 2's `E` commands: the first digit picks the command, the second is its value.
 
 | Value     | Does                                                                  |
 |-----------|-----------------------------------------------------------------------|
-| `00`-`0F` | Starts the note that many ticks before its row, during the row before |
-| `10`-`1F` | Starts the note that many ticks into its row                          |
+| `80`-`8F` | Early delay: starts the note that many ticks before its row           |
+| `90`-`9F` | Retrig note: replays the note every that many ticks in its row        |
+| `C0`-`CF` | Note cut: releases the track's note on that tick of the row           |
+| `D0`-`DF` | Note delay: starts the note that many ticks into its row              |
 
 ```
-C-4|1|--|D13   at speed 6, the note starts halfway through its row
-D-4|1|--|D02   at speed 6, the note starts on tick 4 of the row above
+C-4|1|--|ED3   at speed 6, the note starts halfway through its row
+D-4|1|--|E82   at speed 6, the note starts on tick 4 of the row above
+C-4|1|--|E92   at speed 6, hits on ticks 0, 2 and 4
+---|1|--|EC3   the note playing is released on tick 3
 ```
+
+**Note delay (`ED`) and early delay (`E8`):**
 
 - The track's previous note keeps sounding until the moved one starts.
 - A note off can be moved the same way.
-- `D00` and `D10` play the note normally. A late delay as long as the row or longer (e.g.
-  `D16` at speed 6) means the note doesn't play.
-- Early notes work like early `3` notes: the earliest start is tick 1 of the row before, they
+- `ED0` and `E80` play the note normally. A delay as long as the row or longer (e.g. `ED6`
+  at speed 6) means the note doesn't play.
+- `E8` isn't in FastTracker 2, which has no early delay; it uses an `E` slot FT2 leaves free.
+- Early notes work like early `L` notes: the earliest start is tick 1 of the row before, they
   follow the play order across patterns, and they use the mutes of their own pattern. When
   one starts, anything still planned on that track in the row before (more retrig hits, a note
-  cut, a late `D` that hasn't started yet) is dropped.
+  cut, an `ED` that hasn't started yet) is dropped.
 - The note's velocity is worked out when it starts, so a running velocity slide gives it the
   velocity of that tick.
-- `20` and up do nothing yet; the note plays normally.
+
+**Retrig note (`E9`):**
+
+- Like FT2's `E9x`: hits on ticks `x`, `2x` and so on within the row, at the same velocity,
+  starting over every row. For velocity changes and intervals that carry across rows, use
+  `R`.
+- Without a note it repeats the track's last note; `E90` without a note replays it straight
+  away.
+
+**Note cut (`EC`):**
+
+- `EC0` releases the note straight away and the cell's own note doesn't play. On a cell
+  without a note, a cut releases the note that's playing. A cut also stops a previous note
+  still sounding from an `L1y`. A cut past the end of the row doesn't happen.
+
+Other `E` values do nothing yet; the note plays normally.
 
 ### `R` Retrig
 
@@ -251,25 +288,24 @@ It works like FT2's:
 - With `x` at `0` or `8`, a running velocity slide still sets the velocity of each hit.
 - Starting or stopping playback forgets the counts, the last notes and the memory.
 
-### `3` Legato
+### `L` Legato
 
 Glides into the cell's note from the track's previous note. The new note starts before the
 old one is released, which makes a synth in mono or legato mode glide between them instead
 of starting the note fresh. The glide itself comes from the synth: turn on its portamento
-(on many synths CC 65 switches it on, `S41` then `C7F`, and CC 5 sets the glide time).
+(on many synths CC 65 switches it on, `S41` then `M7F`, and CC 5 sets the glide time).
 
 | Value     | Does                                                                                 |
 |-----------|--------------------------------------------------------------------------------------|
 | `00`      | Glides in on its own row                                                             |
 | `01`-`0F` | Starts the note that many ticks before its row, during the row before                |
 | `10`-`1F` | Starts the note on its row and keeps the previous note sounding that many more ticks |
-| `30`-`3F` | Note cut: releases the track's note on that tick of the row                          |
 
 ```
 C-4|1|--|000
-D-4|1|--|302   at speed 6, D-4 starts on tick 4 of the row above and glides from C-4
-E-4|1|--|312   E-4 starts on its row, D-4 keeps sounding 2 more ticks
----|1|--|333   E-4 is released on tick 3
+D-4|1|--|L02   at speed 6, D-4 starts on tick 4 of the row above and glides from C-4
+E-4|1|--|L12   E-4 starts on its row, D-4 keeps sounding 2 more ticks
+---|1|--|EC3   E-4 is released on tick 3
 ```
 
 - The earliest an early note can start is tick 1 of the row before, since tick 0 is that
@@ -277,12 +313,11 @@ E-4|1|--|312   E-4 starts on its row, D-4 keeps sounding 2 more ticks
 - Early notes follow the play order, so they work across patterns and when a pattern loops back
   to its top.
 - When an early note starts, anything still planned on that track in the row before (more
-  retrig hits, a note cut, a late `D` that hasn't started yet) is dropped, as with an early `D`.
-- `330` releases the note straight away and the cell's own note doesn't play. On a cell
-  without a note, a cut releases the note that's playing. A cut also stops a previous note
-  still sounding from a `31y`. A cut past the end of the row
-  doesn't happen.
-- `20`-`2F` and `40` up do nothing yet; the note plays normally.
+  retrig hits, a note cut, an `ED` that hasn't started yet) is dropped, as with an `E8`.
+- To cut the note, use `EC` (see [`E` Extended](#e-extended)).
+- FastTracker 2 has no legato command; its `L` sets a sample's envelope position, which has
+  no meaning for MIDI, so mTrak uses the letter for legato.
+- `20` and up do nothing yet; the note plays normally.
 
 ## Slides
 
@@ -290,12 +325,12 @@ A slide moves from its own value to a target, updating once per tick. With a spe
 an `F` below `20`) of 6 that is 6 updates per row. Since ticks always last the same time at a
 given BPM, a slide over the same amount of time is equally smooth at any speed.
 
-- **Target:** the track's next `C`, `E`, or command that starts a slide. The slide reaches
+- **Target:** the track's next `M`, `W`, `N`, or command that starts a slide. The slide reaches
   that value on that row.
 - **Chaining:** a command that starts a slide also counts as the target of a running one, so
   the running slide lands there and the new one carries straight on. That lets you draw a
-  shape out of several points: `G00` → `G80` → `C00` slides up to 64 and back down to 0.
-  To land a slide and stop, use `E`.
+  shape out of several points: `V00` → `V80` → `M00` slides up to 64 and back down to 0.
+  To land a slide and stop, use `N`.
 - **Across patterns:** a slide follows the play order, so its target can be in the next
   pattern of the song, or back at the top of the pattern when looping it.
 - **No target:** if there is no later target, the slide only uses its own value on its own row.
@@ -311,13 +346,13 @@ would have been had you never muted it.
 Commands on rows with volume `00` still run, even though the note doesn't play.
 
 Delayed notes and retrigs check the mutes when they play, so muting a channel mid-row silences
-them too. Early `D` and `3` notes use the mutes of the pattern they belong to, even when they
-start during the pattern before. Muting also cuts notes still sounding from a `31y`.
+them too. Early `E8` and `L` notes use the mutes of the pattern they belong to, even when they
+start during the pattern before. Muting also cuts notes still sounding from an `L1y`.
 
 ## Playback
 
 Starting or stopping playback resets all command state: selected CCs go back to each
 instrument's default CC, running slides end, delayed notes, retrigs and cuts that haven't
-happened yet are dropped, notes still sounding from a `31y` are cut, and the tempo goes back
+happened yet are dropped, notes still sounding from an `L1y` are cut, and the tempo goes back
 to the song's BPM and speed. Channels that were sent a pitch bend or aftertouch get them
 reset to no bend and no pressure, even when muted, so your synth is never left out of tune.

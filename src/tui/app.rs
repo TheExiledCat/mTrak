@@ -582,16 +582,23 @@ impl AppState {
             _ => {}
         }
     }
+    fn input_port_by_name(&self, name: &str) -> Option<MidiInputPort> {
+        let client = self.midi_in_client.as_ref()?;
+        return client
+            .ports()
+            .into_iter()
+            .find(|p| client.port_name(p).is_ok_and(|n| n == name));
+    }
+    /// The input port for a choice in a port list that starts with a "none" entry.
+    pub fn input_port_for_choice(&self, choice: usize) -> Option<MidiInputPort> {
+        let index = choice.checked_sub(1)?;
+        return self.midi_in_client.as_ref()?.ports().get(index).cloned();
+    }
     fn restore_midi_input(&mut self) {
         let Some(name) = self.project.midi_input.clone() else {
             return;
         };
-        let port = self.midi_in_client.as_ref().and_then(|client| {
-            client
-                .ports()
-                .into_iter()
-                .find(|p| client.port_name(p).is_ok_and(|n| n == name))
-        });
+        let port = self.input_port_by_name(&name);
         if port.is_none() {
             self.project.midi_input = None;
         }
@@ -603,12 +610,7 @@ impl AppState {
         let Some(name) = self.project.clock_input.clone() else {
             return;
         };
-        let port = self.midi_in_client.as_ref().and_then(|client| {
-            client
-                .ports()
-                .into_iter()
-                .find(|p| client.port_name(p).is_ok_and(|n| n == name))
-        });
+        let port = self.input_port_by_name(&name);
         if port.is_none() {
             self.project.clock_input = None;
         }
@@ -641,6 +643,9 @@ impl AppState {
         {
             self.project_mut().midi_input = name;
         }
+        if port == self.active_in_port {
+            return Ok(());
+        }
         self.active_in_port = port;
         return self.reconnect_inputs();
     }
@@ -658,6 +663,9 @@ impl AppState {
             Some(_) => ClockSource::External,
             None => ClockSource::Internal,
         });
+        if port == self.active_clock_port {
+            return Ok(());
+        }
         self.active_clock_port = port;
         return self.reconnect_inputs();
     }
@@ -755,14 +763,8 @@ impl AppState {
     }
     /// Picks the input port the clock follows; `0` is the internal clock, anything else is
     /// an index into the input ports, offset by one.
-    /// Picks the input port the clock follows; `0` is the internal clock, anything else is
-    /// an index into the input ports, offset by one.
     pub fn set_midi_sync(&mut self, choice: usize) -> Result<()> {
-        let port = choice.checked_sub(1).and_then(|index| {
-            self.midi_in_client
-                .as_ref()
-                .and_then(|client| client.ports().get(index).cloned())
-        });
+        let port = self.input_port_for_choice(choice);
         return self.set_clock_input(port);
     }
     pub fn active_clock_name(&self) -> Option<String> {
@@ -1002,11 +1004,13 @@ impl AppState {
         self.project_load_request = Some(path);
     }
     fn shut_down(&mut self) {
-        self.engine.stop();
-        self.engine.shut_down();
+        // the clock input holds a sender to the engine, so it has to close before the engine
+        // thread can end
         for connection in self.midi_in_connections.drain(..) {
             connection.close();
         }
+        self.engine.stop();
+        self.engine.shut_down();
     }
     /// Hands an error to the app, which shows it in a warning dialog.
     pub fn report_error(&mut self, error: MTrakError) {
@@ -1076,14 +1080,21 @@ impl AppState {
         self.changed_patterns.insert(id);
     }
 
-    /// Moves the sequence cursor and shows the pattern at that position. While the song plays,
-    /// playback jumps there too, as in FT2.
-    pub fn select_sequence(&mut self, index: usize) {
+    /// Moves the sequence cursor and shows the pattern at that position.
+    pub fn show_sequence(&mut self, index: usize) {
         let Some(row) = self.project.sequence.get(index) else {
             return;
         };
         self.active_pattern = row.pattern_id;
         self.active_sequence_index = index;
+    }
+    /// Moves the sequence cursor like `show_sequence`. While the song plays, playback jumps
+    /// there too, as in FT2.
+    pub fn select_sequence(&mut self, index: usize) {
+        if self.project.sequence.get(index).is_none() {
+            return;
+        }
+        self.show_sequence(index);
         if matches!(
             self.engine.status().play_mode(),
             PlayMode::SongLoop | PlayMode::Song

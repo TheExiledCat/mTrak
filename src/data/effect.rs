@@ -4,22 +4,23 @@ use MidiCommand::*;
 use serde::{Deserialize, Serialize};
 
 use crate::error::MTrakError;
-pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 8] = [
+pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 9] = [
     ('S', SetCC),
-    ('C', ChangeCC),
-    ('G', CCSlide),
-    ('H', CCVelocitySlide),
-    ('V', VelocitySlide),
-    ('E', EndSlide),
-    ('A', AfterTouch),
-    ('W', PitchBend),
+    ('M', ChangeCC),
+    ('W', ModWheel),
+    ('V', CCSlide),
+    ('J', CCVelocitySlide),
+    ('A', VelocitySlide),
+    ('N', EndSlide),
+    ('T', AfterTouch),
+    ('P', PitchBend),
 ];
 pub const EFFECT_COMMAND_LOOKUP: [(char, EffectCommand); 5] = [
     ('F', EffectCommand::SetTempo),
     ('Y', EffectCommand::Probability),
-    ('D', EffectCommand::Delay),
+    ('E', EffectCommand::Extended),
     ('R', EffectCommand::Retrig),
-    ('3', EffectCommand::Legato),
+    ('L', EffectCommand::Legato),
 ];
 /// A way to write a command's value, e.g. `xy`, and what it does.
 pub type CommandForm = (&'static str, &'static str);
@@ -49,6 +50,7 @@ impl CommandKind {
 pub enum MidiCommand {
     SetCC,           // Sets the CC to change with the ChangeCC command
     ChangeCC,        // Changes the CC set by SetCC
+    ModWheel,        // Selects CC 1 like SetCC 01 and sends it like ChangeCC
     CCSlide, // Slides the CC set by SetCC from this value to the track's next CC or slide command
     CCVelocitySlide, // CCSlide that also sets the velocity of notes played during it
     VelocitySlide, // Slides the velocity of notes played during it, without sending anything itself
@@ -63,7 +65,7 @@ impl MidiCommand {
     }
     /// Whether this command ends a slide that reaches it.
     pub fn is_slide_target(&self) -> bool {
-        return self.is_slide() || matches!(self, ChangeCC | EndSlide);
+        return self.is_slide() || matches!(self, ChangeCC | ModWheel | EndSlide);
     }
     /// Whether the slide this command starts sends the selected CC.
     pub fn slides_cc(&self) -> bool {
@@ -75,16 +77,20 @@ impl MidiCommand {
         return match self {
             SetCC => &[(
                 "xx",
-                "Set CC: select the CC number (hex) that C, G and H change",
+                "Set CC: select the CC number (hex) that M, V and J change",
             )],
             ChangeCC => &[("xx", "Change CC: send the selected CC with this value")],
+            ModWheel => &[(
+                "xx",
+                "Mod wheel: select CC 1 like S01 and send it with this value",
+            )],
             CCSlide => &[(
                 "xx",
                 "CC slide: slide the selected CC from this value to the next target",
             )],
             CCVelocitySlide => &[(
                 "xx",
-                "CC + velocity slide: a G that also sets the velocity of notes",
+                "CC + velocity slide: a V that also sets the velocity of notes",
             )],
             VelocitySlide => &[(
                 "xx",
@@ -133,9 +139,9 @@ impl Display for MidiCommand {
 pub enum EffectCommand {
     SetTempo, // Sets the BPM from 20 up, the speed below that, and 00 goes back to the song's own
     Probability, // Decides whether or not this note plays based on a chance from 0 to FF
-    Delay,    // Moves the note: 0x starts it x ticks before its row, 1x x ticks into it
+    Extended, // FT2's E commands: 8x early delay, 9x retrig, Cx note cut, Dx note delay
     Retrig,   // Replays the note every y ticks, changing its velocity by x each time
-    Legato, // Glides into this note: 0x starts it x ticks early, 1x keeps the previous note x ticks longer, 3x cuts the note on tick x
+    Legato, // Glides into this note: 0x starts it x ticks early, 1x keeps the previous note x ticks longer
 }
 /// Values from 20 up set the BPM; lower values set the speed.
 const TEMPO_MIN_BPM: u8 = 0x20;
@@ -164,6 +170,8 @@ pub enum Effect {
     LegatoHold(u8),
     /// Releases the track's note on this tick.
     Cut(u8),
+    /// Replays the note every this many ticks within its row.
+    RetrigNote(u8),
     /// A value no subcommand uses yet.
     Unused,
 }
@@ -178,9 +186,11 @@ impl EffectCommand {
                 value => Effect::SetBpm(value),
             },
             EffectCommand::Probability => Effect::Probability(value),
-            EffectCommand::Delay => match high {
-                0x0 => Effect::DelayEarly(low),
-                0x1 => Effect::DelayLate(low),
+            EffectCommand::Extended => match high {
+                0x8 => Effect::DelayEarly(low),
+                0x9 => Effect::RetrigNote(low),
+                0xC => Effect::Cut(low),
+                0xD => Effect::DelayLate(low),
                 _ => Effect::Unused,
             },
             EffectCommand::Retrig => Effect::Retrig {
@@ -190,7 +200,6 @@ impl EffectCommand {
             EffectCommand::Legato => match high {
                 0x0 => Effect::LegatoEarly(low),
                 0x1 => Effect::LegatoHold(low),
-                0x3 => Effect::Cut(low),
                 _ => Effect::Unused,
             },
         };
@@ -210,9 +219,14 @@ impl EffectCommand {
                 "xx",
                 "Probability: chance the note plays, 00 never, FF always",
             )],
-            EffectCommand::Delay => &[
-                ("0y", "Delay: start the note y ticks before its row"),
-                ("1y", "Delay: start the note y ticks into its row"),
+            EffectCommand::Extended => &[
+                ("8y", "Early delay: start the note y ticks before its row"),
+                (
+                    "9y",
+                    "Retrig note: replay the note every y ticks in its row",
+                ),
+                ("Cy", "Note cut: release the note on tick y"),
+                ("Dy", "Note delay: start the note y ticks into its row"),
             ],
             EffectCommand::Retrig => &[(
                 "xy",
@@ -227,7 +241,6 @@ impl EffectCommand {
                     "1y",
                     "Legato: glide in, holding the previous note y more ticks",
                 ),
-                ("3y", "Cut: release the note on tick y"),
             ],
         };
     }
@@ -352,31 +365,33 @@ mod tests {
     }
 
     #[test]
-    fn delay_decodes_early_and_late() {
-        assert_eq!(EffectCommand::Delay.decode(0x02), Effect::DelayEarly(2));
-        assert_eq!(EffectCommand::Delay.decode(0x13), Effect::DelayLate(3));
-        assert_eq!(EffectCommand::Delay.decode(0x23), Effect::Unused);
+    fn extended_decodes_its_subcommands() {
+        assert_eq!(EffectCommand::Extended.decode(0x82), Effect::DelayEarly(2));
+        assert_eq!(EffectCommand::Extended.decode(0x94), Effect::RetrigNote(4));
+        assert_eq!(EffectCommand::Extended.decode(0xC5), Effect::Cut(5));
+        assert_eq!(EffectCommand::Extended.decode(0xD3), Effect::DelayLate(3));
+        assert_eq!(EffectCommand::Extended.decode(0x13), Effect::Unused);
     }
 
     #[test]
     fn legato_decodes_its_subcommands() {
         assert_eq!(EffectCommand::Legato.decode(0x03), Effect::LegatoEarly(3));
         assert_eq!(EffectCommand::Legato.decode(0x12), Effect::LegatoHold(2));
-        assert_eq!(EffectCommand::Legato.decode(0x35), Effect::Cut(5));
+        assert_eq!(EffectCommand::Legato.decode(0x35), Effect::Unused);
         assert_eq!(EffectCommand::Legato.decode(0x20), Effect::Unused);
         assert_eq!(EffectCommand::Legato.decode(0x40), Effect::Unused);
     }
 
     #[test]
     fn display_round_trips() {
-        for text in ["000", "0FF", "S4A", "C7F", "A00", "W80", "F7D"] {
+        for text in ["000", "0FF", "S4A", "M7F", "A00", "T00", "P80", "F7D"] {
             assert_eq!(Command::from_str(text).unwrap().to_string(), text);
         }
     }
 
     #[test]
     fn value_accepts_lowercase_hex() {
-        assert_eq!(Command::from_str("Cff").unwrap().value, 0xFF);
+        assert_eq!(Command::from_str("Mff").unwrap().value, 0xFF);
     }
 
     #[test]

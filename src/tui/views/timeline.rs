@@ -296,6 +296,7 @@ fn open_paste_length_dialog(state: &mut AppState, row_count: u16, copied_length:
             Select::new("action", options).boxed(),
         ],
     )
+    .focus_first()
     .width(60)
     .on_submit(move |state, result| {
         let set_length = match result.choice("action") {
@@ -900,7 +901,11 @@ impl TimeLineView {
         return true;
     }
     /// Plays the cell's note at its volume so a new volume can be heard; volume `00` silences it.
+    /// Skipped during playback, where it would cut the track's playing note.
     fn preview_cell(&self, state: &AppState, track: usize, row: usize) {
+        if state.engine.status().play_mode() != PlayMode::Paused {
+            return;
+        }
         let Some(&cell) = state.active_pattern().get_event(row, track) else {
             return;
         };
