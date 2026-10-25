@@ -1,5 +1,71 @@
 # Changelog
 
+## v0.4.0 - 2026-10-25
+
+### Added
+
+- **MIDI clock sync:** pick a port as `Clock SRC` in the Config dialog (`Ctrl+O`) to follow
+  another device's clock. mTrak plays one tick per clock pulse and follows its Start, Stop,
+  Continue and song position, and the header shows `SYN` with the measured tempo instead of
+  `BPM`. If the clock goes quiet for two beats, playback stops. Your own play and stop keys
+  still work while synced, at the last measured tempo. Notes and clock can come in on the same
+  port or on two different ones. Details in [docs/SYNC.md](docs/SYNC.md).
+- **Panic button (`~`):** stops playback and sends all notes off, all sound off and reset
+  controllers on every channel, at any time.
+- **Transpose:** a global transpose in the Global dialog (`Ctrl+E`) and a transpose per
+  instrument in the Instrument dialog, from `-80` to `+7F` semitones. The status line shows
+  the global one as `GLB TRSP`. Notes transposed outside MIDI's range don't play.
+- **Default CC per instrument:** set in the Instrument dialog. CC commands on a track without
+  an `S` change the instrument's default CC instead of CC 0.
+- **New commands** (see [docs/COMMANDS.md](docs/COMMANDS.md)):
+  - `Wxx` Mod wheel: sends CC 1 and selects it, so a following `V` glides the mod wheel.
+  - `E9x` Retrig note: replays the note every `x` ticks within its row, like FT2's `E9x`.
+- **Jumping during playback, as in FT2:** while a pattern plays, changing the pattern carries
+  playback on in the new one from the next row. While the song plays, moving through the
+  sequence list jumps playback to that position.
+- **Number fields** in dialogs (velocity, volume, transpose, default CC, bend range): type hex
+  digits over the value or step it with Up and Down. Arrows next to it show which way it can
+  still move.
+- **About dialog** (`Ctrl+T`).
+- Typing a volume on a note replays the note at the new velocity, so you can hear it.
+- Pasting a pattern that's shorter than the current one asks whether to trim the pattern to the
+  copy's length or keep its length.
+
+### Changed
+
+- **Projects saved with v0.3.0 can't be opened in v0.4.0.**
+- **Command letters follow FastTracker 2** where FT2 has the same command, and move off
+  letters FT2 uses for something else:
+
+  | Command               | v0.3.0       | v0.4.0       |
+  |-----------------------|--------------|--------------|
+  | Change CC             | `C`          | `M`          |
+  | CC slide              | `G`          | `V`          |
+  | CC and velocity slide | `H`          | `J`          |
+  | Velocity slide        | `V`          | `U`          |
+  | End slide             | `E`          | `N`          |
+  | Aftertouch            | `A`          | `T`          |
+  | Pitch bend            | `W`          | `P`          |
+  | Note delay            | `D1x`        | `EDx`        |
+  | Early note delay      | `D0x`        | `E8x`        |
+  | Note cut              | `33x`        | `ECx`        |
+  | Legato                | `30x`, `31x` | `L0x`, `L1x` |
+
+- **`R` is now Retrig and works like FT2's multi retrig:** the interval carries on across
+  rows, an `x` or `y` of `0` reuses the track's last value, a volume on the cell plays every
+  repeat at that volume, and without a note it repeats the track's last note.
+- **The speed sets how many rows play per beat**, as in FT2: a tick is one MIDI clock pulse,
+  so `F03` or SPD 3 plays twice as fast. The speed is now one setting for the whole song (`SPD`
+  in the header) instead of per pattern; use `Fxx` to change it partway through.
+- Moving through the sequence list switches the editor to that position's pattern, and adding
+  a position (`Ctrl+N`) copies the selected position's pattern.
+- Dialogs open with nothing focused; Tab goes through the fields and back to none. Text fields
+  and the Keybindings and Commands screens still open ready to use.
+- Dropdowns in dialogs show only the chosen option until focused, then open their list on top.
+  The focused field's label is highlighted.
+- Clear and Shrink also work during playback.
+- The GLB Velocity dialog is now called Global.
+
 ## v0.3.0 - 2026-10-19
 
 ### Added
