@@ -14,7 +14,7 @@ use crate::{
         constants, files,
         framework::{
             core_extensions::Boxed,
-            dialog::{Dialog, PopupLevel},
+            dialog::{Dialog, InfoLevel},
             keymap::{HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
             widgets::{container::Container, footer::Footer},
@@ -32,6 +32,7 @@ pub enum MainAction {
     SaveAs,
     PlayPattern,
     PlaySong,
+    Panic,
     Undo,
     Redo,
     Help,
@@ -58,6 +59,7 @@ impl MainView {
                     MainAction::PlayPattern,
                     "Play PTN",
                 )
+                .bind(Key::char('~'), MainAction::Panic, "Panic")
                 .bind(Key::ctrl('z'), MainAction::Undo, "Undo")
                 .bind(Key::ctrl('y'), MainAction::Redo, "Redo")
                 .bind(Key::ctrl('s'), MainAction::Save, "Save")
@@ -98,6 +100,10 @@ impl KeyActions for MainView {
             MainAction::SaveAs => request_save_as(state),
             MainAction::PlayPattern => state.play_pattern(state.active_pattern),
             MainAction::PlaySong => state.play_song(state.active_sequence_index),
+            MainAction::Panic => {
+                state.engine.panic();
+                state.notify("PANIC");
+            }
             MainAction::Undo => {
                 if !state.undo() {
                     state.notify("NO UNDO");
@@ -122,6 +128,7 @@ impl KeyActions for MainView {
             MainAction::SaveAs => "Save project as",
             MainAction::PlayPattern => "Play the current pattern",
             MainAction::PlaySong => "Play the song from the current sequence position",
+            MainAction::Panic => "Panic: stop and silence every channel, resetting controllers",
             MainAction::Undo => "Undo the last edit",
             MainAction::Redo => "Redo the last undone edit",
             MainAction::Help => "Show all keybindings",
@@ -135,7 +142,7 @@ fn confirm_discard(state: &mut AppState, title: &str, then: fn(&mut AppState)) {
         then(state);
         return;
     }
-    let dialog = Dialog::confirm(PopupLevel::Error, title, "Unsaved progress will be lost")
+    let dialog = Dialog::confirm(InfoLevel::Error, title, "Unsaved progress will be lost")
         .on_submit(move |state, _| {
             then(state);
             return Ok(());
@@ -158,7 +165,7 @@ fn request_save_as(state: &mut AppState) {
             let name = file_path.file_name().unwrap_or_default().to_string_lossy();
             let message = format!("Saved {}", name);
             state.save_project(file_path)?;
-            state.open_dialog(Dialog::popup(PopupLevel::Info, "Saved", message));
+            state.open_dialog(Dialog::popup(InfoLevel::Info, "Saved", message));
             return Ok(());
         },
         start_directory,

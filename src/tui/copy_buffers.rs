@@ -87,23 +87,22 @@ impl CopyBuffers {
                 pattern.set_event(i, track as usize, r.tracks[0]);
             });
     }
-    /// overwrite the entire pattern with the buffered pattern. Throws a PatternPasteOverflow error if the buffer contains a bigger pattern than fits in the input pattern
+    /// overwrite the entire pattern with the buffered pattern. Throws a PatternPasteLength error if the buffered pattern is longer or shorter than the input pattern
     pub fn paste_pattern(&self, pattern: &mut Pattern) -> Result<()> {
         let Some(buf) = &self.pattern_buffer else {
             return Ok(());
         };
-        let row_count = pattern.row_count;
-        if buf.height > row_count {
-            return Err(crate::error::MTrakError::PatternPasteOverflow {
-                overflow_length: buf.height - row_count,
+        if buf.height != pattern.row_count {
+            return Err(crate::error::MTrakError::PatternPasteLength {
+                copied_length: buf.height,
             });
         }
 
-        self.paste_pattern_truncated(pattern);
+        self.paste_pattern_keeping_length(pattern);
         return Ok(());
     }
-    /// overwrite the entire pattern with the buffered pattern, dropping any buffered rows past the end of the pattern
-    pub fn paste_pattern_truncated(&self, pattern: &mut Pattern) {
+    /// overwrite the entire pattern with the buffered pattern, keeping the pattern's length: buffered rows past its end are dropped and rows past the buffer's end are cleared
+    pub fn paste_pattern_keeping_length(&self, pattern: &mut Pattern) {
         let Some(buf) = &self.pattern_buffer else {
             return;
         };
@@ -266,6 +265,32 @@ mod tests {
     }
 
     #[test]
+    fn shorter_pattern_does_not_paste_into_longer_one() {
+        let short = Pattern::new(4);
+        let mut long = Pattern::new(8);
+        let mut buffers = CopyBuffers::new();
+        buffers.copy_pattern(&short);
+        assert!(matches!(
+            buffers.paste_pattern(&mut long),
+            Err(crate::error::MTrakError::PatternPasteLength { copied_length: 4 })
+        ));
+    }
+
+    #[test]
+    fn shorter_pattern_paste_keeping_length_clears_the_rest() {
+        let mut short = Pattern::new(4);
+        short.set_event(3, 0, note(60));
+        let mut long = Pattern::new(8);
+        long.set_event(6, 0, note(61));
+        let mut buffers = CopyBuffers::new();
+        buffers.copy_pattern(&short);
+        buffers.paste_pattern_keeping_length(&mut long);
+        assert_eq!(long.rows.len(), 8);
+        assert_eq!(long.get_event(3, 0), Some(&note(60)));
+        assert_eq!(long.get_event(6, 0), Some(&Note::empty()));
+    }
+
+    #[test]
     fn truncated_pattern_paste_fills_the_shorter_pattern() {
         let mut long = Pattern::new(8);
         long.set_event(3, 0, note(60));
@@ -273,7 +298,7 @@ mod tests {
         let mut short = Pattern::new(4);
         let mut buffers = CopyBuffers::new();
         buffers.copy_pattern(&long);
-        buffers.paste_pattern_truncated(&mut short);
+        buffers.paste_pattern_keeping_length(&mut short);
         assert_eq!(short.rows.len(), 4);
         assert_eq!(short.get_event(3, 0), Some(&note(60)));
     }

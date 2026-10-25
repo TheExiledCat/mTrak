@@ -20,7 +20,7 @@ use crate::{
         app::AppState,
         framework::{
             core_extensions::Boxed,
-            dialog::{Dialog, PopupLevel, Select, TextPrompt},
+            dialog::{Dialog, InfoLevel, Select, TextPrompt},
             keymap::{HelpSection, Key, KeyActions, Keymap},
             widget::MtrakWidget,
             widgets::footer::Footer,
@@ -190,6 +190,7 @@ impl FileBrowser {
                             .boxed(),
                     ],
                 )
+                .focus_first()
                 .on_submit(move |_, result| {
                     pending.replace(Some(PendingInput::FileName {
                         name: result.text("name").unwrap_or_default().to_owned(),
@@ -207,7 +208,7 @@ impl FileBrowser {
                     .or_else(|| self.highlighted_file())
                 else {
                     state.open_dialog(Dialog::popup(
-                        PopupLevel::Warning,
+                        InfoLevel::Warning,
                         "File browser",
                         "No file selected",
                     ));
