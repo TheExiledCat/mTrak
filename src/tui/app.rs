@@ -17,7 +17,7 @@ use ratatui::{
 use super::constants;
 use crate::{
     data::{
-        config::{Config, TITLE},
+        config::{Config, TITLE, ThemeChoice},
         effect::CommandKind,
         midi::{
             MAX_SPEED, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX, bytes_to_message,
@@ -419,6 +419,9 @@ pub struct AppState {
     pub current_octave: u8,
     pub recording: bool,
     pub header_collapsed: bool,
+    /// The theme this session is using, which `--color` or the Config dialog can set apart
+    /// from the one in config.toml.
+    pub theme_choice: Option<ThemeChoice>,
     /// Where the project was last loaded from or saved to, so saving again skips the browser.
     pub project_path: Option<PathBuf>,
     pub copy_buffers: CopyBuffers,
@@ -493,6 +496,7 @@ impl AppState {
             current_octave: 4,
             recording: false,
             header_collapsed: false,
+            theme_choice: None,
             project_path: None,
             line_add: 1,
             pending_dialogs: Vec::new(),

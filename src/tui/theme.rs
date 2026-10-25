@@ -1,10 +1,10 @@
-use std::{env, fs, path::Path};
+use std::{env, path::Path};
 
 use ratatui::style::{Color, Style, Stylize};
 
 use crate::{
-    cli::ColorMode,
-    error::{MTrakError, Result},
+    data::config::ThemeChoice,
+    error::Result,
     tui::files,
     util::toml::{self, ParseError},
 };
@@ -104,14 +104,7 @@ impl Palette {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path)?;
-        return Self::from_toml(&text).map_err(|e| {
-            MTrakError::InvalidConfig(format!(
-                "{}:\n{}",
-                path.file_name().unwrap_or_default().display(),
-                e
-            ))
-        });
+        return toml::load_file(path, Self::from_toml);
     }
 
     pub fn from_toml(text: &str) -> std::result::Result<Self, ParseError> {
@@ -145,7 +138,7 @@ impl Palette {
         return Ok(palette);
     }
 
-    pub fn to_toml(mut self) -> String {
+    pub fn into_toml(mut self) -> String {
         let mut text = String::from(
             "# mTrak theme, used with --color custom or theme = \"custom\" in config.toml.\n\
              # Colors are hex (\"#49688C\") or ANSI names (\"Red\", \"DarkGray\", ...).\n\
@@ -160,7 +153,7 @@ impl Palette {
 
     /// The theme file written when there isn't one yet.
     pub fn default_toml() -> String {
-        return FT2_PALETTE.to_toml();
+        return FT2_PALETTE.into_toml();
     }
 }
 
@@ -216,12 +209,12 @@ pub struct Theme {
 }
 
 impl Theme {
-    pub fn from_color_mode(mode: Option<ColorMode>) -> Result<Self> {
-        return Ok(match mode {
-            Some(ColorMode::Mono) => Self::monochrome(),
-            Some(ColorMode::Ansi16) => Self::ansi16(),
-            Some(ColorMode::Full) => Self::ft2(),
-            Some(ColorMode::Custom) => Self::custom()?,
+    pub fn from_choice(choice: Option<ThemeChoice>) -> Result<Self> {
+        return Ok(match choice {
+            Some(ThemeChoice::Mono) => Self::monochrome(),
+            Some(ThemeChoice::Ansi16) => Self::ansi16(),
+            Some(ThemeChoice::Full) => Self::ft2(),
+            Some(ThemeChoice::Custom) => Self::custom()?,
             None => Self::detect(),
         });
     }
@@ -321,6 +314,8 @@ impl Theme {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]

@@ -1,7 +1,13 @@
 //! A parser for the small subset of TOML that mTrak's config files use: `key = "value"` pairs
 //! and `#` comments.
 
-use std::fmt::{self, Display};
+use std::{
+    fmt::{self, Display},
+    fs,
+    path::Path,
+};
+
+use crate::error::{MTrakError, Result as MTrakResult};
 
 pub struct Entry {
     pub line: usize,
@@ -30,7 +36,19 @@ impl Display for ParseError {
     }
 }
 
+/// Reads and parses a config file, naming the file in any error.
+pub fn load_file<T>(
+    path: &Path,
+    parse: impl FnOnce(&str) -> Result<T, ParseError>,
+) -> MTrakResult<T> {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let text =
+        fs::read_to_string(path).map_err(|e| MTrakError::InvalidConfig(format!("{name}:\n{e}")))?;
+    return parse(&text).map_err(|e| MTrakError::InvalidConfig(format!("{name}:\n{e}")));
+}
+
 pub fn parse(text: &str) -> Result<Vec<Entry>, ParseError> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut entries: Vec<Entry> = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = index + 1;
@@ -107,6 +125,14 @@ mod tests {
                 ("base".to_owned(), "ft2".to_owned()),
                 ("danger".to_owned(), "#ff0000".to_owned()),
             ]
+        );
+    }
+
+    #[test]
+    fn skips_a_byte_order_mark() {
+        assert_eq!(
+            pairs("\u{feff}a = \"1\""),
+            vec![("a".to_owned(), "1".to_owned())]
         );
     }
 

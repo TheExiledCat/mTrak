@@ -1,10 +1,10 @@
 use std::{fs, iter::once, path::Path};
 
 use clap::ValueEnum;
+use clap_derive::ValueEnum;
 
 use crate::{
-    cli::ColorMode,
-    error::{MTrakError, Result},
+    error::Result,
     util::toml::{self, ParseError},
 };
 
@@ -14,11 +14,24 @@ pub const COMMAND: &str = "mtrak";
 /// The value of `theme` that picks a theme from what the terminal supports.
 const AUTO_THEME: &str = "auto";
 
+/// The themes mTrak can open with, from `--color` or `theme` in config.toml.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThemeChoice {
+    /// No colors, only bold, dim, underline and reverse
+    Mono,
+    /// The 16 standard terminal colors
+    Ansi16,
+    /// The FT2 theme, for truecolor terminals
+    Full,
+    /// The colors in theme.toml in the config folder
+    Custom,
+}
+
 /// Settings from config.toml in the config folder.
 #[derive(Clone)]
 pub struct Config {
     /// The theme to open with, or `None` to pick one from what the terminal supports.
-    pub theme: Option<ColorMode>,
+    pub theme: Option<ThemeChoice>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -27,14 +40,7 @@ impl Default for Config {
 }
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path)?;
-        return Self::from_toml(&text).map_err(|e| {
-            MTrakError::InvalidConfig(format!(
-                "{}:\n{}",
-                path.file_name().unwrap_or_default().display(),
-                e
-            ))
-        });
+        return toml::load_file(path, Self::from_toml);
     }
 
     pub fn from_toml(text: &str) -> std::result::Result<Self, ParseError> {
@@ -45,7 +51,7 @@ impl Config {
                     config.theme = if entry.value == AUTO_THEME {
                         None
                     } else {
-                        let mode = ColorMode::from_str(&entry.value, true).map_err(|_| {
+                        let mode = ThemeChoice::from_str(&entry.value, true).map_err(|_| {
                             ParseError::new(entry.line, format!("unknown theme {:?}", entry.value))
                         })?;
                         Some(mode)
@@ -81,14 +87,14 @@ impl Config {
 }
 
 /// Every value `theme` can take, `None` being "auto".
-pub fn theme_options() -> Vec<Option<ColorMode>> {
+pub fn theme_options() -> Vec<Option<ThemeChoice>> {
     return once(None)
-        .chain(ColorMode::value_variants().iter().copied().map(Some))
+        .chain(ThemeChoice::value_variants().iter().copied().map(Some))
         .collect();
 }
 
 /// How a `theme` value is written in config.toml.
-pub fn theme_name(theme: Option<ColorMode>) -> String {
+pub fn theme_name(theme: Option<ThemeChoice>) -> String {
     return theme
         .and_then(|mode| mode.to_possible_value())
         .map(|value| value.get_name().to_owned())
@@ -116,7 +122,7 @@ mod tests {
     #[test]
     fn reads_a_theme() {
         let config = Config::from_toml("theme = \"custom\"").unwrap();
-        assert!(matches!(config.theme, Some(ColorMode::Custom)));
+        assert!(matches!(config.theme, Some(ThemeChoice::Custom)));
         assert!(Config::from_toml("theme = \"pink\"").is_err());
         assert!(Config::from_toml("volume = \"11\"").is_err());
     }

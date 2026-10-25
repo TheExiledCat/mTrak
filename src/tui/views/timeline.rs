@@ -1303,7 +1303,7 @@ impl MtrakWidget for TimeLineView {
         let top_bottom = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
         self.render_mode_indicator(state, top_bottom[0], buf);
 
-        let track_width = constants::NOTE_STRING_LENGTH as u16;
+        let track_width = constants::TRACK_WIDTH as u16;
         // neighbouring tracks overlap by one column so they share a single border
         let tracks_width = (track_width - 1) * pattern.track_count as u16 + 1;
         // the trailing spacer mirrors the line numbers so the tracks themselves are centered,

@@ -14,7 +14,7 @@ const CONFIG_FILE_NAME: &str = "config.toml";
 const THEME_FILE_NAME: &str = "theme.toml";
 
 /// Creates mTrak's folders, and the config files with their defaults when they don't exist yet.
-pub fn initialize_directories() -> Result<()> {
+pub fn initialize() -> Result<()> {
     let config = get_config_directory_root().ok_or(MTrakError::MissingDirectory("config"))?;
     fs::create_dir_all(config)?;
     create_if_missing(&get_config_file_path()?, || Config::default().to_toml())?;
