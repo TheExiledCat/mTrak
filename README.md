@@ -87,7 +87,9 @@ Press `/` to see every pattern command with a short description. The full guide 
 
 Setting `NO_COLOR` or `TERM=dumb` also selects the monochrome theme.
 
-## Config
+## Configuration
+
+### Folders
 
 Projects are saved to an `mtrak` folder in your music folder by default, but you can save
 and open them from any folder. Global settings live in an `mtrak` folder in your config
@@ -99,17 +101,68 @@ folder. Both are created on startup if they don't exist yet.
 | macOS    | `~/Music/mtrak`             | `~/Library/Application Support/mtrak` |
 | Windows  | `%USERPROFILE%\Music\mtrak` | `%LOCALAPPDATA%\mtrak`                |
 
-The config folder holds two files, both written with their defaults when they're missing:
-
-- `config.toml`: settings that aren't part of a project. For now that's `theme`, the theme to
-  open with (`auto`, `mono`, `ansi16`, `full` or `custom`). Change it with `Ctrl+P`, which can
-  save it to the file or keep it for this session only.
-- `theme.toml`: the colors used by the `custom` theme, as hex (`"#49688C"`) or ANSI color names
-  (`"Red"`, `"DarkGray"`). Each color has a comment saying where it shows up. Colors left out
-  come from the palette set by `base` (`"ft2"` or `"ansi16"`).
-
 On Linux the music folder follows `XDG_MUSIC_DIR` and the config folder follows
 `XDG_CONFIG_HOME`, if they're set.
+
+The config folder holds two files, `config.toml` and `theme.toml`. Both are written with
+their defaults when they're missing, so deleting one resets it. They use a small part of TOML:
+one `key = "value"` per line, with `#` starting a comment. An error in either file is shown
+when mTrak starts, with the line it's on, and the defaults are used instead.
+
+### config.toml
+
+Settings that aren't part of a project.
+
+| Setting | Values                                         | Default  | Description          |
+| ------- | ---------------------------------------------- | -------- | -------------------- |
+| `theme` | `auto`, `mono`, `ansi16`, `full` or `custom`   | `auto`   | The theme to open with |
+
+The themes:
+
+| Theme    | Description                                                                      |
+| -------- | -------------------------------------------------------------------------------- |
+| `auto`   | Picks one from what the terminal supports: `full`, `ansi16` or `mono`            |
+| `mono`   | No colors, only bold, dim, underline and reverse                                 |
+| `ansi16` | The 16 standard terminal colors, so it follows your terminal's color scheme      |
+| `full`   | The FT2 theme, for terminals with 24-bit color                                   |
+| `custom` | The colors in `theme.toml`                                                       |
+
+`Ctrl+P` opens the Config dialog, which changes the theme straight away. Tick
+`Save to config.toml` to keep it for next time, or untick it to try a theme for this session
+only. `--color` overrides `theme` for one session, and `NO_COLOR` or `TERM=dumb` select `mono`
+when `theme` is `auto`.
+
+### theme.toml
+
+The colors of the `custom` theme. Every part of mTrak is drawn with these ten colors:
+
+| Color          | Used for                                                                    |
+| -------------- | --------------------------------------------------------------------------- |
+| `backdrop`     | The background around the panels, the cursor row bar and subtle borders     |
+| `muted`        | Toned-down text and borders, and the fill behind the selection              |
+| `disabled`     | Text and key fills for something unavailable, e.g. undo with nothing to undo |
+| `surface`      | The pattern editor's background, and the text on filled labels             |
+| `surface_text` | Text in the pattern editor                                                  |
+| `text`         | Text on the backdrop, and the fill under the cursor                         |
+| `danger`       | Errors, edit mode and recording                                             |
+| `warning`      | Warnings, and the playing row while the row is locked                       |
+| `success`      | Success, e.g. the About dialog's border                                     |
+| `mark`         | The fill behind a marked block                                              |
+
+Colors are hex (`"#49688C"`) or ANSI color names (`"Red"`, `"DarkGray"`, `"LightBlue"`, ...).
+Colors you leave out come from the palette named by `base`, `"ft2"` (the default) or
+`"ansi16"`, so a theme can change just a few:
+
+```toml
+base = "ansi16"
+danger = "#FF5555"
+mark = "#44475A"
+```
+
+The [example_themes](example_themes) folder has ports of Catppuccin, Dracula, Gruvbox, Nord,
+One Dark, Solarized and Tokyo Night. Copy one to `theme.toml` and pick `custom`.
+
+### Project files
 
 **Note:** the project file format is still changing between releases. Until v1.0.0, mTrak
 can only open projects saved with the same version of mTrak; opening a project from another
@@ -165,7 +218,7 @@ Planned features, in no particular order:
         - [ ] Set track velocity
         - [ ] Glide global velocity
 - [ ] **Autosave and crash recovery**
-- [ ] **Custom themes**
+- [x] **Custom themes**
 - [ ] **Keyboard remapping**, with default layouts per OS/shell
 - [ ] **Proper CLI argument parsing** and a global app config
 - [ ] ...and more

@@ -1,7 +1,7 @@
 # Example themes
 
 Color themes for mTrak, ported from popular color schemes. To use one, copy it to `theme.toml`
-in the mTrak config folder (see the Config section of the main README), then pick `custom`
+in the mTrak config folder (see the Configuration section of the main README), then pick `custom`
 with `Ctrl+P`, set `theme = "custom"` in `config.toml`, or start mTrak with `--color custom`.
 
 | File                    | Scheme           |
