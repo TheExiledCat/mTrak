@@ -12,6 +12,7 @@ const FT2_PATTERN_TEXT: Color = Color::Rgb(196, 214, 236);
 const FT2_TEXT: Color = Color::Rgb(255, 255, 255);
 const FT2_EDIT: Color = Color::Rgb(214, 82, 82);
 const FT2_WARNING: Color = Color::Rgb(230, 190, 80);
+const FT2_SUCCESS: Color = Color::Rgb(120, 200, 120);
 const FT2_MARK: Color = Color::Rgb(38, 56, 80);
 
 /// Named styles for everything the views draw, so they never hard-code colors.
@@ -42,6 +43,8 @@ pub struct Theme {
     pub border_warning: Style,
     /// a border signalling an error, e.g. around an error dialog
     pub border_danger: Style,
+    /// a border signalling something good, e.g. around the About dialog
+    pub border_success: Style,
     /// a full-width line separating sections of content, e.g. the line where a pattern begins
     pub divider: Style,
     /// the line numbers beside a list, e.g. the row numbers of the pattern editor
@@ -116,6 +119,7 @@ impl Theme {
             border_subtle: Style::new().fg(FT2_DESKTOP),
             border_warning: Style::new().fg(FT2_WARNING),
             border_danger: Style::new().fg(FT2_EDIT),
+            border_success: Style::new().fg(FT2_SUCCESS),
             divider: Style::new().fg(FT2_DESKTOP_LIGHT),
             gutter: Style::new().fg(FT2_PATTERN_TEXT),
             gutter_accent: Style::new().bold().fg(FT2_TEXT),
@@ -144,6 +148,7 @@ impl Theme {
             border_subtle: Style::new().fg(Color::Blue),
             border_warning: Style::new().fg(Color::Yellow),
             border_danger: Style::new().fg(Color::Red),
+            border_success: Style::new().fg(Color::Green),
             divider: Style::new().fg(Color::Gray),
             gutter: Style::new().fg(Color::Gray),
             gutter_accent: Style::new().bold().fg(Color::White),
@@ -172,6 +177,7 @@ impl Theme {
             border_subtle: Style::new(),
             border_warning: Style::new().bold().underlined(),
             border_danger: Style::new().bold().reversed(),
+            border_success: Style::new().bold(),
             divider: Style::new().bold(),
             gutter: Style::new(),
             gutter_accent: Style::new().bold(),

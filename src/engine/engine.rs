@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     sync::{
         Arc,
         mpsc::{Receiver, RecvTimeoutError, Sender},
@@ -7,11 +8,12 @@ use std::{
 };
 
 use chrono::Utc;
-use midi::{Message, ToRawMessages};
+use midi::{Channel, Message, ToRawMessages};
 use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
+use num::FromPrimitive;
 
 use super::{
-    handle::{EngineCommand, EngineStatus},
+    handle::{ClockSource, EngineCommand, EngineStatus},
     voices::Voices,
 };
 use crate::{
@@ -19,8 +21,8 @@ use crate::{
         config::TITLE,
         effect::{CommandKind, Effect, MidiCommand},
         midi::{
-            DEFAULT_BPM, MIDI_CHANNEL_MAX, MidiEvent, PULSES_PER_LINE, VELOCITY_MAX,
-            pulse_duration, raw_message_to_bytes, tick_duration,
+            DEFAULT_BPM, DEFAULT_SPEED, MIDI_CHANNEL_MAX, MidiEvent, PULSES_PER_QUARTER,
+            VELOCITY_MAX, pulse_duration, raw_message_to_bytes,
         },
         note::{Note, NoteKind},
         pattern::{Pattern, PatternId},
@@ -28,7 +30,7 @@ use crate::{
     },
     engine::command_handler::{
         CommandContext, EffectCommandHandler, MidiCommandHandler, NoteAction, SlideTarget,
-        roll_velocity,
+        retrig_velocity,
     },
     tui::constants::TRACK_COUNT,
 };
@@ -64,10 +66,21 @@ struct Position {
 }
 
 struct Clock {
+    /// Whether pulses come from the clock input rather than the engine's own timer.
+    follows_input: bool,
     next_pulse: Instant,
-    pulse_in_row: u32,
-    row_start: Instant,
+    /// Each pulse is a tick of the row, which ends after the speed's worth of them.
     tick: u32,
+}
+
+/// The shortest wait for a pulse before a silent clock input counts as stopped.
+const CLOCK_DROPOUT_MIN: Duration = Duration::from_millis(500);
+
+/// What the clock input asked for, waiting on its next pulse.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingTransport {
+    Start,
+    Continue,
 }
 
 /// Something a track does later in the current row.
@@ -81,9 +94,15 @@ struct ScheduledNote {
 enum Scheduled {
     /// Plays the note once, from a delay.
     Once(Note),
-    /// Replays the note every `every` ticks until the row ends, changing its velocity by
-    /// `volume` each time.
-    Roll { note: Note, every: u32, volume: u8 },
+    /// Replays the note every `every` ticks, like FT2's multi retrig.
+    Retrig {
+        note: Note,
+        every: u32,
+        volume: u8,
+        fixed: Option<u8>,
+    },
+    /// Replays the note every `every` ticks until the row ends, without changing it.
+    Repeat { note: Note, every: u32 },
     /// Releases the track's note.
     Cut,
 }
@@ -106,17 +125,36 @@ pub struct MtrakEngine {
     patterns: Vec<Pattern>,
     sequence: Vec<SequenceRow>,
     bpm: u8,
+    speed: u8,
     send_midi_clock: bool,
     output_connection: Option<MidiOutputConnection>,
     pending_events: Vec<MidiEvent>,
     mode: PlayMode,
     position: Position,
     clock: Option<Clock>,
+    clock_source: ClockSource,
+    /// Where the clock input's Continue picks up in the song, kept when playback stops.
+    resume: Option<(Position, u32)>,
+    pending_transport: Option<PendingTransport>,
+    /// Where the next row plays from after a pattern switch or sequence jump.
+    pending_jump: Option<Position>,
+    /// Timestamps of the clock input's last beat of pulses, oldest first.
+    external_pulses: VecDeque<u64>,
+    /// The average time between pulses from the clock input over the last beat.
+    external_period: Duration,
+    /// When the last pulse from the clock input arrived.
+    last_external_pulse_at: Option<Instant>,
     voices: Voices,
     scheduled_notes: [Option<ScheduledNote>; TRACK_COUNT as usize],
     early_notes: [Option<EarlyNote>; TRACK_COUNT as usize],
     /// The next row's notes that were already started early, per track.
     started_early: [Option<Note>; TRACK_COUNT as usize],
+    /// The last note each track played, which a retrig without a note of its own repeats.
+    last_notes: [Option<Note>; TRACK_COUNT as usize],
+    /// Ticks since each track's last note, like FT2's retrig counter.
+    retrig_counters: [u32; TRACK_COUNT as usize],
+    /// Each track's last retrig interval and velocity change, like FT2's effect memory.
+    retrig_memory: [(u8, u8); TRACK_COUNT as usize],
 
     midi_command_handler: MidiCommandHandler,
     effect_command_handler: EffectCommandHandler,
@@ -135,6 +173,7 @@ impl MtrakEngine {
             patterns: Vec::new(),
             sequence: Vec::new(),
             bpm: DEFAULT_BPM,
+            speed: DEFAULT_SPEED,
             send_midi_clock: false,
             output_connection: None,
             mode: PlayMode::Paused,
@@ -146,10 +185,20 @@ impl MtrakEngine {
             },
             pending_events: vec![],
             clock: None,
+            clock_source: ClockSource::Internal,
+            resume: None,
+            pending_transport: None,
+            pending_jump: None,
+            external_pulses: VecDeque::with_capacity(PULSES_PER_QUARTER as usize + 1),
+            external_period: pulse_duration(DEFAULT_BPM),
+            last_external_pulse_at: None,
             voices: Voices::new(),
             scheduled_notes: [None; TRACK_COUNT as usize],
             early_notes: [None; TRACK_COUNT as usize],
             started_early: [None; TRACK_COUNT as usize],
+            last_notes: [None; TRACK_COUNT as usize],
+            retrig_counters: [0; TRACK_COUNT as usize],
+            retrig_memory: [(0, 0); TRACK_COUNT as usize],
 
             midi_command_handler: MidiCommandHandler::new(),
             effect_command_handler: EffectCommandHandler::new(),
@@ -185,10 +234,14 @@ impl MtrakEngine {
             EngineCommand::PlaySong(sequence_index, looping) => {
                 self.play_song(sequence_index, looping)
             }
+            EngineCommand::Panic => self.panic(),
+            EngineCommand::SwitchPattern(id) => self.switch_pattern(id),
+            EngineCommand::JumpToSequence(sequence_index) => self.jump_to_sequence(sequence_index),
             EngineCommand::Stop => self.stop(),
             EngineCommand::SetPattern(id, pattern) => self.set_pattern(id, pattern),
             EngineCommand::SetSequence(sequence) => self.sequence = sequence,
             EngineCommand::SetBpm(bpm) => self.bpm = bpm,
+            EngineCommand::SetSpeed(speed) => self.speed = speed,
             EngineCommand::Event(message) => self.pending_events.push(message),
             EngineCommand::PlayNote {
                 track,
@@ -215,7 +268,27 @@ impl MtrakEngine {
                 self.voices.set_global_volume(channel as usize, volume)
             }
             EngineCommand::SetGlobalVelocity(velocity) => self.voices.set_global_velocity(velocity),
+            EngineCommand::SetTranspose(transpose) => self.voices.set_transpose(transpose),
+            EngineCommand::SetChannelTranspose { channel, transpose } => self
+                .voices
+                .set_channel_transpose(channel as usize, transpose),
+            EngineCommand::SetDefaultCC { channel, control } => self
+                .midi_command_handler
+                .set_default_control(channel as usize, control),
             EngineCommand::SetMidiClock(enabled) => self.send_midi_clock = enabled,
+            EngineCommand::SetClockSource(source) => self.set_clock_source(source),
+            EngineCommand::ExternalClock(timestamp) => self.external_pulse(timestamp),
+            EngineCommand::ExternalStart => self.pending_transport = Some(PendingTransport::Start),
+            EngineCommand::ExternalContinue => {
+                self.pending_transport = Some(PendingTransport::Continue)
+            }
+            EngineCommand::ExternalSongPosition(sixteenths) => self.song_position(sixteenths),
+            EngineCommand::ExternalStop => {
+                self.pending_transport = None;
+                if self.clock.as_ref().is_some_and(|clock| clock.follows_input) {
+                    self.stop();
+                }
+            }
         }
     }
 
@@ -241,32 +314,184 @@ impl MtrakEngine {
         return self.effect_command_handler.bpm().unwrap_or(self.bpm);
     }
 
-    /// The pattern's ticks per line, unless a tempo command has changed the speed.
-    fn ticks_per_line(&self, pattern: &Pattern) -> u8 {
+    /// The song's speed (ticks per row), unless a tempo command has changed it.
+    fn ticks_per_line(&self) -> u8 {
         return self
             .effect_command_handler
             .speed()
-            .unwrap_or(pattern.ticks_per_line)
+            .unwrap_or(self.speed)
             .max(1);
     }
 
+    /// The time between pulses, from the BPM or measured from the clock input.
     fn pulse_duration(&self) -> Duration {
-        return pulse_duration(self.bpm());
+        return match self.clock_source {
+            ClockSource::Internal => pulse_duration(self.bpm()),
+            ClockSource::External => self.external_period,
+        };
+    }
+
+    fn set_clock_source(&mut self, source: ClockSource) {
+        if source == self.clock_source {
+            return;
+        }
+        if self.clock.is_some() {
+            self.stop();
+        }
+        self.clock_source = source;
+        self.external_period = pulse_duration(self.bpm);
+        self.publish_synced_bpm();
+        self.resume = None;
+        self.pending_transport = None;
+        self.external_pulses.clear();
+    }
+
+    /// Plays from `position` on the engine's own timer.
+    fn play_from(&mut self, mode: PlayMode, position: Position) {
+        self.position = position;
+        self.start(mode, Message::Start, false, 0);
+    }
+
+    /// Shows the measured tempo, ignoring small jitter.
+    fn publish_synced_bpm(&self) {
+        let bpm = 60.0 / (self.external_period.as_secs_f64() * PULSES_PER_QUARTER as f64);
+        if (bpm - self.status.synced_bpm() as f64).abs() < 0.75 {
+            return;
+        }
+        self.status
+            .set_synced_bpm(bpm.round().clamp(1.0, u8::MAX as f64) as u8);
+    }
+
+    /// Averages the time between clock input pulses over the last beat.
+    fn measure_external_pulse(&mut self, timestamp: u64) {
+        if self
+            .external_pulses
+            .back()
+            .is_some_and(|&last| timestamp < last || timestamp - last >= 250_000)
+        {
+            self.external_pulses.clear();
+        }
+        if self.external_pulses.len() > PULSES_PER_QUARTER as usize {
+            self.external_pulses.pop_front();
+        }
+        self.external_pulses.push_back(timestamp);
+        let (Some(&first), Some(&last)) =
+            (self.external_pulses.front(), self.external_pulses.back())
+        else {
+            return;
+        };
+        let intervals = self.external_pulses.len() as u32 - 1;
+        if intervals == 0 {
+            return;
+        }
+        self.external_period = Duration::from_micros(last - first) / intervals;
+        self.publish_synced_bpm();
+    }
+
+    /// One pulse from the clock input, starting a pending Start or Continue.
+    fn external_pulse(&mut self, timestamp: u64) {
+        self.last_external_pulse_at = Some(Instant::now());
+        self.measure_external_pulse(timestamp);
+        if self.clock_source != ClockSource::External {
+            return;
+        }
+        match self.pending_transport.take() {
+            Some(PendingTransport::Start) => return self.start_cued(),
+            Some(PendingTransport::Continue) => return self.continue_cued(),
+            None => {}
+        }
+        if !self.clock.as_ref().is_some_and(|clock| clock.follows_input) {
+            return;
+        }
+        if let Some(clock) = &mut self.clock {
+            clock.next_pulse = Instant::now();
+        }
+        self.pulse();
+    }
+
+    /// The first row of the song.
+    fn song_start(&self) -> Position {
+        return Position {
+            sequence_index: 0,
+            repeat: 0,
+            pattern: self
+                .sequence
+                .first()
+                .map_or(PatternId(0), |row| row.pattern_id),
+            row: 0,
+        };
+    }
+
+    /// Plays the song from the top on loop, for the clock input's Start.
+    fn start_cued(&mut self) {
+        self.position = self.song_start();
+        self.start(PlayMode::SongLoop, Message::Start, true, 0);
+    }
+
+    /// Picks up where the clock input stopped, or where its song position pointed.
+    fn continue_cued(&mut self) {
+        let Some((position, tick)) = self.resume.take() else {
+            return self.start_cued();
+        };
+        self.position = position;
+        self.start(PlayMode::SongLoop, Message::Continue, true, tick);
+    }
+
+    /// Sets where the clock input's Continue picks up, from a song position pointer.
+    fn song_position(&mut self, sixteenths: u16) {
+        let pulses = sixteenths as usize * (PULSES_PER_QUARTER / 4) as usize;
+        self.resume = self.song_position_at(pulses);
+    }
+
+    /// The row and tick `pulses` pulses into the song, at the song's speed.
+    fn song_position_at(&self, pulses: usize) -> Option<(Position, u32)> {
+        let speed = self.speed.max(1) as usize;
+        let row_count = |id: PatternId| {
+            self.patterns
+                .get(id.0 as usize)
+                .map_or(0, |p| p.row_count as usize)
+        };
+        let total: usize = self
+            .sequence
+            .iter()
+            .map(|row| row_count(row.pattern_id) * row.repeats as usize)
+            .sum();
+        if total == 0 {
+            return None;
+        }
+        let mut remaining = pulses / speed % total;
+        for (sequence_index, sequence_row) in self.sequence.iter().enumerate() {
+            let count = row_count(sequence_row.pattern_id);
+            for repeat in 0..sequence_row.repeats {
+                if remaining < count {
+                    let position = Position {
+                        sequence_index,
+                        repeat,
+                        pattern: sequence_row.pattern_id,
+                        row: remaining,
+                    };
+                    return Some((position, (pulses % speed) as u32));
+                }
+                remaining -= count;
+            }
+        }
+        return None;
     }
 
     /// Plays a single pattern from row 0, once or on repeat.
     fn play_pattern(&mut self, id: PatternId, looping: bool) {
-        self.position = Position {
+        let position = Position {
             sequence_index: 0,
             repeat: 0,
             pattern: id,
             row: 0,
         };
-        self.start(if looping {
+        let mode = if looping {
             PlayMode::PatternLoop
         } else {
             PlayMode::Pattern
-        });
+        };
+        self.play_from(mode, position);
     }
 
     /// Plays the sequence starting at the given index.
@@ -274,56 +499,124 @@ impl MtrakEngine {
         let Some(sequence_row) = self.sequence.get(sequence_index) else {
             return;
         };
-        self.position = Position {
+        let position = Position {
             sequence_index,
             repeat: 0,
             pattern: sequence_row.pattern_id,
             row: 0,
         };
-        self.start(if looping {
+        let mode = if looping {
             PlayMode::SongLoop
         } else {
             PlayMode::Song
-        });
+        };
+        self.play_from(mode, position);
     }
 
-    /// Resets voices and the clock, then plays the first row.
-    fn start(&mut self, mode: PlayMode) {
+    /// Carries on in pattern `id` from the next row.
+    fn switch_pattern(&mut self, id: PatternId) {
+        if self.clock.is_none() || !matches!(self.mode, PlayMode::PatternLoop | PlayMode::Pattern) {
+            return;
+        }
+        let rows = self
+            .patterns
+            .get(id.0 as usize)
+            .map_or(0, |p| p.row_count as usize);
+        if rows == 0 {
+            return;
+        }
+        self.pending_jump = Some(Position {
+            sequence_index: 0,
+            repeat: 0,
+            pattern: id,
+            row: (self.position.row + 1) % rows,
+        });
+        self.reschedule_early_notes();
+        self.status.set_position(
+            self.position.sequence_index,
+            id.0 as usize,
+            self.position.row.min(rows - 1),
+        );
+    }
+
+    /// Jumps to the start of sequence position `sequence_index` on the next row.
+    fn jump_to_sequence(&mut self, sequence_index: usize) {
+        if self.clock.is_none() || !matches!(self.mode, PlayMode::SongLoop | PlayMode::Song) {
+            return;
+        }
+        let Some(sequence_row) = self.sequence.get(sequence_index) else {
+            return;
+        };
+        let position = Position {
+            sequence_index,
+            repeat: 0,
+            pattern: sequence_row.pattern_id,
+            row: 0,
+        };
+        self.pending_jump = Some(position);
+        self.reschedule_early_notes();
+        self.status
+            .set_position(sequence_index, position.pattern.0 as usize, 0);
+    }
+
+    /// Replans the early notes for the row a jump goes to.
+    fn reschedule_early_notes(&mut self) {
+        self.early_notes = [None; TRACK_COUNT as usize];
+        self.schedule_early_notes();
+    }
+
+    /// Resets voices and the clock, then plays the row, starting `tick` into it.
+    fn start(&mut self, mode: PlayMode, transport: Message, follows_input: bool, tick: u32) {
         if self.current_pattern().is_none() {
             self.stop();
             return;
         }
+        self.pending_jump = None;
         let mut out = vec![];
         self.voices.release_all(&mut out);
         out.extend(self.reset_commands());
         self.dispatch_messages(out);
         let now = Instant::now();
         self.clock = Some(Clock {
+            follows_input,
             next_pulse: now,
-            pulse_in_row: 0,
-            row_start: now,
-            tick: 0,
+            tick,
         });
         self.mode = mode;
         self.status.set_play_mode(mode);
         self.publish_position();
-        self.dispatch(MidiEvent::Message(Message::Start));
+        self.dispatch(MidiEvent::Message(transport));
         self.send_clock();
-        self.play_row();
+        if tick == 0 {
+            self.play_row();
+        }
         self.time_next_pulse(now);
     }
 
-    /// Schedules the first pulse after a row starts, so a tempo command on the row applies
-    /// straight away.
-    fn time_next_pulse(&mut self, row_start: Instant) {
+    /// Schedules the pulse after `pulse_time`, at the current tempo.
+    fn time_next_pulse(&mut self, pulse_time: Instant) {
         let pulse_duration = self.pulse_duration();
         if let Some(clock) = &mut self.clock {
-            clock.next_pulse = row_start + pulse_duration;
+            clock.next_pulse = pulse_time + pulse_duration;
         }
     }
 
     /// Stops playback and releases every sounding note.
     fn stop(&mut self) {
+        self.pending_jump = None;
+        // resume on the next tick, so a Continue stays in step with the master
+        if let Some(clock) = &self.clock {
+            let next_tick = clock.tick + 1;
+            self.resume = match self.mode {
+                PlayMode::Song | PlayMode::SongLoop if next_tick < self.ticks_per_line() as u32 => {
+                    Some((self.position, next_tick))
+                }
+                PlayMode::Song | PlayMode::SongLoop => self
+                    .next_position(&self.position)
+                    .map(|position| (position, 0)),
+                _ => None,
+            };
+        }
         self.clock = None;
         self.mode = PlayMode::Paused;
         self.status.set_play_mode(PlayMode::Paused);
@@ -335,78 +628,84 @@ impl MtrakEngine {
         self.dispatch(MidiEvent::Aggregate(events));
     }
 
-    /// When the engine next needs to wake up, either for a pulse or an effect tick.
-    fn next_deadline(&self) -> Option<Instant> {
-        let next_pulse = self.clock.as_ref()?.next_pulse;
-        return Some(match self.next_effect_tick() {
-            Some(tick) => tick.min(next_pulse),
-            None => next_pulse,
-        });
-    }
-
-    /// When the next effect tick within the current row is due, if any are left.
-    fn next_effect_tick(&self) -> Option<Instant> {
-        let clock = self.clock.as_ref()?;
-        let pattern = self.current_pattern()?;
-        let ticks_per_line = self.ticks_per_line(pattern);
-        let next = clock.tick + 1;
-        if next >= ticks_per_line as u32 {
-            return None;
+    /// Stops playback and silences and resets every channel.
+    fn panic(&mut self) {
+        if self.clock.is_some() {
+            self.stop();
         }
-        return Some(clock.row_start + tick_duration(self.bpm(), ticks_per_line) * next);
+        let mut out = vec![];
+        self.voices.release_all(&mut out);
+        out.extend(self.reset_commands());
+        for channel in 0..=MIDI_CHANNEL_MAX {
+            let channel = Channel::from_u8(channel).unwrap();
+            out.push(Message::AllNotesOff(channel));
+            out.push(Message::AllSoundOff(channel));
+            out.push(Message::ResetAllControllers(channel));
+        }
+        self.dispatch_messages(out);
     }
 
-    /// Catches up on every pulse and effect tick that is due by now.
+    /// When the engine's own timer next needs to wake up for a pulse.
+    fn next_deadline(&self) -> Option<Instant> {
+        let clock = self.clock.as_ref()?;
+        if clock.follows_input {
+            return self.clock_dropout_deadline();
+        }
+        return Some(clock.next_pulse);
+    }
+
+    /// When following the clock input stops, if no pulse arrives before then.
+    fn clock_dropout_deadline(&self) -> Option<Instant> {
+        let timeout = (self.external_period * PULSES_PER_QUARTER * 2).max(CLOCK_DROPOUT_MIN);
+        return Some(self.last_external_pulse_at? + timeout);
+    }
+
+    /// Catches up on every pulse that is due by now.
     fn advance_clock(&mut self) {
         let now = Instant::now();
-        loop {
-            let Some(clock) = &self.clock else {
-                return;
-            };
-            let next_pulse = clock.next_pulse;
-            match self.next_effect_tick() {
-                Some(tick) if tick <= next_pulse && tick <= now => {
-                    if let Some(clock) = &mut self.clock {
-                        clock.tick += 1;
-                    }
-                    self.effect_tick();
-                }
-                _ if next_pulse <= now => self.pulse(),
-                _ => return,
-            }
+        if self.clock.as_ref().is_some_and(|clock| clock.follows_input)
+            && self
+                .clock_dropout_deadline()
+                .is_some_and(|deadline| deadline <= now)
+        {
+            self.stop();
+            return;
+        }
+        while self
+            .clock
+            .as_ref()
+            .is_some_and(|clock| !clock.follows_input && clock.next_pulse <= now)
+        {
+            self.pulse();
         }
     }
 
-    /// One MIDI clock pulse; moves to the next row every PULSES_PER_LINE pulses.
+    /// One MIDI clock pulse, which is one tick of the row.
     fn pulse(&mut self) {
         if self.current_pattern().is_none() {
             self.stop();
             return;
         }
-        let pulse_duration = self.pulse_duration();
+        let ticks_per_line = self.ticks_per_line();
         let Some(clock) = &mut self.clock else {
             return;
         };
         let pulse_time = clock.next_pulse;
-        clock.next_pulse += pulse_duration;
-        clock.pulse_in_row += 1;
-        let row_done = clock.pulse_in_row >= PULSES_PER_LINE;
+        clock.tick += 1;
+        let row_done = clock.tick >= ticks_per_line as u32;
+        if row_done {
+            clock.tick = 0;
+        }
         self.send_clock();
-        if !row_done {
-            return;
+        if row_done {
+            self.advance_row();
+            if self.clock.is_some() {
+                self.play_row();
+            }
+        } else {
+            self.effect_tick();
         }
-        let Some(clock) = &mut self.clock else {
-            return;
-        };
-        clock.pulse_in_row = 0;
-        clock.row_start = pulse_time;
-        clock.tick = 0;
-
-        self.advance_row();
-        if self.clock.is_some() {
-            self.play_row();
-            self.time_next_pulse(pulse_time);
-        }
+        self.time_next_pulse(pulse_time);
     }
 
     fn send_clock(&mut self) {
@@ -417,12 +716,19 @@ impl MtrakEngine {
 
     /// Moves the position forward a row, stopping when the song ends.
     fn advance_row(&mut self) {
-        match self.next_position(&self.position) {
+        let next = self
+            .pending_jump
+            .take()
+            .or_else(|| self.next_position(&self.position));
+        match next {
             Some(position) => {
                 self.position = position;
                 self.publish_position();
             }
-            None => self.stop(),
+            None => {
+                self.stop();
+                self.resume = None;
+            }
         }
     }
 
@@ -487,10 +793,12 @@ impl MtrakEngine {
     fn find_slide_target(&self, track: usize, stop_at_set_cc: bool) -> Option<SlideTarget> {
         let mut position = self.position;
         let mut ticks = 0;
-        for _ in 0..self.rows_per_pass() {
-            let pattern = self.patterns.get(position.pattern.0 as usize)?;
-            ticks += self.ticks_per_line(pattern) as u32;
-            position = self.next_position(&position)?;
+        for step in 0..self.rows_per_pass() {
+            ticks += self.ticks_per_line() as u32;
+            position = match self.pending_jump {
+                Some(jump) if step == 0 => jump,
+                _ => self.next_position(&position)?,
+            };
             let note = self
                 .patterns
                 .get(position.pattern.0 as usize)?
@@ -526,6 +834,9 @@ impl MtrakEngine {
         self.scheduled_notes = [None; TRACK_COUNT as usize];
         self.early_notes = [None; TRACK_COUNT as usize];
         self.started_early = [None; TRACK_COUNT as usize];
+        self.last_notes = [None; TRACK_COUNT as usize];
+        self.retrig_counters = [0; TRACK_COUNT as usize];
+        self.retrig_memory = [(0, 0); TRACK_COUNT as usize];
         let mut events = vec![];
         self.midi_command_handler.reset(&mut events);
         self.effect_command_handler.reset();
@@ -608,6 +919,31 @@ impl MtrakEngine {
                     self.play_note(track, note, Some(overlap), &mutes, &mut out)
                 }
                 NoteAction::Skip => {}
+                NoteAction::RetrigNote(every) => {
+                    // like FT2's E9x, without a note it repeats the track's last one
+                    let repeated = match note.kind {
+                        NoteKind::Empty => self.last_notes[track],
+                        _ => {
+                            self.play_note(track, note, None, &mutes, &mut out);
+                            Some(*note)
+                        }
+                    };
+                    match repeated {
+                        Some(last) if every == 0 && matches!(note.kind, NoteKind::Empty) => {
+                            self.play_note(track, &last, None, &mutes, &mut out)
+                        }
+                        Some(repeated) if every > 0 => {
+                            self.scheduled_notes[track] = Some(ScheduledNote {
+                                tick: every as u32,
+                                kind: Scheduled::Repeat {
+                                    note: repeated,
+                                    every: every as u32,
+                                },
+                            });
+                        }
+                        _ => {}
+                    }
+                }
                 NoteAction::Cut(0) => self.voices.cut(track, &mut out),
                 NoteAction::Cut(tick) => {
                     self.play_note(track, note, None, &mutes, &mut out);
@@ -622,16 +958,38 @@ impl MtrakEngine {
                         kind: Scheduled::Once(*note),
                     });
                 }
-                NoteAction::Roll { every, volume } => {
-                    self.play_note(track, note, None, &mutes, &mut out);
-                    self.scheduled_notes[track] = Some(ScheduledNote {
-                        tick: every as u32,
-                        kind: Scheduled::Roll {
-                            note: *note,
-                            every: every as u32,
-                            volume,
-                        },
-                    });
+                NoteAction::Retrig { every, volume } => {
+                    let memory = &mut self.retrig_memory[track];
+                    if every != 0 {
+                        memory.0 = every;
+                    }
+                    if volume != 0 {
+                        memory.1 = volume;
+                    }
+                    let (every, volume) = *memory;
+                    // like FT2, a retrig without a note repeats the track's last one
+                    let retriggered = match note.kind {
+                        NoteKind::Empty => self.last_notes[track],
+                        _ => {
+                            self.play_note(track, note, None, &mutes, &mut out);
+                            Some(*note)
+                        }
+                    };
+                    if let Some(retriggered) = retriggered {
+                        self.scheduled_notes[track] = Some(ScheduledNote {
+                            tick: 0,
+                            kind: Scheduled::Retrig {
+                                note: retriggered,
+                                every: every as u32,
+                                volume,
+                                fixed: note.velocity,
+                            },
+                        });
+                        // FT2 counts the row start too, unless the row sets a volume
+                        if note.velocity.is_none() {
+                            self.count_retrig_tick(track, &mutes, &mut out);
+                        }
+                    }
                 }
             }
         }
@@ -653,6 +1011,8 @@ impl MtrakEngine {
             NoteKind::Empty => {}
             NoteKind::Off => self.voices.release(track, out),
             NoteKind::On(pitch) => {
+                self.last_notes[track] = Some(*note);
+                self.retrig_counters[track] = 0;
                 let channel = note.instrument_id.unwrap_or(0).min(MIDI_CHANNEL_MAX);
                 match velocity(note.velocity, self.midi_command_handler.velocity(track)) {
                     Some(velocity) if !mutes[channel as usize] => match legato {
@@ -675,13 +1035,11 @@ impl MtrakEngine {
     /// Looks at the next row for notes that start early, and schedules them into the end of
     /// this row.
     fn schedule_early_notes(&mut self) {
-        let Some(ticks) = self
-            .current_pattern()
-            .map(|p| self.ticks_per_line(p) as u32)
+        let ticks = self.ticks_per_line() as u32;
+        let Some(next) = self
+            .pending_jump
+            .or_else(|| self.next_position(&self.position))
         else {
-            return;
-        };
-        let Some(next) = self.next_position(&self.position) else {
             return;
         };
         let Some(pattern) = self.patterns.get(next.pattern.0 as usize) else {
@@ -732,7 +1090,7 @@ impl MtrakEngine {
         }
     }
 
-    /// Runs the track's delayed note, roll hit or cut if it is due on `tick`.
+    /// Runs the track's delayed note, retrig hit or cut if it is due on `tick`.
     fn play_scheduled_note(
         &mut self,
         track: usize,
@@ -743,34 +1101,66 @@ impl MtrakEngine {
         let Some(scheduled) = self.scheduled_notes[track] else {
             return;
         };
+        if let Scheduled::Retrig { .. } = scheduled.kind {
+            self.count_retrig_tick(track, mutes, out);
+            return;
+        }
         if scheduled.tick != tick {
             return;
         }
         self.scheduled_notes[track] = None;
         match scheduled.kind {
             Scheduled::Once(note) => self.play_note(track, &note, None, mutes, out),
-            Scheduled::Roll {
-                mut note,
-                every,
-                volume,
-            } => {
-                // 0 and 8 leave the velocity alone, so a velocity slide still sets it per hit
-                if !matches!(volume, 0x0 | 0x8) {
-                    let previous = self.note_velocity(track, &note);
-                    note.velocity = Some(roll_velocity(previous, volume));
-                }
+            Scheduled::Repeat { note, every } => {
                 self.scheduled_notes[track] = Some(ScheduledNote {
                     tick: tick + every,
-                    kind: Scheduled::Roll {
-                        note,
-                        every,
-                        volume,
-                    },
+                    kind: Scheduled::Repeat { note, every },
                 });
                 self.play_note(track, &note, None, mutes, out);
             }
+            Scheduled::Retrig { .. } => {}
             Scheduled::Cut => self.voices.cut(track, out),
         }
+    }
+
+    /// Counts a tick towards the track's retrig, replaying its note once the interval is up.
+    fn count_retrig_tick(&mut self, track: usize, mutes: &[bool; 16], out: &mut Vec<Message>) {
+        let Some(ScheduledNote {
+            kind:
+                Scheduled::Retrig {
+                    mut note,
+                    every,
+                    volume,
+                    fixed,
+                },
+            ..
+        }) = self.scheduled_notes[track]
+        else {
+            return;
+        };
+        // as in FT2, an interval of 0 repeats on every tick
+        let count = self.retrig_counters[track] + 1;
+        if count < every {
+            self.retrig_counters[track] = count;
+            return;
+        }
+        // as in FT2 the row's volume wins; 0 and 8 leave a velocity slide in charge
+        if fixed.is_some() {
+            note.velocity = fixed;
+        } else if !matches!(volume, 0x0 | 0x8) {
+            let previous = self.note_velocity(track, &note);
+            note.velocity = Some(retrig_velocity(previous, volume));
+        }
+        self.scheduled_notes[track] = Some(ScheduledNote {
+            tick: 0,
+            kind: Scheduled::Retrig {
+                note,
+                every,
+                volume,
+                fixed,
+            },
+        });
+        self.play_note(track, &note, None, mutes, out);
     }
 
     /// Cuts notes on channels muted in the current pattern.
@@ -921,15 +1311,11 @@ mod tests {
             self.engine.effect_tick();
         }
 
-        /// Runs the rest of the row's effect ticks, then pulses the clock until the next row has played.
+        /// Pulses the clock through the rest of the row's ticks until the next row has played.
         fn next_row(&mut self) {
-            let ticks = self
-                .engine
-                .ticks_per_line(self.engine.current_pattern().unwrap());
-            for _ in 1..ticks {
-                self.effect_tick();
-            }
-            for _ in 0..PULSES_PER_LINE {
+            let ticks = self.engine.ticks_per_line();
+            let tick = self.engine.clock.as_ref().unwrap().tick;
+            for _ in tick..ticks as u32 {
                 self.engine.pulse();
             }
         }
@@ -1009,7 +1395,7 @@ mod tests {
             .into_iter()
             .filter(|m| *m == Message::TimingClock)
             .count();
-        assert_eq!(clocks, PULSES_PER_LINE as usize);
+        assert_eq!(clocks, 6);
     }
 
     #[test]
@@ -1847,15 +2233,23 @@ mod tests {
         return note;
     }
 
-    fn delayed(mut cell: Note, ticks: u8) -> Note {
-        cell.command = Command::new(CommandKind::Effect(EffectCommand::Delay), ticks);
+    fn extended(mut cell: Note, value: u8) -> Note {
+        cell.command = Command::new(CommandKind::Effect(EffectCommand::Extended), value);
         return cell;
+    }
+
+    fn delayed(cell: Note, value: u8) -> Note {
+        return extended(cell, value);
+    }
+
+    fn cut(cell: Note, value: u8) -> Note {
+        return extended(cell, value);
     }
 
     #[test]
     fn delayed_note_plays_on_its_tick() {
         let mut harness =
-            Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0x12))])]);
+            Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0xD2))])]);
         harness
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
@@ -1875,7 +2269,7 @@ mod tests {
             2,
             &[
                 (0, 0, note("C-4 0 40")),
-                (1, 0, delayed(note("D-4 0 40"), 0x13)),
+                (1, 0, delayed(note("D-4 0 40"), 0xD3)),
             ],
         )]);
         harness
@@ -1900,7 +2294,7 @@ mod tests {
     fn delayed_note_off_releases_on_its_tick() {
         let mut harness = Harness::new(vec![pattern(
             2,
-            &[(0, 0, note("C-4 0 40")), (1, 0, delayed(note("==="), 0x11))],
+            &[(0, 0, note("C-4 0 40")), (1, 0, delayed(note("==="), 0xD1))],
         )]);
         harness
             .engine
@@ -1917,7 +2311,7 @@ mod tests {
     #[test]
     fn delay_longer_than_the_row_never_plays() {
         let mut harness =
-            Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0x16))])]);
+            Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0xD6))])]);
         harness
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
@@ -1929,7 +2323,7 @@ mod tests {
     #[test]
     fn late_delay_10_plays_straight_away() {
         let mut harness =
-            Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0x10))])]);
+            Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0xD0))])]);
         harness
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
@@ -1939,16 +2333,14 @@ mod tests {
         );
     }
 
-    fn rolled(mut cell: Note, every: u8) -> Note {
-        cell.command = Command::new(CommandKind::Effect(EffectCommand::Roll), every);
+    fn retriggered(mut cell: Note, every: u8) -> Note {
+        cell.command = Command::new(CommandKind::Effect(EffectCommand::Retrig), every);
         return cell;
     }
 
     /// The ticks of the current row that send a note on, starting with the row itself.
     fn note_on_ticks(harness: &mut Harness) -> Vec<u32> {
-        let ticks = harness
-            .engine
-            .ticks_per_line(harness.engine.current_pattern().unwrap());
+        let ticks = harness.engine.ticks_per_line();
         let mut played = vec![];
         for tick in 0..ticks as u32 {
             if tick > 0 {
@@ -1962,15 +2354,17 @@ mod tests {
     }
 
     #[test]
-    fn roll_plays_on_the_row_then_every_interval() {
+    fn retrig_plays_on_the_row_then_every_interval() {
         for (every, expected) in [
             (1, vec![0, 1, 2, 3, 4, 5]),
             (2, vec![0, 2, 4]),
             (3, vec![0, 3]),
             (6, vec![0]),
         ] {
-            let mut harness =
-                Harness::new(vec![pattern(2, &[(0, 0, rolled(note("C-4 0 40"), every))])]);
+            let mut harness = Harness::new(vec![pattern(
+                2,
+                &[(0, 0, retriggered(note("C-4 0 40"), every))],
+            )]);
             harness
                 .engine
                 .apply(EngineCommand::PlayPattern(PatternId(0), true));
@@ -1979,28 +2373,37 @@ mod tests {
     }
 
     #[test]
-    fn roll_changes_the_velocity_of_each_repeat() {
-        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, rolled(note("C-4 0 40"), 0x92))])]);
+    fn retrig_changes_the_velocity_of_each_repeat() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[(0, 0, retriggered(note("C-4 0"), 0x13))],
+        )]);
         harness
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
         harness.next_row();
-        assert_eq!(note_velocities(&harness.messages()), vec![0x40, 0x42, 0x44]);
+        assert_eq!(note_velocities(&harness.messages()), vec![127, 125, 123]);
     }
 
     #[test]
-    fn roll_down_to_silence_stops_sending_notes() {
-        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, rolled(note("C-4 0 04"), 0x52))])]);
+    fn retrig_down_to_silence_stops_sending_notes() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[(0, 0, retriggered(note("C-4 0"), 0x51))],
+        )]);
         harness
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
         harness.next_row();
-        assert_eq!(note_velocities(&harness.messages()), vec![0x04]);
+        assert_eq!(note_velocities(&harness.messages()), vec![127, 95, 63, 31]);
     }
 
     #[test]
-    fn roll_stops_at_the_next_row() {
-        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, rolled(note("C-4 0 40"), 2))])]);
+    fn retrig_stops_at_the_next_row() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[(0, 0, retriggered(note("C-4 0 40"), 2))],
+        )]);
         harness
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
@@ -2010,12 +2413,79 @@ mod tests {
     }
 
     #[test]
-    fn roll_00_plays_once() {
-        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, rolled(note("C-4 0 40"), 0))])]);
+    fn retrig_00_without_an_earlier_retrig_repeats_every_tick() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[(0, 0, retriggered(note("C-4 0 40"), 0))],
+        )]);
         harness
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
-        assert_eq!(note_on_ticks(&mut harness), vec![0]);
+        assert_eq!(note_on_ticks(&mut harness), vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn retrig_zeros_reuse_the_tracks_last_interval_and_velocity_change() {
+        let mut empty = Note::empty();
+        empty.instrument_id = Some(0);
+        let mut harness = Harness::new(vec![pattern(
+            3,
+            &[
+                (
+                    0,
+                    0,
+                    with_command_value(retriggered(note("C-4 0"), 3), 0x33),
+                ),
+                (1, 0, with_command_value(retriggered(empty, 0), 0x00)),
+                (2, 0, with_command_value(retriggered(empty, 0), 0x12)),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+        let mut velocities = note_velocities(&harness.messages());
+        for _ in 0..3 {
+            harness.next_row();
+            velocities.extend(note_velocities(&harness.messages()));
+        }
+        // R33: every 3 ticks counting the row start, -8; R00: the same; R12: every 2, -2
+        assert_eq!(velocities, vec![127, 119, 111, 103, 95, 93, 91, 89]);
+    }
+
+    #[test]
+    fn retrig_with_a_volume_plays_every_hit_at_that_volume() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[(0, 0, retriggered(note("C-4 0 40"), 0x92))],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.next_row();
+        assert_eq!(note_velocities(&harness.messages()), vec![0x40, 0x40, 0x40]);
+    }
+
+    #[test]
+    fn retrigs_like_the_reported_pattern_repeat_the_note() {
+        let mut empty = Note::empty();
+        empty.instrument_id = Some(2);
+        let retrig = with_command_value(retriggered(empty, 0), 0xA0);
+        let mut harness = Harness::new(vec![pattern(
+            5,
+            &[
+                (0, 0, note("C-5 2 01")),
+                (1, 0, retrig),
+                (2, 0, retrig),
+                (3, 0, retrig),
+                (4, 0, retrig),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+        harness.messages();
+        harness.next_row();
+        assert_eq!(note_on_ticks(&mut harness), vec![0, 1, 2, 3, 4, 5]);
     }
 
     fn legato(mut cell: Note, value: u8) -> Note {
@@ -2099,9 +2569,7 @@ mod tests {
             ]
         );
         harness.effect_tick();
-        for _ in 0..PULSES_PER_LINE {
-            harness.engine.pulse();
-        }
+        harness.next_row();
         assert!(note_velocities(&harness.messages()).is_empty());
     }
 
@@ -2133,7 +2601,7 @@ mod tests {
 
     #[test]
     fn cut_releases_the_note_on_its_tick() {
-        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, legato(note("C-4 0 40"), 0x33))])]);
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, cut(note("C-4 0 40"), 0xC3))])]);
         harness
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
@@ -2153,7 +2621,7 @@ mod tests {
 
     #[test]
     fn cut_without_a_note_cuts_the_playing_note() {
-        let cut = legato(Note::empty(), 0x31);
+        let cut = cut(Note::empty(), 0xC1);
         let mut harness = Harness::new(vec![pattern(2, &[(0, 0, note("C-4 0 40")), (1, 0, cut)])]);
         harness
             .engine
@@ -2173,7 +2641,7 @@ mod tests {
             2,
             &[
                 (0, 0, note("C-4 0 40")),
-                (1, 0, legato(note("D-4 0 40"), 0x30)),
+                (1, 0, cut(note("D-4 0 40"), 0xC0)),
             ],
         )]);
         harness
@@ -2189,7 +2657,7 @@ mod tests {
 
     #[test]
     fn cut_past_the_end_of_the_row_never_happens() {
-        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, legato(note("C-4 0 40"), 0x36))])]);
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, cut(note("C-4 0 40"), 0xC6))])]);
         harness
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
@@ -2206,7 +2674,7 @@ mod tests {
             2,
             &[
                 (0, 0, note("C-4 0 40")),
-                (1, 0, delayed(note("D-4 0 40"), 0x02)),
+                (1, 0, delayed(note("D-4 0 40"), 0x82)),
             ],
         )]);
         harness
@@ -2226,9 +2694,7 @@ mod tests {
             ]
         );
         harness.effect_tick();
-        for _ in 0..PULSES_PER_LINE {
-            harness.engine.pulse();
-        }
+        harness.next_row();
         assert!(note_velocities(&harness.messages()).is_empty());
     }
 
@@ -2239,7 +2705,7 @@ mod tests {
             &[
                 (0, 0, note("C-4 0 40")),
                 (1, 0, legato(note("D-4 0 40"), 0x1F)),
-                (2, 0, legato(Note::empty(), 0x30)),
+                (2, 0, cut(Note::empty(), 0xC0)),
             ],
         )]);
         harness
@@ -2258,7 +2724,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(
             2,
             &[
-                (0, 0, delayed(note("C-4 0 40"), 0x13)),
+                (0, 0, delayed(note("C-4 0 40"), 0xD3)),
                 (1, 0, legato(note("D-4 0 40"), 0x02)),
             ],
         )]);
@@ -2280,11 +2746,11 @@ mod tests {
     }
 
     #[test]
-    fn early_note_drops_the_rest_of_a_roll() {
+    fn early_note_drops_the_rest_of_a_retrig() {
         let mut harness = Harness::new(vec![pattern(
             2,
             &[
-                (0, 0, rolled(note("C-4 0 40"), 0x01)),
+                (0, 0, retriggered(note("C-4 0 40"), 0x01)),
                 (1, 0, legato(note("D-4 0 40"), 0x02)),
             ],
         )]);
@@ -2308,7 +2774,7 @@ mod tests {
 
     #[test]
     fn early_note_uses_the_mutes_of_its_own_pattern() {
-        let mut muted = pattern(1, &[(0, 0, delayed(note("D-4 0 40"), 0x02))]);
+        let mut muted = pattern(1, &[(0, 0, delayed(note("D-4 0 40"), 0x82))]);
         muted.channel_mutes[0] = true;
         let mut harness = Harness::new(vec![pattern(1, &[(0, 0, note("C-4 0 40"))]), muted]);
         harness.engine.apply(EngineCommand::SetSequence(vec![
@@ -2335,7 +2801,7 @@ mod tests {
             2,
             &[
                 (0, 0, note("C-4 0 40")),
-                (1, 0, delayed(note("D-4 0 40"), 0x02)),
+                (1, 0, delayed(note("D-4 0 40"), 0x82)),
             ],
         )]);
         harness
@@ -2349,9 +2815,7 @@ mod tests {
             pattern(2, &[(0, 0, note("C-4 0 40")), (1, 0, note("E-4 0 40"))]),
         ));
         harness.messages();
-        for _ in 0..PULSES_PER_LINE {
-            harness.engine.pulse();
-        }
+        harness.next_row();
         assert!(
             harness
                 .messages()
@@ -2362,7 +2826,7 @@ mod tests {
     #[test]
     fn stopping_drops_a_pending_delayed_note() {
         let mut harness =
-            Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0x12))])]);
+            Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0xD2))])]);
         harness
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
@@ -2392,10 +2856,10 @@ mod tests {
         harness.next_row();
         assert_eq!(harness.engine.position.pattern.0, 1);
         assert_eq!(harness.engine.bpm(), 0x90);
-        assert_eq!(harness.engine.ticks_per_line(&Pattern::new(1)), 3);
+        assert_eq!(harness.engine.ticks_per_line(), 3);
         harness.next_row();
         assert_eq!(harness.engine.bpm(), 0x60);
-        assert_eq!(harness.engine.ticks_per_line(&Pattern::new(1)), 6);
+        assert_eq!(harness.engine.ticks_per_line(), 6);
     }
 
     #[test]
@@ -2404,8 +2868,10 @@ mod tests {
         harness
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        let next_pulse = harness.engine.clock.as_ref().unwrap().next_pulse;
+        harness.engine.pulse();
         let clock = harness.engine.clock.as_ref().unwrap();
-        assert_eq!(clock.next_pulse - clock.row_start, pulse_duration(0xFA));
+        assert_eq!(clock.next_pulse - next_pulse, pulse_duration(0xFA));
     }
 
     #[test]
@@ -2431,5 +2897,658 @@ mod tests {
         assert_eq!(velocity(Some(0x10), Some(0x60)), Some(0x10));
         assert_eq!(velocity(None, Some(0x60)), Some(0x60));
         assert_eq!(velocity(None, Some(0)), None);
+    }
+    /// A harness following the clock input, with a song playing each pattern once.
+    fn synced(patterns: Vec<Pattern>) -> Harness {
+        let sequence = (0..patterns.len())
+            .map(|id| SequenceRow {
+                pattern_id: PatternId(id as u8),
+                repeats: 1,
+            })
+            .collect();
+        let mut harness = Harness::new(patterns);
+        harness.engine.apply(EngineCommand::SetSequence(sequence));
+        harness
+            .engine
+            .apply(EngineCommand::SetClockSource(ClockSource::External));
+        return harness;
+    }
+
+    /// Sends `count` clock input pulses, 20ms apart, after `from` microseconds.
+    fn external_pulses(harness: &mut Harness, from: u64, count: u64) {
+        for i in 0..count {
+            harness
+                .engine
+                .apply(EngineCommand::ExternalClock(from + i * 20_000));
+        }
+    }
+
+    #[test]
+    fn synced_start_waits_for_its_first_pulse() {
+        let mut harness = synced(vec![pattern(2, &[(0, 0, note("C-4 0 40"))])]);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        assert!(harness.messages().is_empty());
+        external_pulses(&mut harness, 0, 1);
+        assert_eq!(
+            harness.messages(),
+            vec![Message::Start, Message::NoteOn(Channel::Ch1, 60, 0x40)]
+        );
+    }
+
+    #[test]
+    fn synced_rows_follow_the_clock_input() {
+        let mut harness = synced(vec![pattern(2, &[(1, 0, note("D-4 0 40"))])]);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        external_pulses(&mut harness, 0, 6);
+        harness.messages();
+        assert_eq!(harness.engine.position.row, 0);
+        external_pulses(&mut harness, 120_000, 1);
+        assert_eq!(harness.engine.position.row, 1);
+        assert_eq!(
+            harness.messages(),
+            vec![Message::NoteOn(Channel::Ch1, 62, 0x40)]
+        );
+    }
+
+    #[test]
+    fn synced_row_runs_its_effect_ticks_before_the_next_row() {
+        let mut harness = synced(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0xD2))])]);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        external_pulses(&mut harness, 0, 6 + 1);
+        assert!(
+            harness
+                .messages()
+                .contains(&Message::NoteOn(Channel::Ch1, 60, 0x40))
+        );
+    }
+
+    #[test]
+    fn synced_continue_picks_up_on_the_next_tick() {
+        let mut harness = synced(vec![pattern(4, &[(2, 0, note("E-4 0 40"))])]);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        // stops on tick 1 of row 1
+        external_pulses(&mut harness, 0, 6 + 2);
+        harness.engine.apply(EngineCommand::ExternalStop);
+        assert_eq!(harness.engine.mode, PlayMode::Paused);
+        harness.messages();
+        harness.engine.apply(EngineCommand::ExternalContinue);
+        external_pulses(&mut harness, 1_000_000, 1);
+        let messages = harness.messages();
+        assert_eq!(messages[0], Message::Continue);
+        assert_eq!(harness.engine.position.row, 1);
+        assert_eq!(harness.engine.clock.as_ref().unwrap().tick, 2);
+        external_pulses(&mut harness, 1_020_000, 4);
+        assert_eq!(harness.engine.position.row, 2);
+        assert!(
+            harness
+                .messages()
+                .contains(&Message::NoteOn(Channel::Ch1, 64, 0x40))
+        );
+    }
+
+    #[test]
+    fn switching_pattern_replaces_the_early_notes_of_the_old_next_row() {
+        let mut harness = Harness::new(vec![
+            pattern(2, &[(1, 0, delayed(note("C-4 0 40"), 0x82))]),
+            pattern(2, &[]),
+        ]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness
+            .engine
+            .apply(EngineCommand::SwitchPattern(PatternId(1)));
+        harness.messages();
+        harness.next_row();
+        assert!(note_velocities(&harness.messages()).is_empty());
+    }
+
+    #[test]
+    fn synced_start_plays_the_song_after_a_local_pattern_play() {
+        let mut harness = synced(vec![pattern(1, &[]), pattern(1, &[])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(1), true));
+        harness.engine.apply(EngineCommand::Stop);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        external_pulses(&mut harness, 0, 1);
+        assert_eq!(harness.engine.mode, PlayMode::SongLoop);
+        assert!(harness.engine.position.pattern == PatternId(0));
+        external_pulses(&mut harness, 20_000, 6);
+        assert!(harness.engine.position.pattern == PatternId(1));
+    }
+
+    #[test]
+    fn synced_continue_after_a_local_pattern_play_starts_the_song() {
+        let mut harness = synced(vec![pattern(4, &[]), pattern(4, &[])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(1), true));
+        harness.engine.apply(EngineCommand::Stop);
+        harness.engine.apply(EngineCommand::ExternalContinue);
+        external_pulses(&mut harness, 0, 1);
+        assert_eq!(harness.engine.mode, PlayMode::SongLoop);
+        assert!(harness.engine.position.pattern == PatternId(0));
+        assert_eq!(harness.engine.position.row, 0);
+    }
+
+    #[test]
+    fn synced_pulse_period_follows_the_clock_input() {
+        let mut harness = synced(vec![pattern(2, &[])]);
+        for i in 0..100 {
+            harness
+                .engine
+                .apply(EngineCommand::ExternalClock(i * 10_000));
+        }
+        let period = harness.engine.pulse_duration();
+        assert!(period > Duration::from_micros(9_900) && period < Duration::from_micros(10_100));
+    }
+
+    #[test]
+    fn internal_clock_ignores_the_clock_input() {
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, note("C-4 0 40"))])]);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        external_pulses(&mut harness, 0, 1);
+        assert!(harness.messages().is_empty());
+        assert_eq!(harness.engine.mode, PlayMode::Paused);
+    }
+
+    #[test]
+    fn local_play_while_synced_keeps_the_measured_tempo() {
+        let mut harness = synced(vec![pattern(4, &[])]);
+        for i in 0..100 {
+            harness
+                .engine
+                .apply(EngineCommand::ExternalClock(i * 10_000));
+        }
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        assert_eq!(harness.engine.mode, PlayMode::PatternLoop);
+        assert!(!harness.engine.clock.as_ref().unwrap().follows_input);
+        let period = harness.engine.pulse_duration();
+        assert!(period > Duration::from_micros(9_900) && period < Duration::from_micros(10_100));
+        external_pulses(&mut harness, 2_000_000, 6);
+        assert_eq!(harness.engine.position.row, 0);
+        harness.engine.apply(EngineCommand::ExternalStop);
+        assert_eq!(harness.engine.mode, PlayMode::PatternLoop);
+    }
+
+    #[test]
+    fn switching_to_sync_starts_from_the_song_tempo() {
+        let mut harness = Harness::new(vec![pattern(2, &[])]);
+        harness.engine.apply(EngineCommand::SetBpm(150));
+        harness
+            .engine
+            .apply(EngineCommand::SetClockSource(ClockSource::External));
+        assert_eq!(harness.engine.pulse_duration(), pulse_duration(150));
+        assert_eq!(harness.engine.status.synced_bpm(), 150);
+    }
+
+    #[test]
+    fn synced_bpm_is_measured_from_the_clock_input() {
+        let mut harness = synced(vec![pattern(2, &[])]);
+        for i in 0..100 {
+            harness
+                .engine
+                .apply(EngineCommand::ExternalClock(i * 20_000));
+        }
+        assert_eq!(harness.engine.status.synced_bpm(), 125);
+    }
+
+    #[test]
+    fn song_position_sets_where_continue_plays() {
+        let mut harness = Harness::new(vec![
+            pattern(4, &[]),
+            pattern(4, &[(1, 0, note("G-4 0 40"))]),
+        ]);
+        harness.engine.apply(EngineCommand::SetSequence(vec![
+            SequenceRow {
+                pattern_id: PatternId(0),
+                repeats: 2,
+            },
+            SequenceRow {
+                pattern_id: PatternId(1),
+                repeats: 1,
+            },
+        ]));
+        harness
+            .engine
+            .apply(EngineCommand::SetClockSource(ClockSource::External));
+        harness.engine.apply(EngineCommand::ExternalSongPosition(9));
+        harness.engine.apply(EngineCommand::ExternalContinue);
+        external_pulses(&mut harness, 0, 1);
+        assert_eq!(harness.engine.position.sequence_index, 1);
+        assert_eq!(harness.engine.position.row, 1);
+        assert!(
+            harness
+                .messages()
+                .contains(&Message::NoteOn(Channel::Ch1, 67, 0x40))
+        );
+    }
+
+    #[test]
+    fn song_position_wraps_around_the_song() {
+        let mut harness = synced(vec![pattern(4, &[]), pattern(2, &[])]);
+        harness.engine.apply(EngineCommand::ExternalSongPosition(8));
+        harness.engine.apply(EngineCommand::ExternalContinue);
+        external_pulses(&mut harness, 0, 1);
+        assert_eq!(harness.engine.mode, PlayMode::SongLoop);
+        assert!(harness.engine.position.pattern == PatternId(0));
+        assert_eq!(harness.engine.position.row, 2);
+    }
+
+    #[test]
+    fn synced_bpm_holds_steady_through_jitter() {
+        let mut harness = synced(vec![pattern(2, &[])]);
+        let mut shown = Vec::new();
+        for i in 0..200u64 {
+            let jitter = [0, 1_000, 0, 0, 1_000, 0, 0, 0][i as usize % 8];
+            harness
+                .engine
+                .apply(EngineCommand::ExternalClock(i * 20_833 + jitter));
+            if i > PULSES_PER_QUARTER as u64 {
+                shown.push(harness.engine.status.synced_bpm());
+            }
+        }
+        assert!(shown.iter().all(|&bpm| bpm == 120));
+    }
+
+    #[test]
+    fn reconnecting_the_clock_input_restarts_the_measurement() {
+        let mut harness = synced(vec![pattern(2, &[])]);
+        external_pulses(&mut harness, 5_000_000, 30);
+        external_pulses(&mut harness, 0, 30);
+        assert_eq!(
+            harness.engine.pulse_duration(),
+            Duration::from_micros(20_000)
+        );
+    }
+
+    fn with_speed(mut harness: Harness, speed: u8) -> Harness {
+        harness.engine.apply(EngineCommand::SetSpeed(speed));
+        return harness;
+    }
+
+    /// How many pulses it takes to get from the first row to row `rows`.
+    fn pulses_to_row(harness: &mut Harness, rows: usize) -> usize {
+        let mut pulses = 0;
+        while harness.engine.position.row != rows {
+            harness.engine.pulse();
+            pulses += 1;
+        }
+        return pulses;
+    }
+
+    #[test]
+    fn speed_sets_how_many_pulses_a_row_lasts() {
+        let mut harness = with_speed(Harness::new(vec![pattern(8, &[])]), 3);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        assert_eq!(pulses_to_row(&mut harness, 4), 12);
+    }
+
+    #[test]
+    fn speed_command_doubles_the_rows_per_beat() {
+        let mut harness = Harness::new(vec![pattern(8, &[(1, 0, tempo(0x03))])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        assert_eq!(pulses_to_row(&mut harness, 1), 6);
+        assert_eq!(pulses_to_row(&mut harness, 5), 12);
+    }
+
+    #[test]
+    fn effect_ticks_run_on_pulses() {
+        let mut harness = with_speed(
+            Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0xD2))])]),
+            3,
+        );
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.messages();
+        harness.engine.pulse();
+        assert!(harness.messages().is_empty());
+        harness.engine.pulse();
+        assert_eq!(
+            harness.messages(),
+            vec![Message::NoteOn(Channel::Ch1, 60, 0x40)]
+        );
+    }
+
+    #[test]
+    fn song_position_follows_the_song_speed() {
+        let mut harness = with_speed(synced(vec![pattern(4, &[]), pattern(4, &[])]), 4);
+        // 18 pulses: 16 for the first pattern, then 2 ticks into the second
+        harness.engine.apply(EngineCommand::ExternalSongPosition(3));
+        harness.engine.apply(EngineCommand::ExternalContinue);
+        external_pulses(&mut harness, 0, 1);
+        assert!(harness.engine.position.pattern == PatternId(1));
+        assert_eq!(harness.engine.position.row, 0);
+        assert_eq!(harness.engine.clock.as_ref().unwrap().tick, 2);
+        external_pulses(&mut harness, 20_000, 2);
+        assert_eq!(harness.engine.position.row, 1);
+    }
+
+    #[test]
+    fn continuing_partway_into_a_row_leaves_its_notes_out() {
+        let mut harness = with_speed(
+            synced(vec![pattern(
+                2,
+                &[(0, 0, note("C-4 0 40")), (1, 0, note("D-4 0 40"))],
+            )]),
+            12,
+        );
+        // 6 pulses is halfway into the first row
+        harness.engine.apply(EngineCommand::ExternalSongPosition(1));
+        harness.engine.apply(EngineCommand::ExternalContinue);
+        external_pulses(&mut harness, 0, 7);
+        assert_eq!(note_velocities(&harness.messages()), vec![0x40]);
+        assert_eq!(harness.engine.position.row, 1);
+    }
+
+    #[test]
+    fn retrig_without_a_note_repeats_the_last_note() {
+        let mut empty = Note::empty();
+        empty.instrument_id = Some(0);
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[(0, 0, note("C-4 1 40")), (1, 0, retriggered(empty, 2))],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.messages();
+        harness.next_row();
+        assert_eq!(note_on_ticks(&mut harness), vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn retrig_without_a_note_plays_the_last_note_on_its_own_instrument() {
+        let mut empty = Note::empty();
+        empty.instrument_id = Some(0);
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[(0, 0, note("D-4 1 40")), (1, 0, retriggered(empty, 3))],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.next_row();
+        harness.messages();
+        for _ in 0..3 {
+            harness.effect_tick();
+        }
+        assert_eq!(
+            harness.messages(),
+            vec![
+                Message::NoteOff(Channel::Ch2, 62, 0),
+                Message::NoteOn(Channel::Ch2, 62, 0x40),
+            ]
+        );
+    }
+
+    #[test]
+    fn retrig_without_any_note_played_yet_does_nothing() {
+        let mut empty = Note::empty();
+        empty.instrument_id = Some(0);
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, retriggered(empty, 1))])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        assert_eq!(note_on_ticks(&mut harness), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn retrigs_without_a_note_carry_on_from_the_last_hits_velocity() {
+        let mut empty = Note::empty();
+        empty.instrument_id = Some(0);
+        let retrig = with_command_value(retriggered(empty, 2), 0x92);
+        let mut harness = Harness::new(vec![pattern(
+            4,
+            &[
+                (0, 0, note("C-4 0 00")),
+                (1, 0, retrig),
+                (2, 0, retrig),
+                (3, 0, retrig),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+        let mut velocities = note_velocities(&harness.messages());
+        for _ in 0..3 {
+            harness.next_row();
+            velocities.extend(note_velocities(&harness.messages()));
+        }
+        harness.next_row();
+        velocities.extend(note_velocities(&harness.messages()));
+        assert_eq!(velocities, vec![2, 4, 6, 8, 10, 12, 14, 16, 18]);
+    }
+
+    #[test]
+    fn retrig_without_a_note_longer_than_the_row_hits_on_later_rows() {
+        let mut empty = Note::empty();
+        empty.instrument_id = Some(0);
+        let retrig = with_command_value(retriggered(empty, 6), 0xA6);
+        let mut harness = Harness::new(vec![pattern(
+            3,
+            &[(0, 0, note("C-4 0 40")), (1, 0, retrig), (2, 0, retrig)],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+        harness.messages();
+        harness.next_row();
+        assert_eq!(note_on_ticks(&mut harness), vec![5]);
+        harness.next_row();
+        assert_eq!(note_on_ticks(&mut harness), vec![5]);
+    }
+
+    fn with_command_value(mut cell: Note, value: u8) -> Note {
+        cell.command.value = value;
+        return cell;
+    }
+
+    #[test]
+    fn retrig_only_repeats_its_own_track() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[
+                (0, 0, retriggered(note("C-4 0"), 0x02)),
+                (0, 1, note("E-4 0")),
+                (0, 2, note("G-4 1")),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.messages();
+        let mut note_ons = vec![];
+        for _ in 1..6 {
+            harness.effect_tick();
+            for message in harness.messages() {
+                if let Message::NoteOn(channel, pitch, _) = message {
+                    note_ons.push((channel, pitch));
+                }
+            }
+        }
+        assert_eq!(note_ons, vec![(Channel::Ch1, 60); 3]);
+    }
+
+    #[test]
+    fn switching_pattern_while_playing_carries_on_from_the_next_row() {
+        let mut harness = Harness::new(vec![
+            pattern(4, &[(1, 0, note("C-4 0 40"))]),
+            pattern(4, &[(2, 0, note("D-4 0 40"))]),
+        ]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.next_row();
+        harness.messages();
+        harness
+            .engine
+            .apply(EngineCommand::SwitchPattern(PatternId(1)));
+        assert_eq!(harness.engine.status.pattern(), 1);
+        assert!(harness.engine.position.pattern == PatternId(0));
+        harness.next_row();
+        assert!(harness.engine.position.pattern == PatternId(1));
+        assert_eq!(harness.engine.position.row, 2);
+        assert_eq!(note_velocities(&harness.messages()), vec![0x40]);
+        assert_eq!(harness.engine.mode, PlayMode::PatternLoop);
+    }
+
+    #[test]
+    fn jumping_in_the_sequence_while_playing_starts_that_position_on_the_next_row() {
+        let mut harness = synced(vec![pattern(4, &[]), pattern(4, &[]), pattern(4, &[])]);
+        harness
+            .engine
+            .apply(EngineCommand::SetClockSource(ClockSource::Internal));
+        harness.engine.apply(EngineCommand::PlaySong(0, true));
+        harness.next_row();
+        harness.engine.apply(EngineCommand::JumpToSequence(2));
+        assert_eq!(harness.engine.status.sequence_index(), 2);
+        assert_eq!(harness.engine.position.sequence_index, 0);
+        harness.next_row();
+        assert_eq!(harness.engine.position.sequence_index, 2);
+        assert!(harness.engine.position.pattern == PatternId(2));
+        assert_eq!(harness.engine.position.row, 0);
+    }
+
+    #[test]
+    fn jumps_are_ignored_in_the_wrong_play_mode() {
+        let mut harness = synced(vec![pattern(4, &[]), pattern(4, &[])]);
+        harness
+            .engine
+            .apply(EngineCommand::SetClockSource(ClockSource::Internal));
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.engine.apply(EngineCommand::JumpToSequence(1));
+        harness.next_row();
+        assert!(harness.engine.position.pattern == PatternId(0));
+        harness.engine.apply(EngineCommand::Stop);
+        harness
+            .engine
+            .apply(EngineCommand::SwitchPattern(PatternId(1)));
+        assert!(harness.engine.pending_jump.is_none());
+    }
+
+    #[test]
+    fn retrig_note_replays_every_interval_in_its_row() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[(0, 0, extended(note("C-4 0 40"), 0x92))],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        assert_eq!(note_on_ticks(&mut harness), vec![0, 2, 4]);
+    }
+
+    #[test]
+    fn retrig_note_without_a_note_repeats_the_last_one() {
+        let mut empty = Note::empty();
+        empty.instrument_id = Some(0);
+        let mut harness = Harness::new(vec![pattern(
+            3,
+            &[
+                (0, 0, note("C-4 0 40")),
+                (1, 0, extended(empty, 0x93)),
+                (2, 0, extended(empty, 0x90)),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+        harness.messages();
+        harness.next_row();
+        assert_eq!(note_on_ticks(&mut harness), vec![3]);
+        harness.next_row();
+        assert_eq!(note_on_ticks(&mut harness), vec![0]);
+    }
+
+    #[test]
+    fn mod_wheel_then_cc_slide_glides_the_mod_wheel() {
+        let mut harness = Harness::new(vec![pattern(
+            4,
+            &[
+                (0, 0, command(MidiCommand::ModWheel, 0x00, 0)),
+                (1, 0, command(MidiCommand::CCSlide, 0x00, 0)),
+                (3, 0, command(MidiCommand::ChangeCC, 0xFF, 0)),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+        let mut messages = harness.messages();
+        for _ in 0..3 {
+            harness.next_row();
+            messages.extend(harness.messages());
+        }
+        assert!(
+            messages
+                .iter()
+                .filter(|m| matches!(m, Message::ControlChange(..)))
+                .all(|m| matches!(m, Message::ControlChange(Channel::Ch1, 1, _)))
+        );
+        assert_eq!(cc_values(&messages).last(), Some(&127));
+        assert!(cc_values(&messages).len() > 3);
+    }
+
+    #[test]
+    fn a_silent_clock_input_stops_playback_after_two_beats() {
+        let mut harness = synced(vec![pattern(4, &[(0, 0, note("C-4 0 40"))])]);
+        harness.engine.apply(EngineCommand::ExternalStart);
+        external_pulses(&mut harness, 0, 3);
+        harness.engine.advance_clock();
+        assert_eq!(harness.engine.mode, PlayMode::SongLoop);
+        harness.engine.last_external_pulse_at = Some(Instant::now() - Duration::from_secs(5));
+        harness.messages();
+        harness.engine.advance_clock();
+        assert_eq!(harness.engine.mode, PlayMode::Paused);
+        assert!(
+            harness
+                .messages()
+                .contains(&Message::NoteOff(Channel::Ch1, 60, 0))
+        );
+        assert!(harness.engine.resume.is_some());
+    }
+
+    #[test]
+    fn panic_stops_and_silences_every_channel() {
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, note("C-4 0 40"))])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.messages();
+        harness.engine.apply(EngineCommand::Panic);
+        assert_eq!(harness.engine.mode, PlayMode::Paused);
+        let messages = harness.messages();
+        assert!(messages.contains(&Message::NoteOff(Channel::Ch1, 60, 0)));
+        for channel in [Channel::Ch1, Channel::Ch16] {
+            assert!(messages.contains(&Message::AllNotesOff(channel)));
+            assert!(messages.contains(&Message::AllSoundOff(channel)));
+            assert!(messages.contains(&Message::ResetAllControllers(channel)));
+        }
+    }
+
+    #[test]
+    fn panic_works_while_stopped() {
+        let mut harness = Harness::new(vec![pattern(2, &[])]);
+        harness.engine.apply(EngineCommand::PlayNote {
+            track: 0,
+            channel: 2,
+            pitch: 64,
+            velocity: 100,
+        });
+        harness.messages();
+        harness.engine.apply(EngineCommand::Panic);
+        let messages = harness.messages();
+        assert!(messages.contains(&Message::NoteOff(Channel::Ch3, 64, 0)));
+        assert!(messages.contains(&Message::AllNotesOff(Channel::Ch3)));
     }
 }

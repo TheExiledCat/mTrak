@@ -9,7 +9,10 @@ const MIDI_CHANNEL_COUNT: usize = MIDI_CHANNEL_MAX as usize + 1;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Voice {
     channel: u8,
+    /// The pitch sent, after transposing.
     pitch: u8,
+    /// The pitch asked for, before transposing.
+    played: u8,
 }
 
 /// A note replaced by a legato note that keeps sounding for a few more ticks.
@@ -26,6 +29,8 @@ pub struct Voices {
     held: [[u8; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
     channel_volumes: [u8; MIDI_CHANNEL_COUNT],
     velocity: u8,
+    channel_transposes: [i8; MIDI_CHANNEL_COUNT],
+    transpose: i8,
 }
 
 impl Default for Voices {
@@ -42,6 +47,8 @@ impl Voices {
             held: [[0; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
             channel_volumes: [0xFF; MIDI_CHANNEL_COUNT],
             velocity: 0xFF,
+            channel_transposes: [0; MIDI_CHANNEL_COUNT],
+            transpose: 0,
         };
     }
 
@@ -102,14 +109,27 @@ impl Voices {
         out: &mut Vec<Message>,
     ) {
         let channel = channel.min(MIDI_CHANNEL_MAX);
-        let pitch = pitch.min(PITCH_COUNT as u8 - 1);
+        let played = pitch;
+        // a note transposed out of MIDI's range isn't played
+        let transposed =
+            pitch as i32 + self.transpose as i32 + self.channel_transposes[channel as usize] as i32;
+        let Ok(pitch) = u8::try_from(transposed) else {
+            return;
+        };
+        if pitch as usize >= PITCH_COUNT {
+            return;
+        }
         let velocity = (velocity as f32
             * (self.channel_volumes[channel as usize] as f32 / u8::MAX as f32)
             * (self.velocity as f32 / u8::MAX as f32))
             .ceil() as u8; // global volume and velocity work as velocity multipliers.
         let held = &mut self.held[channel as usize][pitch as usize];
         *held = held.saturating_add(1);
-        self.tracks[track] = Some(Voice { channel, pitch });
+        self.tracks[track] = Some(Voice {
+            channel,
+            pitch,
+            played,
+        });
         out.push(Message::NoteOn(to_channel(channel), pitch, velocity));
     }
 
@@ -161,7 +181,7 @@ impl Voices {
             .get(track)
             .copied()
             .flatten()
-            .is_some_and(|voice| voice.pitch == pitch)
+            .is_some_and(|voice| voice.played == pitch)
         {
             self.release(track, out);
         }
@@ -199,6 +219,14 @@ impl Voices {
 
     pub fn set_global_velocity(&mut self, velocity: u8) {
         self.velocity = velocity;
+    }
+
+    pub fn set_transpose(&mut self, transpose: i8) {
+        self.transpose = transpose;
+    }
+
+    pub fn set_channel_transpose(&mut self, channel: usize, transpose: i8) {
+        self.channel_transposes[channel.min(MIDI_CHANNEL_MAX as usize)] = transpose;
     }
 }
 
@@ -385,6 +413,46 @@ mod tests {
         let mut out = vec![];
         voices.release(4, &mut out);
         voices.release_all(&mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn global_and_channel_transposes_add_up() {
+        let mut voices = Voices::new();
+        voices.set_transpose(12);
+        voices.set_channel_transpose(1, -2);
+        let mut out = vec![];
+        voices.note_on(0, 1, 60, 100, &mut out);
+        voices.note_on(1, 0, 60, 100, &mut out);
+        assert_eq!(
+            out,
+            vec![
+                Message::NoteOn(Channel::Ch2, 70, 100),
+                Message::NoteOn(Channel::Ch1, 72, 100),
+            ]
+        );
+    }
+
+    #[test]
+    fn note_off_matches_the_pitch_sent_after_the_transpose_changes() {
+        let mut voices = Voices::new();
+        voices.set_transpose(5);
+        let mut out = vec![];
+        voices.note_on(0, 0, 60, 100, &mut out);
+        voices.set_transpose(0);
+        out.clear();
+        voices.release_pitch(0, 60, &mut out);
+        assert_eq!(out, vec![Message::NoteOff(Channel::Ch1, 65, 0)]);
+    }
+
+    #[test]
+    fn notes_transposed_out_of_range_are_not_played() {
+        let mut voices = Voices::new();
+        voices.set_transpose(-128);
+        let mut out = vec![];
+        voices.note_on(0, 0, 60, 100, &mut out);
+        voices.set_transpose(127);
+        voices.note_on(1, 0, 60, 100, &mut out);
         assert!(out.is_empty());
     }
 }

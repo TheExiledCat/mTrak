@@ -11,18 +11,20 @@ any hardware or software synth.
 ## Features
 
 - Windows, Mac and Linux
-- Full TUI with total keyboard control
+- Full TUI with total keyboard control for mouseless usage
+- No menu diving
 - Pattern editor with 8 tracks per pattern, FT2-style keyboard note entry and navigation
 - Song sequence with per-pattern repeats
-- MIDI output on all 16 channels, with one instrument per channel and a per-instrument volume
-- Command column for (midi) effects, CC, CC slides, velocity slides, aftertouch and pitch bend
+- MIDI output on all 16 channels, with one instrument per channel and instrument configuration
+- Midi input for note data, clock sync and start/stop
+  (see [docs/SYNC.md](docs/SYNC.md))
+- Command column for (midi) effects, using FT2 syntax where applicable
   (see [docs/COMMANDS.md](docs/COMMANDS.md))
-- Pattern and song playback, looping or once through for recording
 - Per-channel activity meters, channel muting and a MIDI event monitor
-- Built-in file browser for opening and saving projects, with Save As and folder creation
-- Context-aware key hints in the footer, dialogs and file browser
+- Built-in file browser for opening and saving projects
+- Context-aware key hints and a built in shortcuts screen
 - FT2 color theme on truecolor terminals, a 16-color theme on Windows consoles and macOS
-  terminals without truecolor, and a monochrome fallback
+  terminals without truecolor, and a monochrome fallback (custom themes WIP)
 - ASCII mode for terminals or fonts without Unicode box drawing and symbols
 
 ## Installation
@@ -31,7 +33,7 @@ any hardware or software synth.
 
 Download the binary for your platform from the
 [releases page](https://github.com/TheExiledCat/mTrak/releases) and put it somewhere on
-your `PATH`.
+your `PATH` or run it directly.
 
 ### From source
 
@@ -114,11 +116,14 @@ Planned features, in no particular order:
 - [ ] **MIDI file import/export**
 - [ ] **MIDI input**:
     - [X] play notes into the pattern using a connected midi controller
-    - [ ] trigger mtrak to start and stop playback, change patterns using a connected midi controller
+    - [X] trigger mtrak to start and stop playback, sync to midi controller
+    - [X] follow an external MIDI clock, with start, stop, continue and song position
+    - [X] separate ports for notes and clock
+    - [ ] Change sequence/pattern using Program Select In
 - [X] **MIDI clock out**: send clock and start/stop to sync external sequencers, drum machines and arpeggiators
 - [ ] **Multiple output ports**: map instruments to different MIDI devices, not just channels on one port
 - [ ] **Program change and bank select per instrument**, so loading a project restores the right patches
-- [ ] **Panic button**: all notes off and reset controllers, for stuck notes
+- [X] **Panic button** (`~`): all notes off and reset controllers, for stuck notes
 - [ ] **Live record**:
     - [ ] play notes in while the song is playing, for beatmaking
     - [ ] send metronome to channel
@@ -132,14 +137,17 @@ Planned features, in no particular order:
 - [ ] **Swing/groove**, per pattern or global
 - [x] **Prebuilt binaries** for Linux, Windows and macOS on every release
 - [ ] **More commands**
-    - [X] Roll
-    - [X] Roll with volume glide
-    - [x] Tempo (BPM) and speed change (`F`)
-    - [X] Note delay
-    - [X] Note probability
-    - [X] Note Cut
-    - [X] Portamento (overlap notes)
-    - [ ] Shorthand commands for common CCs (mod wheel, filter cutoff, etc.)
+    - [X] Retrig (`R`, FT2's multi retrig) and retrig note (`E9`)
+    - [x] BPM and SPD change (`F`)
+    - [X] Note delay (`ED`) and early note delay (`E8`)
+    - [X] Note probability (`Y`)
+    - [X] Note Cut (`EC`)
+    - [X] Legato (overlap notes, `L`)
+    - [ ] Shorthand commands for common CCs
+        - [X] Mod wheel (`W`)
+        - [ ] filter cutoff, etc.
+    - [ ] FT2-style per-tick slides: velocity (`A`), pitch up/down (`1`/`2`) and their fine versions
+    - [ ] Tone portamento (`3`), gliding the pitch to the next note
     - [ ] Song modification
         - [ ] Pattern break
         - [ ] Jump song position

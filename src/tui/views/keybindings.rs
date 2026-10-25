@@ -175,7 +175,8 @@ impl DialogComponent for KeyTable {
 
 fn table_dialog(title: &str, sections: Vec<HelpSection>, height: u8) -> Dialog {
     return Dialog::new(title, vec![KeyTable::new(sections, height.max(1)).boxed()])
-        .width(u16::MAX);
+        .width(u16::MAX)
+        .focus_first();
 }
 
 pub fn keybindings_dialog(mut sections: Vec<HelpSection>, height: u8) -> Dialog {
@@ -203,7 +204,7 @@ pub fn commands_dialog(height: u8) -> Dialog {
     return table_dialog("Commands", vec![general, midi, effects], height);
 }
 
-/// One row per way to write each command, e.g. `30y` and `31y` for the legato command.
+/// One row per way to write each command, e.g. `L0y` and `L1y` for the legato command.
 fn commands_section(
     title: &'static str,
     commands: impl Iterator<Item = (char, &'static [CommandForm])>,

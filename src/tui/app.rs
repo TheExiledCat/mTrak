@@ -19,18 +19,23 @@ use crate::{
     data::{
         config::{Config, TITLE},
         effect::CommandKind,
-        midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX, bytes_to_message},
+        midi::{
+            MAX_SPEED, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX, bytes_to_message,
+        },
         note::{Note, NoteKind, NotePitch},
         pattern::{self, Block, ClearOption, ClearTarget, Pattern, PatternId, PatternRow},
         project::{Project, SequenceRow},
     },
-    engine::{engine::PlayMode, handle::EngineHandle},
+    engine::{
+        engine::PlayMode,
+        handle::{ClockSource, EngineCommand, EngineHandle},
+    },
     error::{MTrakError, Result},
     tui::{
         copy_buffers::CopyBuffers,
         framework::{
             core_extensions::Boxed,
-            dialog::{Dialog, PopupLevel},
+            dialog::{Dialog, InfoLevel},
             widget::MtrakWidget,
             widgets::container::Container,
         },
@@ -161,7 +166,7 @@ impl App {
         self.terminal.clear()?;
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         self.state.open_dialog(Dialog::popup(
-            PopupLevel::Info,
+            InfoLevel::Info,
             "Opened",
             format!("Opened {}", name),
         ));
@@ -194,7 +199,7 @@ impl App {
         self.dialogs.append(&mut self.state.pending_dialogs);
         for error in self.state.errors.drain(..) {
             self.dialogs.push(Dialog::popup(
-                PopupLevel::Warning,
+                InfoLevel::Warning,
                 error.title(),
                 error.to_string(),
             ));
@@ -271,7 +276,6 @@ enum AppStateAction {
         new: Vec<SequenceRow>,
     },
     SetSpeed {
-        pattern: PatternId,
         previous: u8,
         new: u8,
     },
@@ -324,13 +328,10 @@ impl AppStateAction {
                     .unwrap_or(previous.len().min(new.len()));
                 state.active_sequence_index = changed.min(sequence.len() - 1);
             }
-            AppStateAction::SetSpeed {
-                pattern,
-                previous,
-                new,
-            } => {
-                state.active_pattern = *pattern;
-                state.pattern_mut(*pattern).ticks_per_line = if undo { *previous } else { *new };
+            AppStateAction::SetSpeed { previous, new } => {
+                let speed = if undo { *previous } else { *new };
+                state.project.speed = speed;
+                state.engine.set_speed(speed);
             }
             AppStateAction::ChangeLength {
                 pattern,
@@ -392,6 +393,11 @@ impl UndoAction for AppStateAction {
         self.apply(state, true);
     }
 }
+/// Where a MIDI input connection sends what it receives.
+struct InputRoute {
+    notes: Option<Sender<Message>>,
+    clock: Option<Sender<EngineCommand>>,
+}
 pub struct AppState {
     pub config: Config,
     project: Project,
@@ -404,6 +410,7 @@ pub struct AppState {
     pub active_sequence_index: usize,
     pub active_pattern: PatternId,
     pub active_in_port: Option<MidiInputPort>,
+    pub active_clock_port: Option<MidiInputPort>,
     pub active_out_port: Option<MidiOutputPort>,
     pub line_add: u8,
     pub active_instrument: u8,
@@ -415,7 +422,7 @@ pub struct AppState {
     pub project_path: Option<PathBuf>,
     pub copy_buffers: CopyBuffers,
     pub notification: Option<String>,
-    midi_in_connection: Option<MidiInputConnection<Sender<Message>>>,
+    midi_in_connections: Vec<MidiInputConnection<InputRoute>>,
     midi_in_sender: Sender<Message>,
     midi_in_receiver: Receiver<Message>,
     pending_midi_input: Vec<Message>,
@@ -470,9 +477,10 @@ impl AppState {
             exit_requested: false,
             active_sequence_index: 0,
             active_in_port: None,
+            active_clock_port: None,
             active_out_port: None,
             midi_in_client,
-            midi_in_connection: None,
+            midi_in_connections: Vec::new(),
             midi_in_sender,
             midi_in_receiver,
             pending_midi_input: vec![],
@@ -505,14 +513,23 @@ impl AppState {
             state
                 .engine
                 .set_global_volume(channel as u8, instrument.volume);
+            state
+                .engine
+                .set_default_cc(channel as u8, instrument.default_cc);
+            state
+                .engine
+                .set_channel_transpose(channel as u8, instrument.transpose);
         }
+        state.engine.set_transpose(state.project.transpose);
         state.engine.set_bpm(state.project.bpm);
+        state.engine.set_speed(state.project.speed);
         state
             .engine
             .set_global_velocity(state.project.global_velocity);
         state.engine.set_midi_clock(state.project.send_midi_clock);
         state.restore_midi_output();
         state.restore_midi_input();
+        state.restore_clock_input();
         return Ok(state);
     }
     pub fn update(&mut self) {
@@ -565,20 +582,39 @@ impl AppState {
             _ => {}
         }
     }
+    fn input_port_by_name(&self, name: &str) -> Option<MidiInputPort> {
+        let client = self.midi_in_client.as_ref()?;
+        return client
+            .ports()
+            .into_iter()
+            .find(|p| client.port_name(p).is_ok_and(|n| n == name));
+    }
+    /// The input port for a choice in a port list that starts with a "none" entry.
+    pub fn input_port_for_choice(&self, choice: usize) -> Option<MidiInputPort> {
+        let index = choice.checked_sub(1)?;
+        return self.midi_in_client.as_ref()?.ports().get(index).cloned();
+    }
     fn restore_midi_input(&mut self) {
         let Some(name) = self.project.midi_input.clone() else {
             return;
         };
-        let port = self.midi_in_client.as_ref().and_then(|client| {
-            client
-                .ports()
-                .into_iter()
-                .find(|p| client.port_name(p).is_ok_and(|n| n == name))
-        });
+        let port = self.input_port_by_name(&name);
         if port.is_none() {
             self.project.midi_input = None;
         }
         if let Err(e) = self.set_midi_input(port) {
+            self.report_error(e);
+        }
+    }
+    fn restore_clock_input(&mut self) {
+        let Some(name) = self.project.clock_input.clone() else {
+            return;
+        };
+        let port = self.input_port_by_name(&name);
+        if port.is_none() {
+            self.project.clock_input = None;
+        }
+        if let Err(e) = self.set_clock_input(port) {
             self.report_error(e);
         }
     }
@@ -607,41 +643,105 @@ impl AppState {
         {
             self.project_mut().midi_input = name;
         }
-        if let Some(connection) = self.midi_in_connection.take() {
+        if port == self.active_in_port {
+            return Ok(());
+        }
+        self.active_in_port = port;
+        return self.reconnect_inputs();
+    }
+    fn set_clock_input(&mut self, port: Option<MidiInputPort>) -> Result<()> {
+        let name = self
+            .midi_in_client
+            .as_ref()
+            .map(|client| port.as_ref().and_then(|p| client.port_name(p).ok()));
+        if let Some(name) = name
+            && name != self.project.clock_input
+        {
+            self.project_mut().clock_input = name;
+        }
+        self.engine.set_clock_source(match port {
+            Some(_) => ClockSource::External,
+            None => ClockSource::Internal,
+        });
+        if port == self.active_clock_port {
+            return Ok(());
+        }
+        self.active_clock_port = port;
+        return self.reconnect_inputs();
+    }
+    /// Reopens the input connections, sharing one when notes and clock use the same port.
+    fn reconnect_inputs(&mut self) -> Result<()> {
+        for connection in self.midi_in_connections.drain(..) {
             connection.close();
         }
-        self.active_in_port = None;
-        let Some(port) = port else {
-            return Ok(());
-        };
-        match self.connect_input_port(&port) {
-            Ok(connection) => {
-                self.midi_in_connection = Some(connection);
-                self.active_in_port = Some(port);
-                return Ok(());
-            }
-            Err(e) => {
-                self.project_mut().midi_input = None;
-                return Err(e);
+        let shared = self.active_in_port.is_some() && self.active_in_port == self.active_clock_port;
+        let mut ports = Vec::new();
+        if let Some(port) = &self.active_in_port {
+            ports.push((port.clone(), true, shared));
+        }
+        if let Some(port) = &self.active_clock_port
+            && !shared
+        {
+            ports.push((port.clone(), false, true));
+        }
+        let mut result = Ok(());
+        for (port, notes, clock) in ports {
+            let route = InputRoute {
+                notes: notes.then(|| self.midi_in_sender.clone()),
+                clock: clock.then(|| self.engine.clock_sender()).flatten(),
+            };
+            match self.connect_input_port(&port, route) {
+                Ok(connection) => self.midi_in_connections.push(connection),
+                Err(e) => {
+                    if notes {
+                        self.active_in_port = None;
+                        self.project_mut().midi_input = None;
+                    }
+                    if clock {
+                        self.active_clock_port = None;
+                        self.project_mut().clock_input = None;
+                        self.engine.set_clock_source(ClockSource::Internal);
+                    }
+                    result = Err(e);
+                }
             }
         }
+        return result;
     }
-    /// Connects to an input port with a fresh `MidiInput`, since `connect` consumes the client.
-    /// Incoming messages are sent to `midi_in_receiver` and picked up in `update`.
+    /// Connects to an input port; notes go to the UI, clock and transport to the engine.
     fn connect_input_port(
         &self,
         port: &MidiInputPort,
-    ) -> Result<MidiInputConnection<Sender<Message>>> {
+        route: InputRoute,
+    ) -> Result<MidiInputConnection<InputRoute>> {
         return MidiInput::new(TITLE)?
             .connect(
                 port,
                 TITLE,
-                |_, bytes, sender| {
-                    if let Some(message) = bytes_to_message(bytes) {
-                        let _ = sender.send(message);
+                |timestamp, bytes, route| {
+                    let command = match *bytes {
+                        [0xF8, ..] => EngineCommand::ExternalClock(timestamp),
+                        [0xFA, ..] => EngineCommand::ExternalStart,
+                        [0xFB, ..] => EngineCommand::ExternalContinue,
+                        [0xFC, ..] => EngineCommand::ExternalStop,
+                        [0xF2, lsb, msb, ..] => {
+                            EngineCommand::ExternalSongPosition(lsb as u16 | (msb as u16) << 7)
+                        }
+                        [0xF2, ..] | [0xF9..=0xFF, ..] => return,
+                        _ => {
+                            if let Some(notes) = &route.notes
+                                && let Some(message) = bytes_to_message(bytes)
+                            {
+                                let _ = notes.send(message);
+                            }
+                            return;
+                        }
+                    };
+                    if let Some(clock) = &route.clock {
+                        let _ = clock.send(command);
                     }
                 },
-                self.midi_in_sender.clone(),
+                route,
             )
             .map_err(|e| MTrakError::Midi(e.to_string()));
     }
@@ -657,6 +757,15 @@ impl AppState {
         }
         self.engine.set_output_port(port.clone());
         self.active_out_port = port;
+    }
+    /// Picks the clock input: `0` is internal, otherwise an input port index plus one.
+    pub fn set_midi_sync(&mut self, choice: usize) -> Result<()> {
+        let port = self.input_port_for_choice(choice);
+        return self.set_clock_input(port);
+    }
+    pub fn active_clock_name(&self) -> Option<String> {
+        let port = self.active_clock_port.as_ref()?;
+        return self.midi_in_client.as_ref()?.port_name(port).ok();
     }
     pub fn set_midi_clock(&mut self, enabled: bool) {
         self.project_mut().send_midi_clock = enabled;
@@ -802,20 +911,14 @@ impl AppState {
         return result;
     }
     pub fn change_speed(&mut self, increase: bool) {
-        let (_, pattern) = self.copy_buffers_and_active_pattern_mut();
-        let previous = pattern.ticks_per_line;
-        if increase {
-            pattern.increase_ticks_per_line();
+        let previous = self.project.speed;
+        let new = if increase {
+            previous.saturating_add(1).min(MAX_SPEED)
         } else {
-            pattern.decrease_ticks_per_line();
-        }
-        let new = pattern.ticks_per_line;
+            previous.saturating_sub(1).max(1)
+        };
         if new != previous {
-            self.track(AppStateAction::SetSpeed {
-                pattern: self.active_pattern,
-                previous,
-                new,
-            });
+            self.track_and_do(AppStateAction::SetSpeed { previous, new });
         }
     }
     pub fn change_length(&mut self, increase: bool) {
@@ -897,11 +1000,12 @@ impl AppState {
         self.project_load_request = Some(path);
     }
     fn shut_down(&mut self) {
-        self.engine.stop();
-        self.engine.shut_down();
-        if let Some(connection) = self.midi_in_connection.take() {
+        // the clock input holds an engine sender, so it closes first
+        for connection in self.midi_in_connections.drain(..) {
             connection.close();
         }
+        self.engine.stop();
+        self.engine.shut_down();
     }
     /// Hands an error to the app, which shows it in a warning dialog.
     pub fn report_error(&mut self, error: MTrakError) {
@@ -944,11 +1048,24 @@ impl AppState {
     pub fn next_pattern(&mut self) {
         self.active_pattern.0 = self.active_pattern.0.saturating_add(1);
         self.ensure_pattern(self.active_pattern);
+        self.switch_playing_pattern();
     }
 
     pub fn prev_pattern(&mut self) {
         self.active_pattern.0 = self.active_pattern.0.saturating_sub(1);
         self.ensure_pattern(self.active_pattern);
+        self.switch_playing_pattern();
+    }
+
+    /// While a pattern plays, carries playback on in the active pattern, as in FT2.
+    fn switch_playing_pattern(&mut self) {
+        if matches!(
+            self.engine.status().play_mode(),
+            PlayMode::PatternLoop | PlayMode::Pattern
+        ) {
+            self.send_changes_to_engine();
+            self.engine.switch_pattern(self.active_pattern);
+        }
     }
 
     fn ensure_pattern(&mut self, id: PatternId) {
@@ -958,6 +1075,28 @@ impl AppState {
         self.changed_patterns.insert(id);
     }
 
+    /// Moves the sequence cursor and shows the pattern at that position.
+    pub fn show_sequence(&mut self, index: usize) {
+        let Some(row) = self.project.sequence.get(index) else {
+            return;
+        };
+        self.active_pattern = row.pattern_id;
+        self.active_sequence_index = index;
+    }
+    /// Moves the sequence cursor, jumping playback there while the song plays.
+    pub fn select_sequence(&mut self, index: usize) {
+        if self.project.sequence.get(index).is_none() {
+            return;
+        }
+        self.show_sequence(index);
+        if matches!(
+            self.engine.status().play_mode(),
+            PlayMode::SongLoop | PlayMode::Song
+        ) {
+            self.send_changes_to_engine();
+            self.engine.jump_to_sequence(index);
+        }
+    }
     pub fn change_sequence_pattern(&mut self, index: usize, increase: bool) {
         let id = self.edit_sequence(|project| {
             let row = &mut project.sequence[index];
@@ -1155,6 +1294,18 @@ impl AppState {
     pub fn set_global_volume(&mut self, channel: u8, vol: u8) {
         self.project_mut().instruments[channel as usize].volume = vol;
         self.engine.set_global_volume(channel, vol);
+    }
+    pub fn set_transpose(&mut self, transpose: i8) {
+        self.project_mut().transpose = transpose;
+        self.engine.set_transpose(transpose);
+    }
+    pub fn set_instrument_transpose(&mut self, channel: u8, transpose: i8) {
+        self.project_mut().instruments[channel as usize].transpose = transpose;
+        self.engine.set_channel_transpose(channel, transpose);
+    }
+    pub fn set_default_cc(&mut self, channel: u8, control: u8) {
+        self.project_mut().instruments[channel as usize].default_cc = control;
+        self.engine.set_default_cc(channel, control);
     }
     pub fn is_saved(&self) -> bool {
         return !self.has_changes && self.saved_position == self.undo_stack.position();

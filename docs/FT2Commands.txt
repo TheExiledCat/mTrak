@@ -1,0 +1,417 @@
+3.1 Apperigo 
+
+Syntax: 0 + 1st halftone + 2nd halftone 
+
+
+Ex.: C-l 1-037 
+
+At tick 1: Plays C-l tick #1. 
+
+At tick 2: Plays C-l + 3 Notes = D#1 tick #2. 
+
+At tick 3: Plays C-l + 7 Notes = G-l tick #3. 
+
+3.2 Portamento up 
+
+Portamento is used to slide the sample pitch up or down. This is done using the period value. 
+If Amiga frequency table is used, the sliding will be non-linear (the speed depends on the 
+frequency). 
+
+Syntax: 1 + speed 
+
+
+Ex: C-5 1 — 103 -> Bends the sample down three halftones per tick 
+
+
+
+— — 103 -> Bends the sample down three halftones per tick 
+
+3.3 Portamento down 
+
+Bends the sample down as stated above 
+Syntax: 2 + speed 
+
+Ex: C-5 1 — 203 -> Bends the sample down 
+
+— — 203 -> Bends the sample even more down 
+
+3.4 Portamento to note 
+
+This command is used together with a note, and will slide to its frequency. If glissando (E3) is 
+used, the frequency will be rounded to the nearest halftone. Portamento will not bend further 
+than the first last says. 
+
+Syntax: Note + 3 + Speed to bend the sample. 
+
+Or 3 + Speed to bend the sample if the command been used before in this channel. 
+
+Ex: D-6 1 — 000 -> Plays the sample at D-6 
+C-5 1 — 303 -> Bends the sample down 
+
+— — 3F0 -> Bends the sample down to C-5 
+
+3.5 Vibrato 
+
+Adds vibrato to the channel with a rate and speed. Set vibrato control (E4) can be used to 
+change the vibrato waveform (se 3.15.4). 
+
+Syntax: 4 + Rate + Depth 
+
+3.6 Tone portamento + Volumeslide 
+
+This command will execute both tone portamento and volume slide. The speed is used for the 
+volume slide. 
+
+Syntax: 5 + Speed 
+
+3.7 Vibrato + Volumeslide 
+
+Syntax: 6 + Speed 
+
+This command will execute both vibrato and volume slide. The speed is used for the volume 
+slide. 
+
+
+3.8 Tremolo 
+
+
+
+Syntax: 7 + Rate + Depth 
+
+
+Tremolo adds vibrato to the current volume. The syntax is exactly as for the vibrato command. 
+
+3.9 Set panning position 
+
+Sets the panning position for a track until a new note is played 
+Syntax: [Note] 8 + Panning Position 
+
+Ex: C-5 1 — 800 -> Sets the panning position to the left 
+
+— 8FF -> Sets the panning position to the right 
+C-5 1 — 000 -> Resets the panning position to defined 
+
+in the instrument editor (see x.xxx) 
+
+NOTE: GUS can only handle 16 different panning positions so the last digit has no effect on a 
+GUS. 
+
+3.10 Sample offset 
+
+Syntax: Note + 9 + Sample offset 
+
+Ex: C-5 1 — 908 -> Starts playing the sample 2kb later if the smp is 8-bit. 
+
+— 9FF-> Nothing! 
+
+NOTE: The sample offset data will be multiplied with $100 (256). That limits this command 
+to samples <64kb. 
+
+3.11 Volumeslide 
+
+3.11.1 Volumeslide up 
+
+Syntax: [Note] A + Slide speed + 0 
+
+Ex: C-5 1 —[C20]-> Plays the sample at volume $20 (See x.13) 
+
+— A10-> Slides the volume up. 
+
+3.11.2 Volumeslide down 
+
+Syntax: [Note] A + 0 + Slide speed 
+
+Ex: C-5 1 —[C20]-> Plays the sample at volume $20 (See x.13) 
+
+— A01 -> Slides the volume down. 
+
+
+
+NOTE: One of the data fields must be 0 or this command won't work. If no volume is 
+specified the sample will be played at defined volume in the instrument editor (see 4.xxx) 
+
+3.12 Jump songposition 
+
+Syntax: B + Songposition 
+
+Jumps to the specified song position and play the pattern from the beginning. 
+
+3.13 Set volume 
+Syntax C + Volume 
+Sets the sample volume. 
+
+Ex: C-5 1 — [C40]-> Plays the sample at volume $40 
+— CIO-> Changes the volume to $10 
+
+NOTE: The volume can't be greater than $40 If no volume is specified the sample will be 
+played at defined volume in the instrument editor (see 4.xxx) 
+
+3.14 Pattern break 
+
+Syntax: D + Pattern position 
+
+Breaks the current pattern, jumps to next pattern and start playing at specified position. 
+
+Ex: — — D16 -> Breaks the pattern and starts then next pattern at 
+position $16 
+
+3.15 E Commands 
+
+3.15.1 Filter on / off 
+
+Syntax: E + 0 + 1 to make your .MOD file sound terrible on an Amiga. 
+
+This effect is not implemented in FT2 due to the fact that it's totally useless. 
+
+3.15.2.1 Fine portamento up 
+
+Syntax: El + Speed 
+
+This command works as portamento up/down, but is only slides up once. 
+
+
+3.15.2.2 Fine portamento down 
+
+
+
+Syntax: E2 + Speed 
+
+
+This command works as portamento up/down, but is only slides up once. 
+
+3.15.3 Set glissando control 
+
+Syntax: E3 + Status 
+
+If Status is =1, the frequency when using tone portamento will be rounded to the nearest 
+halftone. 
+
+3.15.4 Set vibrato control 
+
+Syntax: E4 + Type 
+
+This command controls the vibrato waveform. 
+
+Type: 0 = Sine 
+
+1 = Ramp down 
+
+2 = Square 
+
+If you add 4 to the type, the waveform will not be retrigged when a new instrument is played. 
+
+3.15.6 Set fine-tune 
+
+Syntax: E5 + Tune 
+
+This command should be used together with a note. It will cause another fine-tune value to be 
+used. 
+
+3.15.7 Pattern loop 
+
+Syntax: E6 + Count 
+
+If count is zero, the beginning of the loop will be specified. When a non-zero value is used, the 
+pattern will be looped from the loop start. 
+
+3.15.8 Set tremolo control 
+
+Syntax: E7 + Type 
+
+This command works exactly as set vibrato control, but the tremolo waveform will be changed 
+instead. 
+
+
+3.15.9 Retrig note 
+
+
+
+Syntax: E9 + Interval 
+
+
+Retriggs the note with the specified interval. 
+
+3.15.10 Fine volumeslide 
+
+3.15.10.1 Fine volumeslide up 
+
+Syntax: EA + Speed 
+
+This command works as the usual volume slide, but it will only slide once. 
+
+3.15.10.2 Fine volume slide down 
+
+Syntax: EB + Speed 
+
+This command works as the usual volume slide, but it will only slide once. 
+
+3.15.11 Note cut 
+
+Syntax: EC + Tick 
+
+Cuts the note at the specified tick. Note that it will only set the volume to zero, and the 
+sample will still be played. 
+
+3.15.12 Note delay 
+
+Syntax: ED + Ticks 
+
+This command will delay the note the selected number of ticks. 
+
+3.15.12 Pattern delay 
+
+Syntax: EE + Notes 
+
+This command will delay the pattern the selected number of notes. 
+
+3.16 Set speed / tempo 
+Syntax: F + speed / tempo 
+
+This command sets the speed between $1 and $1F. $20 -> $FF sets the tempo (BPM). The 
+BPM is correct at speed 06. 
+
+
+Ex: — — F03 -> Sets the speed to 03 
+
+
+
+— — F40 -> Sets the tempo to 54 BPM 
+
+3.17 Set global volume 
+
+Syntax: G + volume 
+
+Sets the global volume. The volume should not be greater than $40. 
+
+3.18 Global volume slide 
+
+Syntax: H + Up speed + Down speed 
+
+This command works exactly as volume slide, but it slides the global volume instead. 
+
+3.19 Set envelope position 
+Syntax: L + Position 
+Changes the envelope position. 
+
+3.20 Panning slide 
+
+Syntax: P + Right speed + left speed 
+
+This command slides the panning position. It works like the volume slide. 
+
+3.21 Multi retrig 
+
+Syntax: R + Interval + Volume change 
+
+This is an extended version of the retrig command. 
+
+Volume change: 
+
+0 = None 8 = Unused 
+
+1=-1 9 = +1 
+
+2 = -2 A = +2 
+
+3 = -4 B = +4 
+
+4 = -8 C = +8 
+
+5 = -16 D = +16 
+
+6 = *2/3 E = *3/2 
+
+7 = *1/2 F = *2 
+
+3.22 Tremor 
+
+
+Syntax: T + On time + Off time 
+
+
+
+This weird command will set the volume to zero during off time number of ticks. It is included 
+for STM compatibility. 
+
+
+3.23 X commands 
+
+3.23.1 Extra fine portamento up 
+
+Syntax: XI + Speed 
+
+This command works as fine portamento up/down, but the speed will be divided by four. 
+
+3.23.2 Extra fine portamento down 
+
+Syntax: X2 + Speed 
+
+This command works as fine portamento up/down, but the speed will be divided by four. 
+
+3.24 Volume column 
+
+3.24.1 Set volume 
+
+Syntax: 00..40 
+See: 3.13 
+
+3.24.2 Volumeslide 
+
+3.24.2.1 Volumeslide up 
+
+Syntax: + and Speed 
+See: 3.11.1 
+
+3.24.2.2 Volumeslide down 
+
+Syntax: - + Speed 
+See: 3.11.2 
+
+3.24.3 Fine volumeslide 
+
+3.24.3.1 Fine volumeslide up 
+
+Syntax: U + Speed 
+See: 3.15.10.1 
+
+3.24.3.2 Fine volumeslide down 
+
+Syntax: D + Speed 
+
+
+
+See: 3.15.10.2 
+
+
+3.24.4 Set vibrato speed 
+Syntax: S + Speed 
+
+3.24.5 Vibrato 
+
+Syntax: V + Speed 
+See: 3.5 
+
+3.24.6 Set panning position 
+
+Syntax: P + Panning Position 
+See: 3.9 
+
+3.24.7 Panning slide 
+
+3.24.7.1 Panning slide right 
+
+Syntax: R + Speed 
+See: 3.20 
+
+3.24.7.2 Panning slide left 
+
+Syntax: L + Speed 
+See: 3.20 
+
+3.24.8 Tone portamento 
+
+Syntax: M + Speed 
+See: 3.4 
+
+
+

@@ -1,5 +1,6 @@
 use std::{iter::repeat_n, time::Instant};
 
+use chrono::{Datelike, Local};
 use figlet_rs::FIGlet;
 use ratatui::{
     crossterm::event::{
@@ -19,13 +20,15 @@ use crate::{
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, midi_to_string},
         pattern::{ClearOption, ClearTarget},
     },
-    engine::engine::PlayMode,
     error::Result,
     tui::{
         app::AppState,
         framework::{
             core_extensions::Boxed,
-            dialog::{Checkbox, Dialog, Select, TextPrompt},
+            dialog::{
+                Checkbox, Dialog, DialogComponent, InfoLevel, Label, Link, NumberBox, Select,
+                TextPrompt,
+            },
             keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::{MtrakWidget, clicked_in},
         },
@@ -34,6 +37,10 @@ use crate::{
     },
     util::time::duration_to_hh_mm_ss_string,
 };
+
+/// The year mTrak was started, for the copyright line in the About dialog.
+const FIRST_YEAR: i32 = 2026;
+const REPOSITORY_URL: &str = "https://github.com/TheExiledCat/mTrak";
 
 pub struct Header {
     top_left: HeaderTopLeft,
@@ -392,22 +399,17 @@ impl KeyActions for SequenceList {
         let sequence_length = state.project().sequence.len();
         match action {
             NextPattern => {
-                state.active_sequence_index = state
-                    .active_sequence_index
-                    .saturating_add(1)
-                    .clamp(0, sequence_length - 1)
+                state.select_sequence((state.active_sequence_index + 1).min(sequence_length - 1))
             }
-            PrevPattern => {
-                state.active_sequence_index = state
-                    .active_sequence_index
-                    .saturating_sub(1)
-                    .clamp(0, sequence_length - 1)
+            PrevPattern => state.select_sequence(state.active_sequence_index.saturating_sub(1)),
+            Insert => {
+                let index = state.active_sequence_index;
+                let pattern = state.project().sequence[index].pattern_id;
+                state.insert_sequence(index + 1, pattern);
             }
-            Insert => state.insert_sequence(state.active_sequence_index + 1, state.active_pattern),
             Delete => {
-                state.active_sequence_index = state
-                    .active_sequence_index
-                    .clamp(0, state.delete_sequence(state.active_sequence_index) - 1)
+                let remaining = state.delete_sequence(state.active_sequence_index);
+                state.show_sequence(state.active_sequence_index.min(remaining - 1))
             }
             IncRepeats => state.change_sequence_repeats(state.active_sequence_index, true),
             DecRepeats => state.change_sequence_repeats(state.active_sequence_index, false),
@@ -421,7 +423,7 @@ impl KeyActions for SequenceList {
         return match action {
             NextPattern => "Next sequence position",
             PrevPattern => "Previous sequence position",
-            Insert => "Insert the current pattern after this position",
+            Insert => "Insert this position's pattern after it",
             Delete => "Delete this sequence position",
             IncPattern => "Next pattern at this position",
             DecPattern => "Previous pattern at this position",
@@ -533,10 +535,6 @@ impl PatternInfo {
     }
 
     fn shrink_pattern(&self, state: &mut AppState) {
-        if state.engine.status().play_mode() != PlayMode::Paused {
-            state.notify("CANT SRNK");
-            return;
-        }
         if !state.edit_pattern(|_, pattern| pattern.shrink()) {
             state.notify("PTN TOO SHORT");
         }
@@ -571,24 +569,24 @@ impl MtrakWidget for PatternInfo {
             )
             .render(vertical_layout[0], buf);
 
-        let active_pattern = state
-            .project()
-            .patterns
-            .get_pattern_by_id(state.active_pattern)
-            .unwrap();
+        let (tempo_label, tempo) = match state.active_clock_port {
+            Some(_) => ("SYN", state.engine.status().synced_bpm()),
+            None => ("BPM", state.project().bpm),
+        };
         let mut width: u16 = 0;
         let bindings = &self.keymap;
         let left_content = Paragraph::new(
             [
                 format!(
-                    "BPM {:03} {}/{}: DN/UP",
-                    state.project().bpm,
+                    "{} {:03} {}/{}: DN/UP",
+                    tempo_label,
+                    tempo,
                     bindings.key_for(BpmDown).unwrap(),
                     bindings.key_for(BpmUp).unwrap()
                 ),
                 format!(
                     "SPD {:>3} {}/{}: DN/UP",
-                    active_pattern.ticks_per_line,
+                    state.project().speed,
                     bindings.key_for(SpeedDown).unwrap(),
                     bindings.key_for(SpeedUp).unwrap()
                 ),
@@ -706,8 +704,8 @@ impl KeyActions for PatternInfo {
         return match action {
             PatternInfoActions::BpmUp => "Increase BPM",
             PatternInfoActions::BpmDown => "Decrease BPM",
-            PatternInfoActions::SpeedUp => "Increase ticks per row",
-            PatternInfoActions::SpeedDown => "Decrease ticks per row",
+            PatternInfoActions::SpeedUp => "Increase the song speed (ticks per row)",
+            PatternInfoActions::SpeedDown => "Decrease the song speed (ticks per row)",
             PatternInfoActions::LineAddUp => "Increase rows skipped after entering a note",
             PatternInfoActions::LineAddDown => "Decrease rows skipped after entering a note",
             PatternInfoActions::PatternUp => "Next pattern",
@@ -784,6 +782,9 @@ fn open_config_dialog(state: &mut AppState) {
     in_names.insert(0, "(none)".into());
     let mut out_names = state.get_midi_out_port_names();
     out_names.insert(0, "(none)".into());
+
+    let mut clock_names = state.get_midi_in_port_names();
+    clock_names.insert(0, "(internal)".into());
     let current_in = state
         .active_in_port
         .as_ref()
@@ -791,6 +792,12 @@ fn open_config_dialog(state: &mut AppState) {
         .and_then(|(p, client)| client.port_name(p).ok())
         .and_then(|name| in_names.iter().position(|n| *n == name))
         .unwrap_or(0);
+
+    let current_clock = state
+        .active_clock_name()
+        .and_then(|name| clock_names.iter().position(|n| *n == name))
+        .unwrap_or(0);
+
     let current_out = state
         .active_out_port
         .as_ref()
@@ -804,6 +811,10 @@ fn open_config_dialog(state: &mut AppState) {
             Select::new("input", in_names)
                 .label("MIDI input")
                 .selected(current_in)
+                .boxed(),
+            Select::new("clock", clock_names)
+                .label("Clock SRC")
+                .selected(current_clock)
                 .boxed(),
             Checkbox::new("velocity", "Record Velocity")
                 .checked(state.project().record_input_velocity)
@@ -824,17 +835,6 @@ fn open_config_dialog(state: &mut AppState) {
         if let Some(velocity) = result.bool("velocity") {
             state.set_midi_velocity_record(velocity);
         }
-        if let Some(input) = result.choice("input") {
-            let input = if input == 0 {
-                None
-            } else {
-                state
-                    .midi_in_client
-                    .as_ref()
-                    .and_then(|client| client.ports().get(input - 1).cloned())
-            };
-            state.set_midi_input(input)?;
-        }
         if let Some(output) = result.choice("output") {
             let output = if output == 0 {
                 None
@@ -846,8 +846,16 @@ fn open_config_dialog(state: &mut AppState) {
             };
             state.set_midi_output(output);
         }
-
-        return Ok(());
+        // inputs last, so a port that fails to open doesn't drop the other changes
+        let clock = result
+            .choice("clock")
+            .map(|clock| state.set_midi_sync(clock));
+        let input = result.choice("input").map(|input| {
+            let port = state.input_port_for_choice(input);
+            state.set_midi_input(port)
+        });
+        clock.unwrap_or(Ok(()))?;
+        return input.unwrap_or(Ok(()));
     });
     state.open_dialog(dialog);
 }
@@ -885,51 +893,124 @@ fn open_clear_dialog(state: &mut AppState) {
 }
 fn open_instrument_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
-    let name = &state.project().instruments[instrument as usize].name;
-    let volume = state.project().instruments[instrument as usize].volume;
-    let pitch_wheel_range = state.project().instruments[instrument as usize].pitch_wheel_range;
+    let settings = &state.project().instruments[instrument as usize];
     let dialog = Dialog::new(
         format!("Instrument {:1X}", instrument),
         vec![
-            TextPrompt::new("name", "Name").initial(name).boxed(),
-            TextPrompt::new("volume", "Volume")
-                .initial(format!("{:02X}", volume))
+            TextPrompt::new("name", "Name")
+                .initial(&settings.name)
                 .boxed(),
-            TextPrompt::new("pitch_wheel_range", "Bend range (semitones)")
-                .initial(pitch_wheel_range.to_string())
+            NumberBox::new("volume", "Volume", 2)
+                .value(settings.volume as i32)
+                .boxed(),
+            NumberBox::new("pitch_wheel_range", "Bend range (semitones)", 2)
+                .value(settings.pitch_wheel_range as i32)
+                .boxed(),
+            NumberBox::new("default_cc", "Default CC", 2)
+                .range(0, 0x7F)
+                .value(settings.default_cc as i32)
+                .boxed(),
+            NumberBox::new("transpose", "Transpose (semitones)", 2)
+                .range(i8::MIN as i32, i8::MAX as i32)
+                .value(settings.transpose as i32)
                 .boxed(),
         ],
     )
+    .focus_first()
     .on_submit(move |state, result| {
         if let Some(name) = result.text("name") {
             state.project_mut().instruments[instrument as usize].name = name.into();
         }
-        if let Some(vol) = result.text("volume") {
-            let vol = u8::from_str_radix(vol, 16).unwrap_or(volume);
-            state.set_global_volume(instrument, vol);
+        if let Some(volume) = result.number("volume") {
+            state.set_global_volume(instrument, volume as u8);
         }
-        if let Some(range) = result.text("pitch_wheel_range") {
-            state.project_mut().instruments[instrument as usize].pitch_wheel_range =
-                range.parse().unwrap_or(pitch_wheel_range);
+        if let Some(range) = result.number("pitch_wheel_range") {
+            state.project_mut().instruments[instrument as usize].pitch_wheel_range = range as u8;
+        }
+        if let Some(control) = result.number("default_cc") {
+            state.set_default_cc(instrument, control as u8);
+        }
+        if let Some(transpose) = result.number("transpose") {
+            state.set_instrument_transpose(instrument, transpose as i8);
         }
         return Ok(());
     });
     state.open_dialog(dialog);
 }
-fn open_velocity_dialog(state: &mut AppState) {
-    let velocity = state.project().global_velocity;
+fn open_about_dialog(state: &mut AppState) {
+    let logo = FIGlet::small()
+        .ok()
+        .and_then(|font| font.convert(TITLE).map(|figure| figure.to_string()))
+        .unwrap_or_else(|| TITLE.to_owned());
+    let year = Local::now().year();
+    let years = if year > FIRST_YEAR {
+        format!("{FIRST_YEAR}-{year}")
+    } else {
+        FIRST_YEAR.to_string()
+    };
+    let build = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    // pad the logo's lines to one width so centering keeps them lined up
+    let width = logo
+        .lines()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    let logo: Vec<String> = logo
+        .trim_end()
+        .lines()
+        .map(|line| format!("{line:<width$}"))
+        .collect();
+    let lines = [
+        logo.join("\n"),
+        String::new(),
+        format!("v{}", env!("CARGO_PKG_VERSION")),
+        format!(
+            "{build} build, {} {}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+        String::new(),
+        "A MIDI tracker for the terminal".to_owned(),
+        "Created by TheExiledCat".to_owned(),
+        format!(
+            "{} {years} TheExiledCat, MIT License",
+            glyphs::pick("\u{a9}", "(c)")
+        ),
+    ];
+    let mut components: Vec<Box<dyn DialogComponent>> = lines
+        .into_iter()
+        .map(|line| Label::new(line).centered().boxed() as Box<dyn DialogComponent>)
+        .collect();
+    components.push(Link::new(REPOSITORY_URL).boxed());
+    let dialog = Dialog::new("About", components)
+        .level(InfoLevel::Success)
+        .is_cancellable(false);
+    state.open_dialog(dialog);
+}
+fn open_global_dialog(state: &mut AppState) {
     let dialog = Dialog::new(
-        "Velocity",
+        "Global",
         vec![
-            TextPrompt::new("velocity", "Velocity")
-                .initial(format!("{:02X}", velocity))
+            NumberBox::new("velocity", "Velocity", 2)
+                .value(state.project().global_velocity as i32)
+                .boxed(),
+            NumberBox::new("transpose", "Transpose (semitones)", 2)
+                .range(i8::MIN as i32, i8::MAX as i32)
+                .value(state.project().transpose as i32)
                 .boxed(),
         ],
     )
+    .focus_first()
     .on_submit(move |state, result| {
-        if let Some(text) = result.text("velocity") {
-            let velocity = u8::from_str_radix(text, 16).unwrap_or(velocity);
-            state.set_global_velocity(velocity);
+        if let Some(velocity) = result.number("velocity") {
+            state.set_global_velocity(velocity as u8);
+        }
+        if let Some(transpose) = result.number("transpose") {
+            state.set_transpose(transpose as i8);
         }
         return Ok(());
     });
@@ -1016,9 +1097,15 @@ impl MtrakWidget for InstrumentList {
             .render(layout[1], buf);
 
         Paragraph::new(format!(
-            "OCT: {}, GLB VEL: {:02X}",
+            "OCT: {}, GLB VEL: {:02X}, GLB TRSP: {}{:02X}",
             state.current_octave,
-            state.project().global_velocity
+            state.project().global_velocity,
+            if state.project().transpose < 0 {
+                "-"
+            } else {
+                "+"
+            },
+            state.project().transpose.unsigned_abs()
         ))
         .render(layout[2], buf);
     }
@@ -1093,9 +1180,10 @@ impl MtrakWidget for MidiEventList {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum UtilListAction {
     Instruments,
-    Velocity,
+    Global,
     Config,
     Clear,
+    About,
 }
 struct UtilList {
     keymap: Keymap<UtilListAction>,
@@ -1105,9 +1193,10 @@ impl UtilList {
         use UtilListAction::*;
         let keymap = Keymap::new()
             .bind(Key::ctrl('r'), Instruments, "Instrument")
-            .bind(Key::ctrl('e'), Velocity, "GLB Velocity")
+            .bind(Key::ctrl('e'), Global, "Global")
             .bind(Key::alt('z'), Clear, "Clear")
-            .bind(Key::ctrl('o'), Config, "Config");
+            .bind(Key::ctrl('o'), Config, "Config")
+            .bind(Key::ctrl('t'), About, "About");
         return Self { keymap };
     }
 }
@@ -1155,8 +1244,9 @@ impl KeyActions for UtilList {
     fn perform(&mut self, action: Self::Action, state: &mut AppState) -> Result<()> {
         match action {
             UtilListAction::Instruments => open_instrument_dialog(state),
-            UtilListAction::Velocity => open_velocity_dialog(state),
+            UtilListAction::Global => open_global_dialog(state),
             UtilListAction::Config => open_config_dialog(state),
+            UtilListAction::About => open_about_dialog(state),
             UtilListAction::Clear => open_clear_dialog(state),
         }
         return Ok(());
@@ -1165,8 +1255,9 @@ impl KeyActions for UtilList {
     fn describe(action: UtilListAction) -> &'static str {
         return match action {
             UtilListAction::Instruments => "Edit the current instrument",
-            UtilListAction::Velocity => "Set the global velocity",
-            UtilListAction::Config => "Choose the MIDI output",
+            UtilListAction::Global => "Set the global velocity and transpose",
+            UtilListAction::Config => "Edit Configuration",
+            UtilListAction::About => "About mTrak",
             UtilListAction::Clear => "Clear part of the current pattern",
         };
     }
