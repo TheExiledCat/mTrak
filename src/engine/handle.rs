@@ -158,8 +158,7 @@ impl EngineHandle {
     pub fn set_clock_source(&self, source: ClockSource) {
         self.send(EngineCommand::SetClockSource(source));
     }
-    /// A sender for the clock input's callback, so pulses reach the engine without going
-    /// through the UI.
+    /// A sender for the clock input's callback.
     pub fn clock_sender(&self) -> Option<Sender<EngineCommand>> {
         return self.commands.clone();
     }

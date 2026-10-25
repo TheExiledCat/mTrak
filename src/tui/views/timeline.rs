@@ -261,8 +261,7 @@ fn edit_keymap() -> Keymap<TimelineAction> {
     )));
 }
 
-/// Asks whether pasting a pattern of a different length changes this pattern's length to the
-/// copy's, or keeps it.
+/// Asks whether a pasted pattern of another length changes this one's length.
 fn open_paste_length_dialog(state: &mut AppState, row_count: u16, copied_length: u16) {
     let (text, options) = if copied_length > row_count {
         (
@@ -900,8 +899,7 @@ impl TimeLineView {
         self.refresh_row_and_advance(state, row);
         return true;
     }
-    /// Plays the cell's note at its volume so a new volume can be heard; volume `00` silences it.
-    /// Skipped during playback, where it would cut the track's playing note.
+    /// Plays the cell's note at its volume, unless playback is running.
     fn preview_cell(&self, state: &AppState, track: usize, row: usize) {
         if state.engine.status().play_mode() != PlayMode::Paused {
             return;

@@ -80,8 +80,7 @@ pub trait DialogComponent: MtrakWidget {
         return false;
     }
     fn set_focused(&mut self, _focused: bool) {}
-    /// Draws anything that goes on top of the whole dialog within `bounds`, e.g. an open
-    /// dropdown list. Only called for the focused component, after the rest of the dialog.
+    /// Draws on top of the whole dialog, e.g. an open dropdown list.
     fn render_overlay(&mut self, _state: &AppState, _bounds: Rect, _buf: &mut Buffer) {}
     /// The id and current value of an input component; `None` for static content.
     fn value(&self) -> Option<(&'static str, DialogValue)> {
@@ -182,8 +181,7 @@ impl Dialog {
         return self;
     }
 
-    /// Opens with the first focusable component focused instead of none, e.g. so typing goes
-    /// straight into a text field.
+    /// Opens with the first focusable component focused.
     pub fn focus_first(mut self) -> Self {
         if self.focus.is_none() {
             self.move_focus(true);
@@ -246,8 +244,7 @@ impl Dialog {
         }
     }
 
-    /// Moves focus to the next (or previous) focusable component. Past the last (or first)
-    /// one nothing is focused, and the next move wraps around.
+    /// Moves focus to the next or previous field, wrapping round through none.
     fn move_focus(&mut self, forward: bool) {
         let focusable: Vec<usize> = (0..self.components.len())
             .filter(|&i| self.components[i].focusable())
@@ -432,8 +429,7 @@ impl DialogComponent for Label {
     }
 }
 
-/// A centered web link, clickable in terminals that support hyperlinks (OSC 8) and plain
-/// underlined text elsewhere.
+/// A centered web link, clickable in terminals that support OSC 8 hyperlinks.
 pub struct Link {
     url: String,
 }
@@ -449,8 +445,7 @@ impl MtrakWidget for Link {
         let chars: Vec<char> = self.url.chars().collect();
         let width = (chars.len() as u16).min(area.width);
         let x = area.x + (area.width - width) / 2;
-        // as in ratatui's hyperlink example: each cell gets two characters wrapped in the
-        // escape codes, so the terminal still counts the right width
+        // two characters per cell, as in ratatui's hyperlink example
         for (i, pair) in chars[..width as usize].chunks(2).enumerate() {
             let text: String = pair.iter().collect();
             let cell = &mut buf[(x + i as u16 * 2, area.y)];
@@ -532,9 +527,7 @@ impl DialogComponent for TextPrompt {
     }
 }
 
-/// A hex number input. Typing fills in up to `digits` hex digits, dropping the first one once
-/// it is full, and Up and Down step the value within its range. A range below 0 also takes a
-/// `-` to flip the sign.
+/// A hex number input that Up and Down step within its range.
 pub struct NumberBox {
     id: &'static str,
     label: String,
@@ -798,8 +791,7 @@ impl DialogComponent for Checkbox {
     }
 }
 
-/// A dropdown to pick one option from. Shows only the chosen option until focused, then
-/// lists the options on top of everything else. Contributes no value when it has no options.
+/// A dropdown that lists its options on top of everything else when focused.
 pub struct Select {
     id: &'static str,
     label: Option<String>,
@@ -850,8 +842,7 @@ impl Select {
         return self;
     }
 
-    /// Where the open list goes: below the box, or above it when it only fits there. When it
-    /// fits on neither side it takes the roomier one and shrinks, scrolling the rest.
+    /// Where the open list goes: below the box, else above, shrinking to fit.
     fn list_area(&self, bounds: Rect) -> Rect {
         let rows = self.options.len().min(self.max_visible as usize) as u16;
         let wanted = rows + 2;

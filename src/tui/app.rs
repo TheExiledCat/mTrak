@@ -669,8 +669,7 @@ impl AppState {
         self.active_clock_port = port;
         return self.reconnect_inputs();
     }
-    /// Reopens the input connections, one per port: a device used for both notes and clock
-    /// shares a connection, since some backends (WinMM) only let a port be opened once.
+    /// Reopens the input connections, sharing one when notes and clock use the same port.
     fn reconnect_inputs(&mut self) -> Result<()> {
         for connection in self.midi_in_connections.drain(..) {
             connection.close();
@@ -709,9 +708,7 @@ impl AppState {
         }
         return result;
     }
-    /// Connects to an input port with a fresh `MidiInput`, since `connect` consumes the client.
-    /// Notes go to `midi_in_receiver` and are picked up in `update`; clock and transport go
-    /// straight to the engine.
+    /// Connects to an input port; notes go to the UI, clock and transport to the engine.
     fn connect_input_port(
         &self,
         port: &MidiInputPort,
@@ -761,8 +758,7 @@ impl AppState {
         self.engine.set_output_port(port.clone());
         self.active_out_port = port;
     }
-    /// Picks the input port the clock follows; `0` is the internal clock, anything else is
-    /// an index into the input ports, offset by one.
+    /// Picks the clock input: `0` is internal, otherwise an input port index plus one.
     pub fn set_midi_sync(&mut self, choice: usize) -> Result<()> {
         let port = self.input_port_for_choice(choice);
         return self.set_clock_input(port);
@@ -1004,8 +1000,7 @@ impl AppState {
         self.project_load_request = Some(path);
     }
     fn shut_down(&mut self) {
-        // the clock input holds a sender to the engine, so it has to close before the engine
-        // thread can end
+        // the clock input holds an engine sender, so it closes first
         for connection in self.midi_in_connections.drain(..) {
             connection.close();
         }
@@ -1088,8 +1083,7 @@ impl AppState {
         self.active_pattern = row.pattern_id;
         self.active_sequence_index = index;
     }
-    /// Moves the sequence cursor like `show_sequence`. While the song plays, playback jumps
-    /// there too, as in FT2.
+    /// Moves the sequence cursor, jumping playback there while the song plays.
     pub fn select_sequence(&mut self, index: usize) {
         if self.project.sequence.get(index).is_none() {
             return;

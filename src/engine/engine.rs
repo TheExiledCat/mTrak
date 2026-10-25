@@ -94,9 +94,7 @@ struct ScheduledNote {
 enum Scheduled {
     /// Plays the note once, from a delay.
     Once(Note),
-    /// Replays the note every `every` ticks until the row ends, changing its velocity by
-    /// `volume` each time, or playing it at `fixed` when the row has a volume. Counts on from
-    /// the track's last note, so the interval carries on across rows.
+    /// Replays the note every `every` ticks, like FT2's multi retrig.
     Retrig {
         note: Note,
         every: u32,
@@ -138,8 +136,7 @@ pub struct MtrakEngine {
     /// Where the clock input's Continue picks up in the song, kept when playback stops.
     resume: Option<(Position, u32)>,
     pending_transport: Option<PendingTransport>,
-    /// Where the next row plays from instead of following on, after a pattern switch or a
-    /// sequence jump during playback.
+    /// Where the next row plays from after a pattern switch or sequence jump.
     pending_jump: Option<Position>,
     /// Timestamps of the clock input's last beat of pulses, oldest first.
     external_pulses: VecDeque<u64>,
@@ -154,11 +151,9 @@ pub struct MtrakEngine {
     started_early: [Option<Note>; TRACK_COUNT as usize],
     /// The last note each track played, which a retrig without a note of its own repeats.
     last_notes: [Option<Note>; TRACK_COUNT as usize],
-    /// Ticks since each track last started a note, counted only on rows with a retrig, like
-    /// FT2's retrig counter.
+    /// Ticks since each track's last note, like FT2's retrig counter.
     retrig_counters: [u32; TRACK_COUNT as usize],
-    /// Each track's last retrig interval and velocity change, which an `R` with a `0` for either
-    /// keeps using, like FT2's effect memory.
+    /// Each track's last retrig interval and velocity change, like FT2's effect memory.
     retrig_memory: [(u8, u8); TRACK_COUNT as usize],
 
     midi_command_handler: MidiCommandHandler,
@@ -328,8 +323,7 @@ impl MtrakEngine {
             .max(1);
     }
 
-    /// The time between pulses: from the BPM, or measured from the clock input when synced,
-    /// which also sets the tempo of playback started locally.
+    /// The time between pulses, from the BPM or measured from the clock input.
     fn pulse_duration(&self) -> Duration {
         return match self.clock_source {
             ClockSource::Internal => pulse_duration(self.bpm()),
@@ -358,8 +352,7 @@ impl MtrakEngine {
         self.start(mode, Message::Start, false, 0);
     }
 
-    /// Shows the measured tempo, holding the shown value until it is clearly off so jitter
-    /// around a half BPM doesn't flicker between two values.
+    /// Shows the measured tempo, ignoring small jitter.
     fn publish_synced_bpm(&self) {
         let bpm = 60.0 / (self.external_period.as_secs_f64() * PULSES_PER_QUARTER as f64);
         if (bpm - self.status.synced_bpm() as f64).abs() < 0.75 {
@@ -369,9 +362,7 @@ impl MtrakEngine {
             .set_synced_bpm(bpm.round().clamp(1.0, u8::MAX as f64) as u8);
     }
 
-    /// Averages the time between pulses over the last beat. A gap long enough to be a stopped
-    /// clock starts the measurement over, and so does a timestamp going backwards, since each
-    /// new input connection counts from zero again.
+    /// Averages the time between clock input pulses over the last beat.
     fn measure_external_pulse(&mut self, timestamp: u64) {
         if self
             .external_pulses
@@ -397,8 +388,7 @@ impl MtrakEngine {
         self.publish_synced_bpm();
     }
 
-    /// One pulse from the clock input. A pending Start or Continue begins on it, otherwise it
-    /// moves playback along like an internal pulse.
+    /// One pulse from the clock input, starting a pending Start or Continue.
     fn external_pulse(&mut self, timestamp: u64) {
         self.last_external_pulse_at = Some(Instant::now());
         self.measure_external_pulse(timestamp);
@@ -432,8 +422,7 @@ impl MtrakEngine {
         };
     }
 
-    /// Following the clock input always plays the song on loop, since the master decides
-    /// when it ends.
+    /// Plays the song from the top on loop, for the clock input's Start.
     fn start_cued(&mut self) {
         self.position = self.song_start();
         self.start(PlayMode::SongLoop, Message::Start, true, 0);
@@ -448,15 +437,13 @@ impl MtrakEngine {
         self.start(PlayMode::SongLoop, Message::Continue, true, tick);
     }
 
-    /// Moves where the clock input's Continue picks up to `sixteenths` sixteenth notes into
-    /// the song.
+    /// Sets where the clock input's Continue picks up, from a song position pointer.
     fn song_position(&mut self, sixteenths: u16) {
         let pulses = sixteenths as usize * (PULSES_PER_QUARTER / 4) as usize;
         self.resume = self.song_position_at(pulses);
     }
 
-    /// The row and tick `pulses` pulses from the start of the song, wrapping around at its end.
-    /// Rows last the song's speed in pulses; speed commands are not followed.
+    /// The row and tick `pulses` pulses into the song, at the song's speed.
     fn song_position_at(&self, pulses: usize) -> Option<(Position, u32)> {
         let speed = self.speed.max(1) as usize;
         let row_count = |id: PatternId| {
@@ -526,8 +513,7 @@ impl MtrakEngine {
         self.play_from(mode, position);
     }
 
-    /// Carries on playing pattern `id` from the row after the current one, on the next row.
-    /// The playing row is shown in the new pattern straight away.
+    /// Carries on in pattern `id` from the next row.
     fn switch_pattern(&mut self, id: PatternId) {
         if self.clock.is_none() || !matches!(self.mode, PlayMode::PatternLoop | PlayMode::Pattern) {
             return;
@@ -553,8 +539,7 @@ impl MtrakEngine {
         );
     }
 
-    /// Jumps to the start of sequence position `sequence_index` on the next row. It is shown
-    /// straight away.
+    /// Jumps to the start of sequence position `sequence_index` on the next row.
     fn jump_to_sequence(&mut self, sequence_index: usize) {
         if self.clock.is_none() || !matches!(self.mode, PlayMode::SongLoop | PlayMode::Song) {
             return;
@@ -574,15 +559,13 @@ impl MtrakEngine {
             .set_position(sequence_index, position.pattern.0 as usize, 0);
     }
 
-    /// Swaps the early notes planned from the row that was coming next for those of the row
-    /// a jump goes to.
+    /// Replans the early notes for the row a jump goes to.
     fn reschedule_early_notes(&mut self) {
         self.early_notes = [None; TRACK_COUNT as usize];
         self.schedule_early_notes();
     }
 
-    /// Resets voices and the clock, sends `transport`, then plays the row at the position.
-    /// Starting partway into the row at `tick` leaves the row's notes out.
+    /// Resets voices and the clock, then plays the row, starting `tick` into it.
     fn start(&mut self, mode: PlayMode, transport: Message, follows_input: bool, tick: u32) {
         if self.current_pattern().is_none() {
             self.stop();
@@ -610,8 +593,7 @@ impl MtrakEngine {
         self.time_next_pulse(now);
     }
 
-    /// Schedules the pulse after the one at `pulse_time`, once the pulse has run so a tempo
-    /// command on it applies straight away.
+    /// Schedules the pulse after `pulse_time`, at the current tempo.
     fn time_next_pulse(&mut self, pulse_time: Instant) {
         let pulse_duration = self.pulse_duration();
         if let Some(clock) = &mut self.clock {
@@ -646,8 +628,7 @@ impl MtrakEngine {
         self.dispatch(MidiEvent::Aggregate(events));
     }
 
-    /// Stops playback, then sends all notes off, all sound off and reset controllers on every
-    /// channel.
+    /// Stops playback and silences and resets every channel.
     fn panic(&mut self) {
         if self.clock.is_some() {
             self.stop();
@@ -699,8 +680,7 @@ impl MtrakEngine {
         }
     }
 
-    /// One MIDI clock pulse, which is one tick of the row. The row ends after the speed's
-    /// worth of ticks, so the speed sets how many rows play per beat.
+    /// One MIDI clock pulse, which is one tick of the row.
     fn pulse(&mut self) {
         if self.current_pattern().is_none() {
             self.stop();
@@ -940,8 +920,7 @@ impl MtrakEngine {
                 }
                 NoteAction::Skip => {}
                 NoteAction::RetrigNote(every) => {
-                    // like FT2's E9x, without a note it repeats the track's last one, and E90
-                    // replays it straight away
+                    // like FT2's E9x, without a note it repeats the track's last one
                     let repeated = match note.kind {
                         NoteKind::Empty => self.last_notes[track],
                         _ => {
@@ -1165,8 +1144,7 @@ impl MtrakEngine {
             self.retrig_counters[track] = count;
             return;
         }
-        // the row's volume wins over the velocity change, as in FT2; 0 and 8 leave the
-        // velocity alone, so a velocity slide still sets it per hit
+        // as in FT2 the row's volume wins; 0 and 8 leave a velocity slide in charge
         if fixed.is_some() {
             note.velocity = fixed;
         } else if !matches!(volume, 0x0 | 0x8) {

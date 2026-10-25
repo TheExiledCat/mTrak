@@ -846,8 +846,7 @@ fn open_config_dialog(state: &mut AppState) {
             };
             state.set_midi_output(output);
         }
-        // inputs go last and both get set, so a port that fails to open doesn't drop the
-        // other changes
+        // inputs last, so a port that fails to open doesn't drop the other changes
         let clock = result
             .choice("clock")
             .map(|clock| state.set_midi_sync(clock));
