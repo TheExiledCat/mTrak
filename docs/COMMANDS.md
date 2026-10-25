@@ -190,7 +190,7 @@ Changes the BPM or the speed, starting on its own row:
 - Both change how fast the song plays: the BPM sets how long a tick is, the speed how many
   ticks a row lasts. `F03` plays the rows below it twice as fast.
 - While following an external MIDI clock, BPM values have no effect, since the clock sets the
-  tempo; speed values still apply (see [SYNC.md](SYNC.md)).
+  tempo; speed values still apply.
 
 ### `Y` Probability
 
