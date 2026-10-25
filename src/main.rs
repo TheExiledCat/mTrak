@@ -2,7 +2,7 @@ use std::{io, process::ExitCode};
 
 use clap::Parser;
 use cli::Cli;
-use data::project::Project;
+use data::{config::Config, project::Project};
 use error::{MTrakError, Result};
 use ratatui::{
     DefaultTerminal,
@@ -71,8 +71,20 @@ fn run(terminal: DefaultTerminal, args: Cli) -> Result<()> {
         None => (Project::empty(), None),
     };
 
-    let mut app = App::new(terminal, 120, Theme::from_color_mode(args.color), project)?;
+    let config = files::get_config_file_path()
+        .and_then(|path| Config::load(&path))
+        .unwrap_or_else(|e| {
+            startup_errors.push(e);
+            Config::default()
+        });
+    let theme = Theme::from_color_mode(args.color.or(config.theme)).unwrap_or_else(|e| {
+        startup_errors.push(e);
+        Theme::ft2()
+    });
+
+    let mut app = App::new(terminal, 120, theme, project)?;
     app.state.project_path = project_path;
+    app.state.config = config;
     for error in startup_errors {
         app.state.report_error(error);
     }

@@ -1,0 +1,14 @@
+# Tokyo Night for mTrak. Copy this file to theme.toml in the mTrak config folder and
+# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Colors from Tokyo Night (https://github.com/tokyo-night/tokyo-night-vscode-theme), Copyright (c) 2018-present Enkia, MIT License.
+
+backdrop     = "#292E42"
+muted        = "#7AA2F7"
+disabled     = "#565F89"
+surface      = "#1A1B26"
+surface_text = "#A9B1D6"
+text         = "#C0CAF5"
+danger       = "#F7768E"
+warning      = "#E0AF68"
+success      = "#9ECE6A"
+mark         = "#414868"

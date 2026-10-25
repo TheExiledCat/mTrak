@@ -1,0 +1,14 @@
+# Dracula for mTrak. Copy this file to theme.toml in the mTrak config folder and
+# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Colors from Dracula (https://github.com/dracula/dracula-theme), Copyright (c) 2023 Dracula Theme, MIT License.
+
+backdrop     = "#44475A"
+muted        = "#BD93F9"
+disabled     = "#6272A4"
+surface      = "#282A36"
+surface_text = "#F8F8F2"
+text         = "#F8F8F2"
+danger       = "#FF5555"
+warning      = "#F1FA8C"
+success      = "#50FA7B"
+mark         = "#6272A4"

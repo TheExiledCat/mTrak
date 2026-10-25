@@ -1,0 +1,14 @@
+# Catppuccin Mocha for mTrak. Copy this file to theme.toml in the mTrak config folder and
+# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Colors from Catppuccin (https://github.com/catppuccin/catppuccin), Copyright (c) 2021 Catppuccin, MIT License.
+
+backdrop     = "#313244"
+muted        = "#B4BEFE"
+disabled     = "#6C7086"
+surface      = "#1E1E2E"
+surface_text = "#BAC2DE"
+text         = "#CDD6F4"
+danger       = "#F38BA8"
+warning      = "#F9E2AF"
+success      = "#A6E3A1"
+mark         = "#45475A"

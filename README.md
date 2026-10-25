@@ -24,7 +24,7 @@ any hardware or software synth.
 - Built-in file browser for opening and saving projects
 - Context-aware key hints and a built in shortcuts screen
 - FT2 color theme on truecolor terminals, a 16-color theme on Windows consoles and macOS
-  terminals without truecolor, and a monochrome fallback (custom themes WIP)
+  terminals without truecolor, a monochrome fallback, and custom colors from a theme file
 - ASCII mode for terminals or fonts without Unicode box drawing and symbols
 
 ## Installation
@@ -80,10 +80,10 @@ Press `/` to see every pattern command with a short description. The full guide 
 
 ### Options
 
-| Option                         | Description                                                    |
-| ------------------------------ | -------------------------------------------------------------- |
-| `--color <mono\|ansi16\|full>` | Force a color theme instead of detecting one from the terminal |
-| `--ascii-mode`                 | Draw with ASCII characters only                                |
+| Option                                | Description                                                         |
+| ------------------------------------- | ------------------------------------------------------------------- |
+| `--color <mono\|ansi16\|full\|custom>` | Use this theme instead of the one in `config.toml` or the detected one |
+| `--ascii-mode`                        | Draw with ASCII characters only                                     |
 
 Setting `NO_COLOR` or `TERM=dumb` also selects the monochrome theme.
 
@@ -98,6 +98,15 @@ folder. Both are created on startup if they don't exist yet.
 | Linux    | `~/Music/mtrak`             | `~/.config/mtrak`                     |
 | macOS    | `~/Music/mtrak`             | `~/Library/Application Support/mtrak` |
 | Windows  | `%USERPROFILE%\Music\mtrak` | `%LOCALAPPDATA%\mtrak`                |
+
+The config folder holds two files, both written with their defaults when they're missing:
+
+- `config.toml`: settings that aren't part of a project. For now that's `theme`, the theme to
+  open with (`auto`, `mono`, `ansi16`, `full` or `custom`). Change it with `Ctrl+P`, which can
+  save it to the file or keep it for this session only.
+- `theme.toml`: the colors used by the `custom` theme, as hex (`"#49688C"`) or ANSI color names
+  (`"Red"`, `"DarkGray"`). Each color has a comment saying where it shows up. Colors left out
+  come from the palette set by `base` (`"ft2"` or `"ansi16"`).
 
 On Linux the music folder follows `XDG_MUSIC_DIR` and the config folder follows
 `XDG_CONFIG_HOME`, if they're set.

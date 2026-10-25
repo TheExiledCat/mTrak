@@ -14,14 +14,16 @@ use ratatui::{
 };
 
 use crate::{
+    cli::ColorMode,
     data::{
-        config::TITLE,
+        config::{self, TITLE},
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, midi_to_string},
         pattern::{ClearOption, ClearTarget},
     },
     error::Result,
     tui::{
         app::AppState,
+        files,
         framework::{
             core_extensions::Boxed,
             dialog::{
@@ -32,6 +34,7 @@ use crate::{
             widget::{Collapsible, MtrakWidget, clicked_in},
         },
         glyphs,
+        theme::Theme,
         views::header::SequenceAction::*,
     },
     util::time::duration_to_hh_mm_ss_string,
@@ -985,6 +988,44 @@ fn global_info(state: &AppState) -> String {
         state.project().transpose.unsigned_abs()
     );
 }
+/// Settings that aren't part of the project, so they're written to config.toml straight away
+/// unless they're only meant for this session.
+fn open_config_dialog(state: &mut AppState) {
+    let themes = config::theme_options();
+    let names: Vec<String> = themes.iter().map(|t| config::theme_name(*t)).collect();
+    let current = themes
+        .iter()
+        .position(|t| *t == state.config.theme)
+        .unwrap_or(0);
+    let dialog = Dialog::new(
+        "Config",
+        vec![
+            Select::new("theme", names)
+                .label("Theme")
+                .selected(current)
+                .boxed(),
+            Checkbox::new("save", "Save to config.toml")
+                .checked(true)
+                .boxed(),
+        ],
+    )
+    .on_submit(move |state, result| {
+        let theme = result
+            .choice("theme")
+            .map_or(state.config.theme, |choice| themes[choice]);
+        return apply_config(state, theme, result.bool("save").unwrap_or(false));
+    });
+    state.open_dialog(dialog);
+}
+/// Switches to `theme`, and makes it the theme to open with when `save` is set.
+fn apply_config(state: &mut AppState, theme: Option<ColorMode>, save: bool) -> Result<()> {
+    state.config.theme = theme;
+    if save {
+        state.config.save(&files::get_config_file_path()?)?;
+    }
+    state.theme = Theme::from_color_mode(theme)?;
+    return Ok(());
+}
 fn open_midi_dialog(state: &mut AppState) {
     let mut in_names = state.get_midi_in_port_names();
     in_names.insert(0, "(none)".into());
@@ -1378,6 +1419,7 @@ enum UtilListAction {
     Instruments,
     Global,
     Midi,
+    Config,
     Clear,
     About,
     Extend,
@@ -1393,6 +1435,7 @@ impl UtilList {
             .bind(Key::ctrl('e'), Global, "Global")
             .bind(Key::alt('z'), Clear, "Clear")
             .bind(Key::ctrl('o'), Midi, "Midi")
+            .bind(Key::ctrl('p'), Config, "Config")
             .bind(Key::ctrl('x'), Extend, "Extend")
             .bind(Key::ctrl('t'), About, "About");
         return Self { keymap };
@@ -1469,6 +1512,7 @@ impl KeyActions for UtilList {
             UtilListAction::Instruments => open_instrument_dialog(state),
             UtilListAction::Global => open_global_dialog(state),
             UtilListAction::Midi => open_midi_dialog(state),
+            UtilListAction::Config => open_config_dialog(state),
             UtilListAction::About => open_about_dialog(state),
             UtilListAction::Clear => open_clear_dialog(state),
             UtilListAction::Extend => state.header_collapsed = !state.header_collapsed,
@@ -1481,9 +1525,24 @@ impl KeyActions for UtilList {
             UtilListAction::Instruments => "Edit the current instrument",
             UtilListAction::Global => "Set the global velocity and transpose",
             UtilListAction::Midi => "Set the MIDI ports and clock",
+            UtilListAction::Config => "Edit the settings in config.toml",
             UtilListAction::About => "About mTrak",
             UtilListAction::Clear => "Clear part of the current pattern",
             UtilListAction::Extend => "Collapse or expand the header to show more of the pattern",
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::project::Project;
+
+    #[test]
+    fn a_session_only_config_switches_the_theme() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        apply_config(&mut state, Some(ColorMode::Ansi16), false).unwrap();
+        assert_eq!(state.config.theme, Some(ColorMode::Ansi16));
+        assert_eq!(state.theme.background, Theme::ansi16().background);
     }
 }

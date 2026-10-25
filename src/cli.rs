@@ -13,9 +13,14 @@ pub struct Cli {
     pub no_update_check: bool,
 }
 
-#[derive(ValueEnum, Clone, Copy, Debug)]
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorMode {
+    /// No colors, only bold, dim, underline and reverse
     Mono,
+    /// The 16 standard terminal colors
     Ansi16,
+    /// The FT2 theme, for truecolor terminals
     Full,
+    /// The colors in theme.toml in the config folder
+    Custom,
 }

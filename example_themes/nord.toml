@@ -1,0 +1,14 @@
+# Nord for mTrak. Copy this file to theme.toml in the mTrak config folder and
+# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Colors from Nord (https://github.com/nordtheme/nord), Copyright (c) 2016-present Sven Greb, MIT License.
+
+backdrop     = "#3B4252"
+muted        = "#88C0D0"
+disabled     = "#616E88"
+surface      = "#2E3440"
+surface_text = "#D8DEE9"
+text         = "#ECEFF4"
+danger       = "#BF616A"
+warning      = "#EBCB8B"
+success      = "#A3BE8C"
+mark         = "#434C5E"
