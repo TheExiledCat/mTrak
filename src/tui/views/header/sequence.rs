@@ -110,7 +110,7 @@ impl SequenceList {
                     i, row.pattern_id.0, row.repeats
                 ));
                 if i == state.active_sequence_index {
-                    line = line.style(state.theme.selection);
+                    line = line.style(state.theme.label);
                 }
                 line
             })

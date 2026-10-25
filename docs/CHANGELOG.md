@@ -39,8 +39,8 @@
   same ports and clock settings as before. `Config` is now the new settings dialog
   (`Ctrl+P`). `About` moved to the bottom of the list.
 - Panel titles, the current sequence position, the selected file in the file browser and the
-  instrument list now follow the theme. In the color themes the current sequence position and
-  the selected file use the grey selection bar.
+  instrument list now follow the theme. In the color themes the selected file uses the grey
+  selection bar.
 - In the 16-color theme, unavailable key hints (like Undo with nothing to undo) are now dark
   grey, key and label both, so it's clearer they can't be used.
 - Projects saved with v0.4.0 open in v0.4.1.
