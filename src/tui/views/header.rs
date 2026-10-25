@@ -9,7 +9,6 @@ use ratatui::{
         KeyModifiers,
     },
     layout::{Constraint, Layout, Rect},
-    style::{Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph, Widget},
 };
@@ -30,7 +29,7 @@ use crate::{
                 TextPrompt,
             },
             keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, HelpSection, Key, KeyActions, KeyHint, Keymap},
-            widget::{MtrakWidget, clicked_in},
+            widget::{Collapsible, MtrakWidget, clicked_in},
         },
         glyphs,
         views::header::SequenceAction::*,
@@ -41,6 +40,8 @@ use crate::{
 /// The year mTrak was started, for the copyright line in the About dialog.
 const FIRST_YEAR: i32 = 2026;
 const REPOSITORY_URL: &str = "https://github.com/TheExiledCat/mTrak";
+/// The sequence keybinds in two columns, plus the bottom border.
+pub const COLLAPSED_HEIGHT: u16 = 4;
 
 pub struct Header {
     top_left: HeaderTopLeft,
@@ -82,41 +83,12 @@ impl MtrakWidget for Header {
         self.midi_events.update(_state);
         self.util.update(_state);
     }
-    fn render(
-        &mut self,
-        state: &AppState,
-        area: ratatui::prelude::Rect,
-        buf: &mut ratatui::prelude::Buffer,
-    ) where
-        Self: Sized,
-    {
-        let border = Block::new()
-            .borders(Borders::BOTTOM)
-            .border_style(state.theme.border_strong);
-        border.render(area, buf);
-        let layout = Layout::horizontal([
-            Constraint::Percentage(50),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(20),
-        ])
-        .split(Block::new().inner(area));
-
-        let left_layout = Layout::vertical([Constraint::Max(8), Constraint::Fill(1)])
-            .split(*layout.first().unwrap());
-        let util_block = Block::bordered()
-            .borders(Borders::BOTTOM | Borders::RIGHT)
-            .title_bottom("Util")
-            .title_style(state.theme.border_strong.reversed());
-        let util_inner = util_block.inner(layout[1]);
-        util_block.render(layout[1], buf);
-        self.top_left.render(state, left_layout[0], buf);
-        self.bottom_left.render(state, left_layout[1], buf);
-
-        self.util.render(state, util_inner, buf);
-        self.midi_events
-            .render(state, layout[layout.len() - 2], buf);
-        self.instruments.render(state, *layout.last().unwrap(), buf)
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        if state.header_collapsed {
+            self.render_collapsed(state, area, buf);
+        } else {
+            self.render_full(state, area, buf);
+        }
     }
     fn help(&self, sections: &mut Vec<HelpSection>) {
         let alt = glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL);
@@ -133,6 +105,69 @@ impl MtrakWidget for Header {
     fn key_hints(&self, state: &AppState, hints: &mut Vec<KeyHint>) {
         self.bottom_left.key_hints(state, hints);
         self.instruments.key_hints(state, hints);
+    }
+}
+impl Collapsible for Header {
+    fn render_full(
+        &mut self,
+        state: &AppState,
+        area: ratatui::prelude::Rect,
+        buf: &mut ratatui::prelude::Buffer,
+    ) {
+        let border = Block::new()
+            .borders(Borders::BOTTOM)
+            .border_style(state.theme.text);
+        border.render(area, buf);
+        let layout = Layout::horizontal([
+            Constraint::Percentage(50),
+            Constraint::Percentage(15),
+            Constraint::Percentage(15),
+            Constraint::Percentage(20),
+        ])
+        .split(Block::new().inner(area));
+
+        let left_layout = Layout::vertical([Constraint::Max(8), Constraint::Fill(1)])
+            .split(*layout.first().unwrap());
+        let util_block = Block::bordered()
+            .borders(Borders::BOTTOM | Borders::RIGHT)
+            .title_bottom("Util")
+            .title_style(state.theme.label);
+        let util_inner = util_block.inner(layout[1]);
+        util_block.render(layout[1], buf);
+        self.top_left.render_full(state, left_layout[0], buf);
+        self.bottom_left.render_full(state, left_layout[1], buf);
+
+        self.util.render_full(state, util_inner, buf);
+        self.midi_events
+            .render_full(state, layout[layout.len() - 2], buf);
+        self.instruments
+            .render_full(state, *layout.last().unwrap(), buf)
+    }
+    fn render_collapsed(
+        &mut self,
+        state: &AppState,
+        area: Rect,
+        buf: &mut ratatui::prelude::Buffer,
+    ) {
+        let label_style = state.theme.label;
+        let label = |text: String| Line::styled(format!(" {text} "), label_style);
+        let mut border = Block::new()
+            .borders(Borders::BOTTOM)
+            .border_style(state.theme.text)
+            .title_bottom(label(self.util.extend_hint()).left_aligned())
+            .title_bottom(label(global_info(state)).left_aligned());
+        if let Some(notification) = &state.notification {
+            border = border.title_bottom(label(notification.clone()).right_aligned());
+        }
+        let border =
+            border.title_bottom(label(duration_to_hh_mm_ss_string(&state.time())).right_aligned());
+        let [top_left_area, instruments_area] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Percentage(30)])
+                .areas(border.inner(area));
+        border.render(area, buf);
+        self.top_left.render_collapsed(state, top_left_area, buf);
+        self.instruments
+            .render_collapsed(state, instruments_area, buf);
     }
 }
 struct HeaderTopLeft {
@@ -157,7 +192,12 @@ impl MtrakWidget for HeaderTopLeft {
         }
         return false;
     }
-    fn render(
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        self.render_full(state, area, buf);
+    }
+}
+impl Collapsible for HeaderTopLeft {
+    fn render_full(
         &mut self,
         state: &AppState,
         area: ratatui::prelude::Rect,
@@ -166,16 +206,33 @@ impl MtrakWidget for HeaderTopLeft {
         let block = Block::bordered().borders(Borders::LEFT | Borders::RIGHT);
         let sequence_block = Block::bordered()
             .title_top("Sequence")
-            .title_style(Style::new().reversed())
+            .title_style(state.theme.label)
             .borders(Borders::RIGHT);
         let sequence_width = self.sequence_list.width(state) + 1;
         let layout = Layout::horizontal([Constraint::Length(sequence_width), Constraint::Fill(1)])
             .split(block.inner(area));
         block.render(area, buf);
         self.sequence_list
-            .render(state, sequence_block.inner(layout[0]), buf);
+            .render_full(state, sequence_block.inner(layout[0]), buf);
         sequence_block.render(layout[0], buf);
-        self.pattern_info.render(state, layout[1], buf);
+        self.pattern_info.render_full(state, layout[1], buf);
+    }
+    fn render_collapsed(
+        &mut self,
+        state: &AppState,
+        area: Rect,
+        buf: &mut ratatui::prelude::Buffer,
+    ) {
+        let block = Block::bordered().borders(Borders::LEFT | Borders::RIGHT);
+        let sequence_block = Block::bordered().borders(Borders::RIGHT);
+        let pattern_width = self.pattern_info.collapsed_width(state);
+        let layout = Layout::horizontal([Constraint::Fill(1), Constraint::Length(pattern_width)])
+            .split(block.inner(area));
+        block.render(area, buf);
+        self.sequence_list
+            .render_collapsed(state, sequence_block.inner(layout[0]), buf);
+        sequence_block.render(layout[0], buf);
+        self.pattern_info.render_collapsed(state, layout[1], buf);
     }
 }
 const VU_SECONDS_MAX: f32 = 1.0;
@@ -234,7 +291,12 @@ impl MtrakWidget for HeaderBottomLeft {
             enabled: true,
         });
     }
-    fn render(
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        self.render_full(state, area, buf);
+    }
+}
+impl Collapsible for HeaderBottomLeft {
+    fn render_full(
         &mut self,
         _state: &AppState,
         area: ratatui::prelude::Rect,
@@ -243,7 +305,7 @@ impl MtrakWidget for HeaderBottomLeft {
         let grid_block = Block::bordered()
             .borders(Borders::ALL)
             .title_top("Channels")
-            .title_style(Style::new().reversed());
+            .title_style(_state.theme.label);
         let grid_rect = grid_block.inner(area);
         grid_block.render(area, buf);
         let grid = {
@@ -271,9 +333,9 @@ impl MtrakWidget for HeaderBottomLeft {
                 borders |= Borders::BOTTOM;
             }
             let style = if in_upper == self.upper {
-                Style::new().bold()
+                _state.theme.heading
             } else {
-                Style::new().bold().dim()
+                _state.theme.text_disabled
             };
 
             let block = Block::bordered().borders(borders);
@@ -304,8 +366,15 @@ impl MtrakWidget for HeaderBottomLeft {
                 height,
                 ..inner
             };
-            buf.set_style(bar, _state.theme.border_strong.reversed());
+            buf.set_style(bar, _state.theme.label);
         });
+    }
+    fn render_collapsed(
+        &mut self,
+        _state: &AppState,
+        _area: Rect,
+        _buf: &mut ratatui::prelude::Buffer,
+    ) {
     }
 }
 #[derive(Clone, Copy, PartialEq)]
@@ -383,6 +452,56 @@ impl SequenceList {
         });
     }
 
+    fn render_list(&self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        let lines = (0..state.project().sequence.len())
+            .map(|i| {
+                let row = &state.project().sequence[i];
+                let mut line = Line::raw(format!(
+                    "{:02X} {:02X} {}",
+                    i, row.pattern_id.0, row.repeats
+                ));
+                if i == state.active_sequence_index {
+                    line = line.style(state.theme.selection);
+                }
+                line
+            })
+            .collect::<Vec<Line>>();
+        let visible_rows = area.height.saturating_sub(1) | 1;
+        let [list_area] = Layout::vertical([Constraint::Length(visible_rows)]).areas(area);
+        let middle = (list_area.height.saturating_sub(1) / 2) as usize;
+        let padded: Vec<Line> = repeat_n(Line::default(), middle).chain(lines).collect();
+        let list = Paragraph::new(padded)
+            .scroll((state.active_sequence_index as u16, 0))
+            .centered();
+        list.render(list_area, buf);
+    }
+
+    fn render_keybinds(&self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        Self::render_keybind_column(self.keybind_rows(state).to_vec(), area, buf);
+    }
+
+    fn render_keybind_column(
+        rows: Vec<(String, String)>,
+        area: Rect,
+        buf: &mut ratatui::prelude::Buffer,
+    ) {
+        let (key_width, label_width) = Self::keybind_widths(&rows);
+        let [keys_area, colon_area, labels_area] = Layout::horizontal([
+            Constraint::Length(key_width),
+            Constraint::Length(1),
+            Constraint::Length(label_width),
+        ])
+        .areas(area);
+        let (keys, labels): (Vec<Line>, Vec<Line>) = rows
+            .into_iter()
+            .map(|(key, label)| (Line::raw(key), Line::raw(format!(" {label}"))))
+            .unzip();
+        let colons = repeat_n(Line::raw(":"), keys.len()).collect::<Vec<Line>>();
+        Paragraph::new(keys).right_aligned().render(keys_area, buf);
+        Paragraph::new(colons).render(colon_area, buf);
+        Paragraph::new(labels).render(labels_area, buf);
+    }
+
     fn width(&self, state: &AppState) -> u16 {
         let (key_width, label_width) = Self::keybind_widths(&self.keybind_rows(state));
         return SEQUENCE_LIST_WIDTH + key_width + 1 + label_width;
@@ -440,7 +559,12 @@ impl MtrakWidget for SequenceList {
     ) -> bool {
         return self.dispatch(state, event);
     }
-    fn render(
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        self.render_full(state, area, buf);
+    }
+}
+impl Collapsible for SequenceList {
+    fn render_full(
         &mut self,
         state: &AppState,
         area: ratatui::prelude::Rect,
@@ -449,51 +573,33 @@ impl MtrakWidget for SequenceList {
         let layout =
             Layout::horizontal([Constraint::Length(SEQUENCE_LIST_WIDTH), Constraint::Fill(1)])
                 .split(area);
-        let lines = (0..state.project().sequence.len())
-            .map(|i| {
-                let row = &state.project().sequence[i];
-                let mut line = Line::raw(format!(
-                    "{:02X} {:02X} {}",
-                    i, row.pattern_id.0, row.repeats
-                ));
-                if i == state.active_sequence_index {
-                    line = line.reversed();
-                }
-                line
-            })
-            .collect::<Vec<Line>>();
-        let visible_rows = layout[0].height.saturating_sub(1) | 1;
-        let [list_area] = Layout::vertical([Constraint::Length(visible_rows)]).areas(layout[0]);
-        let middle = (list_area.height.saturating_sub(1) / 2) as usize;
-        let padded: Vec<Line> = repeat_n(Line::default(), middle).chain(lines).collect();
-        let list = Paragraph::new(padded)
-            .scroll((state.active_sequence_index as u16, 0))
-            .centered();
-        list.render(list_area, buf);
-        let rows = self.keybind_rows(state);
-        let (key_width, label_width) = Self::keybind_widths(&rows);
+        self.render_list(state, layout[0], buf);
         let time_layout =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).split(layout[1]);
-        let [keys_area, colon_area, labels_area] = Layout::horizontal([
-            Constraint::Length(key_width),
-            Constraint::Length(1),
-            Constraint::Length(label_width),
-        ])
-        .areas(time_layout[0]);
-        let (keys, labels): (Vec<Line>, Vec<Line>) = rows
-            .into_iter()
-            .map(|(key, label)| (Line::raw(key), Line::raw(format!(" {label}"))))
-            .unzip();
-        let colons = repeat_n(Line::raw(":"), keys.len()).collect::<Vec<Line>>();
-        Paragraph::new(keys).right_aligned().render(keys_area, buf);
-        Paragraph::new(colons).render(colon_area, buf);
-        Paragraph::new(labels).render(labels_area, buf);
+        self.render_keybinds(state, time_layout[0], buf);
 
         let time = state.time();
 
         Paragraph::new(duration_to_hh_mm_ss_string(&time))
             .centered()
             .render(time_layout[1], buf);
+    }
+    fn render_collapsed(
+        &mut self,
+        state: &AppState,
+        area: Rect,
+        buf: &mut ratatui::prelude::Buffer,
+    ) {
+        let layout =
+            Layout::horizontal([Constraint::Length(SEQUENCE_LIST_WIDTH), Constraint::Fill(1)])
+                .split(area);
+        self.render_list(state, layout[0], buf);
+        let rows = self.keybind_rows(state);
+        let column_areas =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).split(layout[1]);
+        for (column, area) in rows.chunks(rows.len().div_ceil(2)).zip(column_areas.iter()) {
+            Self::render_keybind_column(column.to_vec(), *area, buf);
+        }
     }
 }
 struct PatternInfo {
@@ -534,6 +640,34 @@ impl PatternInfo {
         return Self { keymap };
     }
 
+    /// The pattern lines plus their left padding.
+    fn collapsed_width(&self, state: &AppState) -> u16 {
+        let width = self.pattern_lines(state).iter().map(Line::width).max();
+        return width.unwrap_or(0) as u16 + 1;
+    }
+
+    fn pattern_lines(&self, state: &AppState) -> Vec<Line<'static>> {
+        use PatternInfoActions::*;
+        let bindings = &self.keymap;
+        return [
+            format!(
+                "PTN: {:02X} {}/{} DN/UP",
+                state.active_pattern.0,
+                bindings.key_for(PatternDown).unwrap(),
+                bindings.key_for(PatternUp).unwrap(),
+            ),
+            format!(
+                "LEN: {:02X} {}/{} DN/UP",
+                state.active_pattern().row_count,
+                bindings.key_for(PatternLengthDown).unwrap(),
+                bindings.key_for(PatternLengthUp).unwrap()
+            ),
+        ]
+        .into_iter()
+        .map(Line::raw)
+        .collect();
+    }
+
     fn shrink_pattern(&self, state: &mut AppState) {
         if !state.edit_pattern(|_, pattern| pattern.shrink()) {
             state.notify("PTN TOO SHORT");
@@ -544,7 +678,12 @@ impl MtrakWidget for PatternInfo {
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
         return self.dispatch(state, event);
     }
-    fn render(
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        self.render_full(state, area, buf);
+    }
+}
+impl Collapsible for PatternInfo {
+    fn render_full(
         &mut self,
         state: &AppState,
         area: ratatui::prelude::Rect,
@@ -560,11 +699,11 @@ impl MtrakWidget for PatternInfo {
             .unwrap_or_else(|| TITLE.to_owned());
         Paragraph::new(title)
             .centered()
-            .bold()
+            .style(state.theme.heading)
             .block(
                 Block::bordered()
                     .borders(Borders::BOTTOM)
-                    .title_style(Style::new().reversed())
+                    .title_style(state.theme.label)
                     .title_bottom("Pattern"),
             )
             .render(vertical_layout[0], buf);
@@ -610,25 +749,7 @@ impl MtrakWidget for PatternInfo {
         let right_layout = Layout::vertical([Constraint::Length(2), Constraint::Length(1)])
             .split(horizontal_layout[1]);
 
-        let right_content_top = Paragraph::new(
-            [
-                format!(
-                    "PTN: {:02X} {}/{} DN/UP",
-                    state.active_pattern.0,
-                    bindings.key_for(PatternDown).unwrap(),
-                    bindings.key_for(PatternUp).unwrap(),
-                ),
-                format!(
-                    "LEN: {:02X} {}/{} DN/UP",
-                    state.active_pattern().row_count,
-                    bindings.key_for(PatternLengthDown).unwrap(),
-                    bindings.key_for(PatternLengthUp).unwrap()
-                ),
-            ]
-            .into_iter()
-            .map(Line::raw)
-            .collect::<Vec<Line>>(),
-        );
+        let right_content_top = Paragraph::new(self.pattern_lines(state));
         let buttons_layout = Layout::horizontal([
             Constraint::Fill(1),
             Constraint::Length(1),
@@ -636,8 +757,8 @@ impl MtrakWidget for PatternInfo {
         ])
         .split(right_layout[1]);
 
-        let buttons_block = Block::new().reversed();
-        let buttons_style = Style::new().reversed();
+        let buttons_block = Block::new().style(state.theme.label);
+        let buttons_style = state.theme.label;
         let hint = bindings.hint_for(PatternExpand).unwrap();
         Paragraph::new(format!("{}: {}", hint.key, hint.label))
             .style(buttons_style)
@@ -651,6 +772,16 @@ impl MtrakWidget for PatternInfo {
             .render(buttons_layout[0], buf);
         left_content.render(horizontal_layout[0], buf);
         right_content_top.render(right_layout[0], buf);
+    }
+    fn render_collapsed(
+        &mut self,
+        state: &AppState,
+        area: Rect,
+        buf: &mut ratatui::prelude::Buffer,
+    ) {
+        Paragraph::new(self.pattern_lines(state))
+            .block(Block::new().padding(Padding::left(1)))
+            .render(area, buf);
     }
 }
 
@@ -730,12 +861,15 @@ struct InstrumentList {
     keymap: Keymap<InstrumentListAction>,
     /// Where the instrument rows were last drawn, for mouse hit-testing.
     rows_area: Rect,
+    /// How many columns the rows were last drawn in, filled top to bottom.
+    columns: u16,
     scroll: usize,
 }
 impl InstrumentList {
     fn new() -> Self {
         return Self {
             rows_area: Rect::default(),
+            columns: 1,
             scroll: 0,
             keymap: Keymap::new()
                 .bind(
@@ -749,6 +883,67 @@ impl InstrumentList {
                     "INST",
                 ),
         };
+    }
+}
+impl InstrumentList {
+    fn instrument_lines(state: &AppState) -> Vec<Line<'_>> {
+        let selected_instrument = state.active_instrument;
+        return state
+            .project()
+            .instruments
+            .iter()
+            .enumerate()
+            .map(|e| {
+                Line::from(vec![
+                    Span::raw(format!("{:1X} {:02X}", e.0, e.1.volume)).style(
+                        if selected_instrument == e.0 as u8 {
+                            state.theme.surface
+                        } else {
+                            state.theme.label
+                        },
+                    ),
+                    Span::raw(format!("| {}", e.1.name.as_str())),
+                ])
+            })
+            .collect();
+    }
+
+    /// Draws the instruments in two columns, a page at a time like FT2's instrument switcher.
+    fn render_grid(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        let height = area.height as usize;
+        let page_size = (height * 2).max(1);
+        self.scroll = state.active_instrument as usize / page_size * page_size;
+        self.rows_area = area;
+        self.columns = 2;
+        let lines = Self::instrument_lines(state);
+        let column_areas = Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)])
+            .spacing(1)
+            .split(area);
+        for (column, column_area) in column_areas.iter().enumerate() {
+            let column_lines = lines
+                .iter()
+                .skip(self.scroll + column * height)
+                .take(height)
+                .cloned()
+                .collect::<Vec<Line>>();
+            Paragraph::new(column_lines).render(*column_area, buf);
+        }
+    }
+
+    fn render_rows(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        let lines = Self::instrument_lines(state);
+        let height = area.height as usize;
+        let selected = state.active_instrument as usize;
+        let max_scroll = lines.len().saturating_sub(height);
+        self.scroll = self
+            .scroll
+            .clamp(selected.saturating_sub(height.saturating_sub(1)), selected)
+            .min(max_scroll);
+        self.rows_area = area;
+        self.columns = 1;
+        Paragraph::new(lines)
+            .scroll((self.scroll as u16, 0))
+            .render(area, buf);
     }
 }
 impl KeyActions for InstrumentList {
@@ -777,7 +972,20 @@ impl KeyActions for InstrumentList {
         };
     }
 }
-fn open_config_dialog(state: &mut AppState) {
+fn global_info(state: &AppState) -> String {
+    return format!(
+        "OCT: {}, GLB VEL: {:02X}, GLB TRSP: {}{:02X}",
+        state.current_octave,
+        state.project().global_velocity,
+        if state.project().transpose < 0 {
+            "-"
+        } else {
+            "+"
+        },
+        state.project().transpose.unsigned_abs()
+    );
+}
+fn open_midi_dialog(state: &mut AppState) {
     let mut in_names = state.get_midi_in_port_names();
     in_names.insert(0, "(none)".into());
     let mut out_names = state.get_midi_out_port_names();
@@ -806,7 +1014,7 @@ fn open_config_dialog(state: &mut AppState) {
         .and_then(|name| out_names.iter().position(|n| *n == name))
         .unwrap_or(0);
     let dialog = Dialog::new(
-        "Config",
+        "MIDI",
         vec![
             Select::new("input", in_names)
                 .label("MIDI input")
@@ -1019,7 +1227,10 @@ fn open_global_dialog(state: &mut AppState) {
 impl MtrakWidget for InstrumentList {
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
         if let Some(pos) = clicked_in(event, self.rows_area) {
-            let index = self.scroll + pos.y as usize;
+            let column_width = (self.rows_area.width / self.columns).max(1);
+            let column = (pos.x / column_width).min(self.columns - 1);
+            let index =
+                self.scroll + column as usize * self.rows_area.height as usize + pos.y as usize;
             if index < state.project().instruments.len() {
                 state.active_instrument = index as u8;
             }
@@ -1031,6 +1242,11 @@ impl MtrakWidget for InstrumentList {
         self.keymap.hints(hints);
     }
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        self.render_full(state, area, buf);
+    }
+}
+impl Collapsible for InstrumentList {
+    fn render_full(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
         let block = Block::bordered().borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM);
 
         let layout = Layout::vertical([
@@ -1053,61 +1269,29 @@ impl MtrakWidget for InstrumentList {
             }
             (Some(_), None) => "".into(),
         };
+        let port_block = Block::bordered()
+            .borders(Borders::BOTTOM)
+            .title_bottom("Instruments")
+            .title_style(state.theme.label);
         Paragraph::new(port)
             .left_aligned()
-            .reversed()
-            .bold()
-            .block(
-                Block::bordered()
-                    .reset()
-                    .borders(Borders::BOTTOM)
-                    .title_bottom("Instruments")
-                    .title_style(Style::new().reversed()),
-            )
-            .render(layout[0], buf);
-        let selected_instrument = state.active_instrument;
-        let lines = state
-            .project()
-            .instruments
-            .iter()
-            .enumerate()
-            .map(|e| {
-                Line::from(vec![
-                    Span::raw(format!("{:1X} {:02X}", e.0, e.1.volume)).style(
-                        if selected_instrument == e.0 as u8 {
-                            Style::reset()
-                        } else {
-                            Style::new().reversed()
-                        },
-                    ),
-                    Span::raw(format!("| {}", e.1.name.as_str())),
-                ])
-            })
-            .collect::<Vec<Line>>();
-        let height = layout[1].height as usize;
-        let selected = selected_instrument as usize;
-        let max_scroll = lines.len().saturating_sub(height);
-        self.scroll = self
-            .scroll
-            .clamp(selected.saturating_sub(height.saturating_sub(1)), selected)
-            .min(max_scroll);
-        self.rows_area = layout[1];
-        Paragraph::new(lines)
-            .scroll((self.scroll as u16, 0))
-            .render(layout[1], buf);
+            .style(state.theme.label)
+            .render(port_block.inner(layout[0]), buf);
+        port_block.render(layout[0], buf);
+        self.render_rows(state, layout[1], buf);
 
-        Paragraph::new(format!(
-            "OCT: {}, GLB VEL: {:02X}, GLB TRSP: {}{:02X}",
-            state.current_octave,
-            state.project().global_velocity,
-            if state.project().transpose < 0 {
-                "-"
-            } else {
-                "+"
-            },
-            state.project().transpose.unsigned_abs()
-        ))
-        .render(layout[2], buf);
+        Paragraph::new(global_info(state)).render(layout[2], buf);
+    }
+    fn render_collapsed(
+        &mut self,
+        state: &AppState,
+        area: Rect,
+        buf: &mut ratatui::prelude::Buffer,
+    ) {
+        let block = Block::bordered().borders(Borders::RIGHT);
+        let rows_area = block.inner(area);
+        block.render(area, buf);
+        self.render_grid(state, rows_area, buf);
     }
 }
 
@@ -1154,9 +1338,14 @@ impl MtrakWidget for MidiEventList {
         }
     }
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        self.render_full(state, area, buf);
+    }
+}
+impl Collapsible for MidiEventList {
+    fn render_full(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
         Block::new()
             .title_bottom("MIDI")
-            .title_style(state.theme.border_strong.reversed())
+            .title_style(state.theme.label)
             .render(area, buf);
         let area = Block::new().padding(Padding::bottom(1)).inner(area);
         self.max_lines_to_show = area.height;
@@ -1176,14 +1365,22 @@ impl MtrakWidget for MidiEventList {
         .scroll((overflow, 0))
         .render(layout[1], buf);
     }
+    fn render_collapsed(
+        &mut self,
+        _state: &AppState,
+        _area: Rect,
+        _buf: &mut ratatui::prelude::Buffer,
+    ) {
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum UtilListAction {
     Instruments,
     Global,
-    Config,
+    Midi,
     Clear,
     About,
+    Extend,
 }
 struct UtilList {
     keymap: Keymap<UtilListAction>,
@@ -1195,7 +1392,8 @@ impl UtilList {
             .bind(Key::ctrl('r'), Instruments, "Instrument")
             .bind(Key::ctrl('e'), Global, "Global")
             .bind(Key::alt('z'), Clear, "Clear")
-            .bind(Key::ctrl('o'), Config, "Config")
+            .bind(Key::ctrl('o'), Midi, "Midi")
+            .bind(Key::ctrl('x'), Extend, "Extend")
             .bind(Key::ctrl('t'), About, "About");
         return Self { keymap };
     }
@@ -1205,6 +1403,11 @@ impl MtrakWidget for UtilList {
         return self.dispatch(state, event);
     }
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        self.render_full(state, area, buf);
+    }
+}
+impl Collapsible for UtilList {
+    fn render_full(&mut self, state: &AppState, area: Rect, buf: &mut ratatui::prelude::Buffer) {
         let bindings = &self.keymap.bindings();
         let layout = Layout::vertical([
             Constraint::Length(bindings.len() as u16),
@@ -1218,19 +1421,39 @@ impl MtrakWidget for UtilList {
             .iter()
             .zip(&keys)
             .map(|(b, key)| {
-                Line::raw(format!("{key:<key_width$}: {}", b.label))
-                    .style(state.theme.heading)
-                    .reversed()
+                Line::raw(format!("{key:<key_width$}: {}", b.label)).style(state.theme.label)
             })
             .collect();
         Paragraph::new(lines)
-            .block(Block::new().style(state.theme.heading).reversed())
+            .block(Block::new().style(state.theme.label))
             .render(layout[0], buf);
+        self.render_notification(state, *layout.last().unwrap(), buf);
+    }
+    fn render_collapsed(
+        &mut self,
+        _state: &AppState,
+        _area: Rect,
+        _buf: &mut ratatui::prelude::Buffer,
+    ) {
+    }
+}
+impl UtilList {
+    fn extend_hint(&self) -> String {
+        let hint = self.keymap.hint_for(UtilListAction::Extend).unwrap();
+        return format!("{}: {}", hint.key, hint.label);
+    }
+
+    fn render_notification(
+        &self,
+        state: &AppState,
+        area: Rect,
+        buf: &mut ratatui::prelude::Buffer,
+    ) {
         if let Some(notification) = &state.notification {
             Paragraph::new(notification.as_str())
                 .centered()
                 .block(Block::bordered().borders(Borders::TOP))
-                .render(*layout.last().unwrap(), buf);
+                .render(area, buf);
         }
     }
 }
@@ -1245,9 +1468,10 @@ impl KeyActions for UtilList {
         match action {
             UtilListAction::Instruments => open_instrument_dialog(state),
             UtilListAction::Global => open_global_dialog(state),
-            UtilListAction::Config => open_config_dialog(state),
+            UtilListAction::Midi => open_midi_dialog(state),
             UtilListAction::About => open_about_dialog(state),
             UtilListAction::Clear => open_clear_dialog(state),
+            UtilListAction::Extend => state.header_collapsed = !state.header_collapsed,
         }
         return Ok(());
     }
@@ -1256,9 +1480,10 @@ impl KeyActions for UtilList {
         return match action {
             UtilListAction::Instruments => "Edit the current instrument",
             UtilListAction::Global => "Set the global velocity and transpose",
-            UtilListAction::Config => "Edit Configuration",
+            UtilListAction::Midi => "Set the MIDI ports and clock",
             UtilListAction::About => "About mTrak",
             UtilListAction::Clear => "Clear part of the current pattern",
+            UtilListAction::Extend => "Collapse or expand the header to show more of the pattern",
         };
     }
 }

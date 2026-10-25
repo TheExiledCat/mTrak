@@ -988,7 +988,7 @@ impl TimeLineView {
     /// Draws a horizontal line across the line numbers and tracks at `y`, joining the
     /// track borders, to mark where the pattern begins or ends.
     fn render_pattern_boundary_line(&self, state: &AppState, width: u16, y: u16, buf: &mut Buffer) {
-        let style = state.theme.divider;
+        let style = state.theme.border;
         Line::raw(repeat_n(line::HORIZONTAL, width as usize).collect::<String>())
             .style(style)
             .render(Rect::new(0, y, width, 1), buf);
@@ -1034,13 +1034,13 @@ impl TimeLineView {
             .map(|i| {
                 let mut style = state.theme.gutter;
                 if i % 4 == 0 {
-                    style = style.patch(state.theme.gutter_accent);
+                    style = style.patch(state.theme.heading);
                 }
                 if Some(i) == playback_row {
                     style = style.patch(state.theme.highlight_secondary);
                 }
                 if i == self.row_index as u16 {
-                    style = style.patch(state.theme.gutter_active);
+                    style = style.patch(state.theme.selection);
                 }
                 Line::raw(format!("{:02X}", i)).style(style)
             })
@@ -1134,7 +1134,7 @@ impl TimeLineView {
             return row.centered().style(style);
         }
         let cell_style = if self.is_editing {
-            state.theme.selection_danger
+            state.theme.danger
         } else {
             state.theme.selection
         };
@@ -1303,17 +1303,28 @@ impl MtrakWidget for TimeLineView {
         let top_bottom = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
         self.render_mode_indicator(state, top_bottom[0], buf);
 
-        let layout = Layout::horizontal(
-            [Constraint::Min(0), Constraint::Length(2)]
-                .iter()
-                .chain(
-                    (0..pattern.track_count)
-                        .map(|_| &Constraint::Length(constants::NOTE_STRING_LENGTH as u16)),
-                )
-                .chain([Constraint::Min(0)].iter()),
-        )
+        let track_width = constants::NOTE_STRING_LENGTH as u16;
+        // neighbouring tracks overlap by one column so they share a single border
+        let tracks_width = (track_width - 1) * pattern.track_count as u16 + 1;
+        // the trailing spacer mirrors the line numbers so the tracks themselves are centered,
+        // and gives way first when the area is too narrow
+        let spacer_width = top_bottom[1]
+            .width
+            .saturating_sub(2 + 2 + tracks_width)
+            .min(2);
+        let layout = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(2),
+            Constraint::Length(tracks_width),
+            Constraint::Length(spacer_width),
+            Constraint::Fill(1),
+        ])
         .horizontal_margin(1)
         .split(top_bottom[1]);
+        let track_areas =
+            Layout::horizontal((0..pattern.track_count).map(|_| Constraint::Length(track_width)))
+                .spacing(-1)
+                .split(layout[2]);
         let rows_top = layout[0].y + ROWS_TOP_OFFSET;
         let rows_height = layout[0].height.saturating_sub(ROWS_TOP_OFFSET);
 
@@ -1324,7 +1335,7 @@ impl MtrakWidget for TimeLineView {
                 state,
                 track_index as u8,
                 rows_height,
-                layout[track_index + 2],
+                track_areas[track_index],
                 buf,
             );
         }

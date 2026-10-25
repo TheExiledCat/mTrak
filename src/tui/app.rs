@@ -418,6 +418,7 @@ pub struct AppState {
     pub channel_hits: [Option<ChannelHit>; MIDI_CHANNEL_MAX as usize + 1],
     pub current_octave: u8,
     pub recording: bool,
+    pub header_collapsed: bool,
     /// Where the project was last loaded from or saved to, so saving again skips the browser.
     pub project_path: Option<PathBuf>,
     pub copy_buffers: CopyBuffers,
@@ -491,6 +492,7 @@ impl AppState {
             active_pattern: PatternId(0),
             current_octave: 4,
             recording: false,
+            header_collapsed: false,
             project_path: None,
             line_add: 1,
             pending_dialogs: Vec::new(),
