@@ -22,6 +22,8 @@ pub enum MTrakError {
         found: u16,
         supported: u16,
     },
+    /// A config file, e.g. config.toml or theme.toml, that can't be read.
+    InvalidConfig(String),
     /// A standard folder, e.g. the music folder, that the OS doesn't provide.
     MissingDirectory(&'static str),
     /// A feature that isn't implemented yet.
@@ -44,6 +46,7 @@ impl MTrakError {
             | MTrakError::InvalidProject(_)
             | MTrakError::UnsupportedProjectVersion { .. } => "Project error",
             MTrakError::Midi(_) => "MIDI error",
+            MTrakError::InvalidConfig(_) => "Config error",
             MTrakError::Parse(_) => "Invalid input",
             MTrakError::Unsupported(_) => "Not supported",
             MTrakError::PatternPasteLength { .. } => "Paste length",
@@ -65,6 +68,7 @@ impl Display for MTrakError {
                 "This project was made with a newer mTrak (file version {}, supported up to {})",
                 found, supported
             ),
+            MTrakError::InvalidConfig(reason) => write!(f, "Invalid config file {}", reason),
             MTrakError::MissingDirectory(name) => {
                 write!(f, "Could not find the {} folder on this system", name)
             }

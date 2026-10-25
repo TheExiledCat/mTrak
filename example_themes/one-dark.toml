@@ -1,0 +1,14 @@
+# One Dark for mTrak. Copy this file to theme.toml in the mTrak config folder and
+# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Colors from One Dark (https://github.com/atom/one-dark-syntax), Copyright (c) 2016 GitHub Inc., MIT License.
+
+backdrop     = "#3E4451"
+muted        = "#61AFEF"
+disabled     = "#5C6370"
+surface      = "#282C34"
+surface_text = "#ABB2BF"
+text         = "#DCDFE4"
+danger       = "#E06C75"
+warning      = "#E5C07B"
+success      = "#98C379"
+mark         = "#4B5263"

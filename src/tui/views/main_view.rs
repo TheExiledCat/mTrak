@@ -19,7 +19,11 @@ use crate::{
             widget::MtrakWidget,
             widgets::{container::Container, footer::Footer},
         },
-        views::{file_browser, header::Header, timeline::TimeLineView},
+        views::{
+            file_browser,
+            header::{self, Header},
+            timeline::TimeLineView,
+        },
     },
     updater::VERSION,
 };
@@ -246,12 +250,14 @@ impl MtrakWidget for MainView {
         self.key_hints(state, &mut hints);
         self.footer.set_hints(hints);
 
-        let [header_area, content_area, footer_area] = Layout::vertical([
-            Constraint::Min(17),
-            Constraint::Fill(1),
-            Constraint::Length(1),
-        ])
-        .areas(area);
+        let header_height = if state.header_collapsed {
+            Constraint::Length(header::COLLAPSED_HEIGHT)
+        } else {
+            Constraint::Min(17)
+        };
+        let [header_area, content_area, footer_area] =
+            Layout::vertical([header_height, Constraint::Fill(1), Constraint::Length(1)])
+                .areas(area);
         let version_text = format!("{} v{}", TITLE, VERSION);
         let [footer_area, version_area] = Layout::horizontal([
             Constraint::Fill(1),

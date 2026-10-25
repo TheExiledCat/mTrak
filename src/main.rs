@@ -2,7 +2,10 @@ use std::{io, process::ExitCode};
 
 use clap::Parser;
 use cli::Cli;
-use data::project::Project;
+use data::{
+    config::{Config, ThemeChoice},
+    project::Project,
+};
 use error::{MTrakError, Result};
 use ratatui::{
     DefaultTerminal,
@@ -54,9 +57,13 @@ fn main() -> ExitCode {
 fn run(terminal: DefaultTerminal, args: Cli) -> Result<()> {
     execute!(io::stdout(), EnableMouseCapture)?;
     let mut startup_errors = Vec::new();
-    if let Err(e) = files::initialize_directories() {
-        startup_errors.push(e);
-    }
+    let initialized = match files::initialize() {
+        Ok(()) => true,
+        Err(e) => {
+            startup_errors.push(e);
+            false
+        }
+    };
     let (project, project_path) = match args.project_file {
         Some(path) => match Project::load(path.clone()) {
             Ok(project) => (project, Some(path)),
@@ -71,8 +78,31 @@ fn run(terminal: DefaultTerminal, args: Cli) -> Result<()> {
         None => (Project::empty(), None),
     };
 
-    let mut app = App::new(terminal, 120, Theme::from_color_mode(args.color), project)?;
+    // without a config folder there's nothing to load, and its error is already reported
+    let config = if initialized {
+        files::get_config_file_path()
+            .and_then(|path| Config::load(&path))
+            .unwrap_or_else(|e| {
+                startup_errors.push(e);
+                Config::default()
+            })
+    } else {
+        Config::default()
+    };
+    let mut theme_choice = args.color.or(config.theme);
+    if !initialized && theme_choice == Some(ThemeChoice::Custom) {
+        theme_choice = None;
+    }
+    let theme = Theme::from_choice(theme_choice).unwrap_or_else(|e| {
+        startup_errors.push(e);
+        theme_choice = None;
+        Theme::detect()
+    });
+
+    let mut app = App::new(terminal, 120, theme, project)?;
     app.state.project_path = project_path;
+    app.state.config = config;
+    app.state.theme_choice = theme_choice;
     for error in startup_errors {
         app.state.report_error(error);
     }
