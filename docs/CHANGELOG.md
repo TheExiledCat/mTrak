@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.4.1 - 2026-10-25
+
+### Added
+
+- **Custom themes:** start with `--color custom`, or pick `custom` as your theme, to use the
+  colors in `theme.toml` in the config folder. A theme is ten colors, written as hex
+  (`"#49688C"`) or ANSI color names (`"DarkGray"`), and the file mTrak creates lists each one
+  with what it colors. Colors you leave out come from the palette named by `base` (`"ft2"` or
+  `"ansi16"`), so a theme can change just a few. See the Configuration section of the README.
+- **Example themes:** the `example_themes` folder has ports of Catppuccin (Latte and Mocha),
+  Dracula, Gruvbox Dark, Nord, One Dark, Solarized Dark and Tokyo Night. Copy one to
+  `theme.toml` to use it.
+- **config.toml:** a settings file in the config folder, for settings that aren't part of a
+  project. For now it holds `theme`, the theme to open with: `auto` (picked from what the
+  terminal supports, as before), `mono`, `ansi16`, `full` or `custom`. `--color` still
+  overrides it for one session.
+- **Config dialog (`Ctrl+P`):** pick a theme and it's used straight away. Leave
+  `Save to config.toml` ticked to keep it for next time, or untick it to try a theme for this
+  session only.
+- **Extend (`Ctrl+X`):** collapses the header to four rows, leaving more room for the pattern.
+  It keeps the sequence list and its keys, the pattern number and length, and the instruments
+  (in two columns, a page at a time). The octave, global velocity and transpose, the timer and
+  notifications move into the header's bottom border. The channel grid, MIDI monitor and
+  tempo panel are hidden, but their keys keep working. Press `Ctrl+X` again to bring the full
+  header back.
+- `config.toml` and `theme.toml` are created with their defaults on startup when they're
+  missing, so deleting one resets it. An error in either file is shown with its line number,
+  and mTrak starts with the defaults.
+
+### Changed
+
+- **The pattern editor is narrower:** the empty column after each track is gone and
+  neighbouring tracks share one border, so each track is two columns narrower and you can
+  zoom in further before tracks get cut off.
+- **The tracks are centered** on screen, with the row numbers to their left.
+- The `Ctrl+O` entry in the Util list is now called `Midi` and opens the `MIDI` dialog, the
+  same ports and clock settings as before. `Config` is now the new settings dialog
+  (`Ctrl+P`). `About` moved to the bottom of the list.
+- Panel titles, the current sequence position, the selected file in the file browser and the
+  instrument list now follow the theme. In the color themes the current sequence position and
+  the selected file use the grey selection bar.
+- In the 16-color theme, unavailable key hints (like Undo with nothing to undo) are now dark
+  grey, key and label both, so it's clearer they can't be used.
+- Projects saved with v0.4.0 open in v0.4.1.
+
 ## v0.4.0 - 2026-10-25
 
 ### Added
