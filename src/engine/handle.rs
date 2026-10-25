@@ -24,6 +24,8 @@ pub enum EngineCommand {
     SetOutputPort(Option<MidiOutputPort>),
     PlayPattern(PatternId, bool),
     PlaySong(usize, bool),
+    /// Stops playback and silences and resets every channel.
+    Panic,
     /// While playing a pattern, carries on in another one from the next row.
     SwitchPattern(PatternId),
     /// While playing the song, jumps to the start of a sequence position on the next row.
@@ -175,6 +177,9 @@ impl EngineHandle {
     }
     pub fn jump_to_sequence(&self, sequence_index: usize) {
         self.send(EngineCommand::JumpToSequence(sequence_index));
+    }
+    pub fn panic(&self) {
+        self.send(EngineCommand::Panic);
     }
     pub fn stop(&self) {
         self.send(EngineCommand::Stop);

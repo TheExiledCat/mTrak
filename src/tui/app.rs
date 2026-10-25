@@ -35,7 +35,7 @@ use crate::{
         copy_buffers::CopyBuffers,
         framework::{
             core_extensions::Boxed,
-            dialog::{Dialog, PopupLevel},
+            dialog::{Dialog, InfoLevel},
             widget::MtrakWidget,
             widgets::container::Container,
         },
@@ -166,7 +166,7 @@ impl App {
         self.terminal.clear()?;
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         self.state.open_dialog(Dialog::popup(
-            PopupLevel::Info,
+            InfoLevel::Info,
             "Opened",
             format!("Opened {}", name),
         ));
@@ -199,7 +199,7 @@ impl App {
         self.dialogs.append(&mut self.state.pending_dialogs);
         for error in self.state.errors.drain(..) {
             self.dialogs.push(Dialog::popup(
-                PopupLevel::Warning,
+                InfoLevel::Warning,
                 error.title(),
                 error.to_string(),
             ));

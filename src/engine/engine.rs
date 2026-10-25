@@ -8,8 +8,9 @@ use std::{
 };
 
 use chrono::Utc;
-use midi::{Message, ToRawMessages};
+use midi::{Channel, Message, ToRawMessages};
 use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
+use num::FromPrimitive;
 
 use super::{
     handle::{ClockSource, EngineCommand, EngineStatus},
@@ -238,6 +239,7 @@ impl MtrakEngine {
             EngineCommand::PlaySong(sequence_index, looping) => {
                 self.play_song(sequence_index, looping)
             }
+            EngineCommand::Panic => self.panic(),
             EngineCommand::SwitchPattern(id) => self.switch_pattern(id),
             EngineCommand::JumpToSequence(sequence_index) => self.jump_to_sequence(sequence_index),
             EngineCommand::Stop => self.stop(),
@@ -642,6 +644,24 @@ impl MtrakEngine {
         let mut events: Vec<MidiEvent> = out.into_iter().map(MidiEvent::Message).collect();
         events.push(MidiEvent::NotesOffAll);
         self.dispatch(MidiEvent::Aggregate(events));
+    }
+
+    /// Stops playback, then sends all notes off, all sound off and reset controllers on every
+    /// channel.
+    fn panic(&mut self) {
+        if self.clock.is_some() {
+            self.stop();
+        }
+        let mut out = vec![];
+        self.voices.release_all(&mut out);
+        out.extend(self.reset_commands());
+        for channel in 0..=MIDI_CHANNEL_MAX {
+            let channel = Channel::from_u8(channel).unwrap();
+            out.push(Message::AllNotesOff(channel));
+            out.push(Message::AllSoundOff(channel));
+            out.push(Message::ResetAllControllers(channel));
+        }
+        self.dispatch_messages(out);
     }
 
     /// When the engine's own timer next needs to wake up for a pulse.
@@ -3518,5 +3538,39 @@ mod tests {
                 .contains(&Message::NoteOff(Channel::Ch1, 60, 0))
         );
         assert!(harness.engine.resume.is_some());
+    }
+
+    #[test]
+    fn panic_stops_and_silences_every_channel() {
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, note("C-4 0 40"))])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.messages();
+        harness.engine.apply(EngineCommand::Panic);
+        assert_eq!(harness.engine.mode, PlayMode::Paused);
+        let messages = harness.messages();
+        assert!(messages.contains(&Message::NoteOff(Channel::Ch1, 60, 0)));
+        for channel in [Channel::Ch1, Channel::Ch16] {
+            assert!(messages.contains(&Message::AllNotesOff(channel)));
+            assert!(messages.contains(&Message::AllSoundOff(channel)));
+            assert!(messages.contains(&Message::ResetAllControllers(channel)));
+        }
+    }
+
+    #[test]
+    fn panic_works_while_stopped() {
+        let mut harness = Harness::new(vec![pattern(2, &[])]);
+        harness.engine.apply(EngineCommand::PlayNote {
+            track: 0,
+            channel: 2,
+            pitch: 64,
+            velocity: 100,
+        });
+        harness.messages();
+        harness.engine.apply(EngineCommand::Panic);
+        let messages = harness.messages();
+        assert!(messages.contains(&Message::NoteOff(Channel::Ch3, 64, 0)));
+        assert!(messages.contains(&Message::AllNotesOff(Channel::Ch3)));
     }
 }

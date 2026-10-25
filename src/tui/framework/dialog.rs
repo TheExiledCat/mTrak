@@ -4,9 +4,9 @@ use ratatui::{
     buffer::Buffer,
     crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers},
     layout::{Constraint, Layout, Rect},
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Padding, Widget},
+    widgets::{Block, Clear, Padding, Paragraph, Widget},
 };
 
 use crate::{
@@ -101,8 +101,9 @@ pub enum DialogAction {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PopupLevel {
+pub enum InfoLevel {
     Info,
+    Success,
     Warning,
     Error,
 }
@@ -112,7 +113,7 @@ pub enum PopupLevel {
 pub struct Dialog {
     title: String,
     width: u16,
-    level: PopupLevel,
+    level: InfoLevel,
     is_cancellable: bool,
     components: Vec<Box<dyn DialogComponent>>,
     focus: Option<usize>,
@@ -128,7 +129,7 @@ impl Dialog {
         let dialog = Self {
             title: title.into(),
             width: 50,
-            level: PopupLevel::Info,
+            level: InfoLevel::Info,
             is_cancellable: true,
             components,
             focus: None,
@@ -159,7 +160,7 @@ impl Dialog {
         )
         .focus_first();
     }
-    pub fn confirm(level: PopupLevel, title: impl Into<String>, text: impl Into<String>) -> Self {
+    pub fn confirm(level: InfoLevel, title: impl Into<String>, text: impl Into<String>) -> Self {
         let mut dialog = Self::new(title, vec![Label::new(text).boxed()]);
         dialog.keys = Keymap::new()
             .bind(Key::plain(KeyCode::Enter), DialogAction::Submit, "Confirm")
@@ -167,10 +168,14 @@ impl Dialog {
         dialog.level = level;
         return dialog;
     }
-    pub fn popup(level: PopupLevel, title: impl Into<String>, text: impl Into<String>) -> Self {
+    pub fn popup(level: InfoLevel, title: impl Into<String>, text: impl Into<String>) -> Self {
         let mut dialog = Dialog::new(title, vec![Label::new(text).boxed()]).is_cancellable(false);
         dialog.level = level;
         return dialog;
+    }
+    pub fn level(mut self, level: InfoLevel) -> Self {
+        self.level = level;
+        return self;
     }
     pub fn width(mut self, width: u16) -> Self {
         self.width = width;
@@ -332,9 +337,10 @@ impl MtrakWidget for Dialog {
         let block = Block::bordered()
             .title(format!(" {} ", self.title))
             .border_style(match self.level {
-                PopupLevel::Info => state.theme.border,
-                PopupLevel::Warning => state.theme.border_warning,
-                PopupLevel::Error => state.theme.border_danger,
+                InfoLevel::Info => state.theme.border,
+                InfoLevel::Success => state.theme.border_success,
+                InfoLevel::Warning => state.theme.border_warning,
+                InfoLevel::Error => state.theme.border_danger,
             })
             .padding(Padding::horizontal(1));
 
@@ -393,21 +399,68 @@ fn label_spans<'a>(state: &AppState, label: &'a str, focused: bool) -> [Span<'a>
 /// Static text.
 pub struct Label {
     text: String,
+    centered: bool,
 }
 
 impl Label {
     pub fn new(text: impl Into<String>) -> Self {
-        return Self { text: text.into() };
+        return Self {
+            text: text.into(),
+            centered: false,
+        };
+    }
+
+    pub fn centered(mut self) -> Self {
+        self.centered = true;
+        return self;
     }
 }
 
 impl MtrakWidget for Label {
     fn render(&mut self, _state: &AppState, area: Rect, buf: &mut Buffer) {
-        Line::from(self.text.as_str()).render(area, buf);
+        let mut paragraph = Paragraph::new(self.text.as_str());
+        if self.centered {
+            paragraph = paragraph.centered();
+        }
+        paragraph.render(area, buf);
     }
 }
 
-impl DialogComponent for Label {}
+impl DialogComponent for Label {
+    fn get_height(&self) -> u8 {
+        return self.text.lines().count().clamp(1, u8::MAX as usize) as u8;
+    }
+}
+
+/// A centered web link, clickable in terminals that support hyperlinks (OSC 8) and plain
+/// underlined text elsewhere.
+pub struct Link {
+    url: String,
+}
+
+impl Link {
+    pub fn new(url: impl Into<String>) -> Self {
+        return Self { url: url.into() };
+    }
+}
+
+impl MtrakWidget for Link {
+    fn render(&mut self, _state: &AppState, area: Rect, buf: &mut Buffer) {
+        let chars: Vec<char> = self.url.chars().collect();
+        let width = (chars.len() as u16).min(area.width);
+        let x = area.x + (area.width - width) / 2;
+        // as in ratatui's hyperlink example: each cell gets two characters wrapped in the
+        // escape codes, so the terminal still counts the right width
+        for (i, pair) in chars[..width as usize].chunks(2).enumerate() {
+            let text: String = pair.iter().collect();
+            let cell = &mut buf[(x + i as u16 * 2, area.y)];
+            cell.set_symbol(&format!("\x1b]8;;{}\x07{}\x1b]8;;\x07", self.url, text));
+            cell.set_style(Style::new().add_modifier(Modifier::UNDERLINED));
+        }
+    }
+}
+
+impl DialogComponent for Link {}
 
 /// A single-line text input.
 pub struct TextPrompt {

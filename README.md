@@ -122,7 +122,7 @@ Planned features, in no particular order:
 - [X] **MIDI clock out**: send clock and start/stop to sync external sequencers, drum machines and arpeggiators
 - [ ] **Multiple output ports**: map instruments to different MIDI devices, not just channels on one port
 - [ ] **Program change and bank select per instrument**, so loading a project restores the right patches
-- [ ] **Panic button**: all notes off and reset controllers, for stuck notes
+- [X] **Panic button** (`~`): all notes off and reset controllers, for stuck notes
 - [ ] **Live record**:
     - [ ] play notes in while the song is playing, for beatmaking
     - [ ] send metronome to channel

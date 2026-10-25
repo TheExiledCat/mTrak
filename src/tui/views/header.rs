@@ -1,5 +1,6 @@
 use std::{iter::repeat_n, time::Instant};
 
+use chrono::{Datelike, Local};
 use figlet_rs::FIGlet;
 use ratatui::{
     crossterm::event::{
@@ -24,7 +25,10 @@ use crate::{
         app::AppState,
         framework::{
             core_extensions::Boxed,
-            dialog::{Checkbox, Dialog, NumberBox, Select, TextPrompt},
+            dialog::{
+                Checkbox, Dialog, DialogComponent, InfoLevel, Label, Link, NumberBox, Select,
+                TextPrompt,
+            },
             keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::{MtrakWidget, clicked_in},
         },
@@ -33,6 +37,10 @@ use crate::{
     },
     util::time::duration_to_hh_mm_ss_string,
 };
+
+/// The year mTrak was started, for the copyright line in the About dialog.
+const FIRST_YEAR: i32 = 2026;
+const REPOSITORY_URL: &str = "https://github.com/TheExiledCat/mTrak";
 
 pub struct Header {
     top_left: HeaderTopLeft,
@@ -930,6 +938,60 @@ fn open_instrument_dialog(state: &mut AppState) {
     });
     state.open_dialog(dialog);
 }
+fn open_about_dialog(state: &mut AppState) {
+    let logo = FIGlet::small()
+        .ok()
+        .and_then(|font| font.convert(TITLE).map(|figure| figure.to_string()))
+        .unwrap_or_else(|| TITLE.to_owned());
+    let year = Local::now().year();
+    let years = if year > FIRST_YEAR {
+        format!("{FIRST_YEAR}-{year}")
+    } else {
+        FIRST_YEAR.to_string()
+    };
+    let build = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    // pad the logo's lines to one width so centering keeps them lined up
+    let width = logo
+        .lines()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    let logo: Vec<String> = logo
+        .trim_end()
+        .lines()
+        .map(|line| format!("{line:<width$}"))
+        .collect();
+    let lines = [
+        logo.join("\n"),
+        String::new(),
+        format!("v{}", env!("CARGO_PKG_VERSION")),
+        format!(
+            "{build} build, {} {}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+        String::new(),
+        "A MIDI tracker for the terminal".to_owned(),
+        "Created by TheExiledCat".to_owned(),
+        format!(
+            "{} {years} TheExiledCat, MIT License",
+            glyphs::pick("\u{a9}", "(c)")
+        ),
+    ];
+    let mut components: Vec<Box<dyn DialogComponent>> = lines
+        .into_iter()
+        .map(|line| Label::new(line).centered().boxed() as Box<dyn DialogComponent>)
+        .collect();
+    components.push(Link::new(REPOSITORY_URL).boxed());
+    let dialog = Dialog::new("About", components)
+        .level(InfoLevel::Success)
+        .is_cancellable(false);
+    state.open_dialog(dialog);
+}
 fn open_global_dialog(state: &mut AppState) {
     let dialog = Dialog::new(
         "Global",
@@ -1122,6 +1184,7 @@ enum UtilListAction {
     Global,
     Config,
     Clear,
+    About,
 }
 struct UtilList {
     keymap: Keymap<UtilListAction>,
@@ -1131,9 +1194,10 @@ impl UtilList {
         use UtilListAction::*;
         let keymap = Keymap::new()
             .bind(Key::ctrl('r'), Instruments, "Instrument")
-            .bind(Key::ctrl('e'), Global, "GLOBAL")
+            .bind(Key::ctrl('e'), Global, "Global")
             .bind(Key::alt('z'), Clear, "Clear")
-            .bind(Key::ctrl('o'), Config, "Config");
+            .bind(Key::ctrl('o'), Config, "Config")
+            .bind(Key::ctrl('t'), About, "About");
         return Self { keymap };
     }
 }
@@ -1183,6 +1247,7 @@ impl KeyActions for UtilList {
             UtilListAction::Instruments => open_instrument_dialog(state),
             UtilListAction::Global => open_global_dialog(state),
             UtilListAction::Config => open_config_dialog(state),
+            UtilListAction::About => open_about_dialog(state),
             UtilListAction::Clear => open_clear_dialog(state),
         }
         return Ok(());
@@ -1193,6 +1258,7 @@ impl KeyActions for UtilList {
             UtilListAction::Instruments => "Edit the current instrument",
             UtilListAction::Global => "Set the global velocity and transpose",
             UtilListAction::Config => "Edit Configuration",
+            UtilListAction::About => "About mTrak",
             UtilListAction::Clear => "Clear part of the current pattern",
         };
     }
