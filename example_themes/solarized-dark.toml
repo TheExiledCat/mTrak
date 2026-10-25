@@ -1,0 +1,14 @@
+# Solarized Dark for mTrak. Copy this file to theme.toml in the mTrak config folder and
+# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Colors from Solarized (https://github.com/altercation/solarized), Copyright (c) 2011 Ethan Schoonover, MIT License.
+
+backdrop     = "#073642"
+muted        = "#268BD2"
+disabled     = "#586E75"
+surface      = "#002B36"
+surface_text = "#839496"
+text         = "#EEE8D5"
+danger       = "#DC322F"
+warning      = "#B58900"
+success      = "#859900"
+mark         = "#586E75"

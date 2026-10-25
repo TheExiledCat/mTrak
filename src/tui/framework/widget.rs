@@ -21,6 +21,13 @@ pub trait MtrakWidget {
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer);
 }
 
+/// A widget with a compact layout alongside its full one.
+pub trait Collapsible {
+    fn render_full(&mut self, state: &AppState, area: Rect, buf: &mut Buffer);
+    /// Draws nothing by default, for widgets that are hidden while collapsed.
+    fn render_collapsed(&mut self, _state: &AppState, _area: Rect, _buf: &mut Buffer) {}
+}
+
 /// Returns the click position relative to `area` if `event` is a left click inside it.
 pub fn clicked_in(event: &Event, area: Rect) -> Option<Position> {
     let Event::Mouse(MouseEvent {

@@ -9,7 +9,6 @@ use std::{
 use ratatui::{
     crossterm::event::{KeyCode, KeyModifiers},
     layout::{Constraint, Layout},
-    style::Stylize,
     text::Line,
     widgets::{Block, Borders, Paragraph, Widget},
 };
@@ -359,8 +358,7 @@ impl MtrakWidget for FileBrowser {
         .split(area);
         Paragraph::new(self.current_folder.to_string_lossy())
             .left_aligned()
-            .style(state.theme.border_strong)
-            .reversed()
+            .style(state.theme.label)
             .block(
                 Block::bordered()
                     .borders(Borders::TOP)
@@ -386,7 +384,7 @@ impl MtrakWidget for FileBrowser {
                 let line = l.1;
                 let mut style = state.theme.surface;
                 if self.selected_index == index {
-                    style = style.reversed();
+                    style = state.theme.selection;
                 }
 
                 line.style(style)

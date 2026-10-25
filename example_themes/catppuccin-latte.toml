@@ -1,0 +1,14 @@
+# Catppuccin Latte for mTrak. Copy this file to theme.toml in the mTrak config folder and
+# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Colors from Catppuccin (https://github.com/catppuccin/catppuccin), Copyright (c) 2021 Catppuccin, MIT License.
+
+backdrop     = "#CCD0DA"
+muted        = "#1E66F5"
+disabled     = "#9CA0B0"
+surface      = "#EFF1F5"
+surface_text = "#5C5F77"
+text         = "#4C4F69"
+danger       = "#D20F39"
+warning      = "#FE640B"
+success      = "#40A02B"
+mark         = "#BCC0CC"

@@ -1,10 +1,10 @@
 # MIDI setup and sync
 
 mTrak can take notes from a MIDI keyboard, follow the clock of another device, and send its
-own clock out. All of it is set up in the Config dialog
+own clock out. All of it is set up in the MIDI dialog
 (`Ctrl+O`).
 
-## The Config dialog
+## The MIDI dialog
 
 | Field             | What it does                                                            |
 |-------------------|-------------------------------------------------------------------------|

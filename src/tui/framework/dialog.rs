@@ -4,7 +4,7 @@ use ratatui::{
     buffer::Buffer,
     crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers},
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Clear, Padding, Paragraph, Widget},
 };
@@ -441,7 +441,7 @@ impl Link {
 }
 
 impl MtrakWidget for Link {
-    fn render(&mut self, _state: &AppState, area: Rect, buf: &mut Buffer) {
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
         let chars: Vec<char> = self.url.chars().collect();
         let width = (chars.len() as u16).min(area.width);
         let x = area.x + (area.width - width) / 2;
@@ -450,7 +450,7 @@ impl MtrakWidget for Link {
             let text: String = pair.iter().collect();
             let cell = &mut buf[(x + i as u16 * 2, area.y)];
             cell.set_symbol(&format!("\x1b]8;;{}\x07{}\x1b]8;;\x07", self.url, text));
-            cell.set_style(Style::new().add_modifier(Modifier::UNDERLINED));
+            cell.set_style(state.theme.link);
         }
     }
 }

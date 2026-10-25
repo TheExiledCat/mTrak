@@ -1,0 +1,14 @@
+# Gruvbox Dark for mTrak. Copy this file to theme.toml in the mTrak config folder and
+# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Colors from Gruvbox (https://github.com/morhetz/gruvbox) by morhetz, MIT License.
+
+backdrop     = "#3C3836"
+muted        = "#A89984"
+disabled     = "#7C6F64"
+surface      = "#282828"
+surface_text = "#D5C4A1"
+text         = "#EBDBB2"
+danger       = "#FB4934"
+warning      = "#FABD2F"
+success      = "#B8BB26"
+mark         = "#504945"
