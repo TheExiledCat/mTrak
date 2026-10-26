@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.4.3 - 2026-10-26
+
+### Added
+
+- **Rebindable keys:** on the keybindings screen (`?`), select an action, press `Space`, then
+  press the key you want for it (`Esc` keeps the old one). If the key already does something
+  else, a warning lists what, and you can bind it anyway. `Del` puts back an action's default
+  keys, and `Reset all keys` below the list puts back every default. Keys can also be set in
+  `keybinds.toml` in the config folder, which lists every action with its keys: change a line
+  to rebind it, e.g. `global.save = "^W"`, or delete it to go back to the default. The piano
+  keys, `F1`-`F8`, the hex digits in the pattern, `Alt+Q`-`I` and `Alt+1`-`9` can't be rebound
+  yet. See [docs/CONFIG.md](docs/CONFIG.md#keybindings).
+- **`I` Interval command:** bends the channel's pitch by whole semitones, worked out from the
+  instrument's bend range: `I80` is no bend, `I83` is 3 semitones up and `I7D` 3 down. Handy
+  for repitching chopped drum samples. Bends past the bend range stop at a full bend. See
+  [docs/COMMANDS.md](docs/COMMANDS.md).
+- **Clear by instrument:** the Clear dialog (`Alt+Z`) has an `Instrument` choice, so only the
+  cells of one instrument are cleared. It starts on `All`.
+- **`line_numbers = "none"`:** hides the row numbers in the pattern editor and gives their
+  space to the tracks. Also in the Config dialog.
+- **Pick dropdown options by number:** while a dropdown is open, a hex digit picks the option
+  at that position, counting from 0, so `5` in the Clear dialog's instrument list picks
+  instrument 5.
+- **Open config folder:** a button in the Config dialog (`Ctrl+P`) that opens the config folder
+  in your file manager.
+
+### Changed
+
+- **The Global (`Ctrl+E`) and Instrument (`Ctrl+R`) dialogs apply changes as you make them,**
+  so you can hear them while the song plays. `Esc` puts back the old values, and a project
+  that was saved isn't left marked as changed.
+- The bend range in the Instrument dialog now takes effect: the new `I` command uses it.
+- The keybindings screen lists every action on its own line, with the selected one
+  highlighted.
+- Projects saved with v0.4.2 open in v0.4.3.
+
+### Fixed
+
+- Typing a note over one that's already there now gives it the current instrument, like a new
+  note, instead of keeping the old note's instrument.
+
 ## v0.4.2 - 2026-10-26
 
 ### Added
