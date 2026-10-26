@@ -102,7 +102,7 @@ pub fn list_themes() -> Vec<String> {
     return names;
 }
 
-/// Opens `folder` in the system's file manager, without waiting for it to close.
+/// Opens `folder` in the OS file manager.
 pub fn open_in_file_manager(folder: &Path) -> Result<()> {
     let mut command = file_manager_command(folder)?;
     let mut child = command
@@ -110,7 +110,7 @@ pub fn open_in_file_manager(folder: &Path) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    // reap it once it exits, so it doesn't linger until mTrak quits
+    // reap it so it doesn't stay a zombie
     thread::spawn(move || child.wait());
     return Ok(());
 }
@@ -129,7 +129,7 @@ fn file_manager_command(folder: &Path) -> Result<Command> {
     return Ok(command);
 }
 
-/// xdg-open, or on WSL, where it often has nothing to open folders with, Windows Explorer.
+/// Uses Explorer on WSL, where xdg-open usually can't open folders.
 #[cfg(not(any(windows, target_os = "macos")))]
 fn file_manager_command(folder: &Path) -> Result<Command> {
     if std::env::var_os("WSL_DISTRO_NAME").is_none() {

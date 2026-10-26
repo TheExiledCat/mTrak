@@ -91,7 +91,6 @@ impl Key {
 }
 
 impl Key {
-    /// Writes the key with the symbols of the current glyph mode, or always in ASCII.
     fn write(&self, f: &mut impl Write, ascii: bool) -> fmt::Result {
         let pick = |unicode, plain| {
             if ascii {
@@ -131,8 +130,7 @@ impl Key {
         };
     }
 
-    /// How the key is written in keybinds.toml: the ASCII form shown on screen, with a
-    /// shifted letter as just the capital, e.g. `Z`, `^S`, `A-O` or `S-Tab`.
+    /// The key as written in keybinds.toml, e.g. `Z`, `^S`, `A-O` or `S-Tab`.
     pub fn to_text(self) -> String {
         if self.modifiers == KeyModifiers::SHIFT
             && let KeyCode::Char(c) = self.code
@@ -145,8 +143,7 @@ impl Key {
         return text;
     }
 
-    /// Reads a key written like `to_text` writes it. The prefixes `^`, `A-` and `S-` only
-    /// count when something follows them, so `^` alone is the caret key.
+    /// Reads `to_text`'s format. A prefix needs a key after it, so `^` alone is the caret key.
     pub fn parse(text: &str) -> Option<Self> {
         let mut modifiers = KeyModifiers::NONE;
         let mut rest = text;
@@ -185,7 +182,7 @@ impl Key {
             _ => {
                 let mut chars = rest.chars();
                 match (chars.next(), chars.next()) {
-                    // with a modifier written out, a capital is just how the letter is shown
+                    // ^S is Ctrl+S, not Ctrl+Shift+S
                     (Some(c), None) if !modifiers.is_empty() => {
                         KeyCode::Char(c.to_ascii_lowercase())
                     }
@@ -220,22 +217,19 @@ impl KeyHint {
 pub struct HelpEntry {
     pub key: String,
     pub description: &'static str,
-    /// The action behind the entry, for entries that can be rebound.
+    /// Set when the entry can be rebound.
     pub binding: Option<BindingInfo>,
 }
 
-/// An action that can be rebound, and the keys it has by default.
 #[derive(Clone)]
 pub struct BindingInfo {
-    /// The action's name in keybinds.toml, e.g. `pattern.toggle_edit`.
+    /// e.g. `pattern.toggle_edit`
     pub id: String,
     pub defaults: Vec<Key>,
 }
 
-/// An action keys can be bound to.
 pub trait Action: Copy + PartialEq + fmt::Debug {
-    /// The action's name in keybinds.toml within its keymap, in snake_case, e.g.
-    /// `toggle_edit`. Actions that carry values override this.
+    /// The variant name in snake_case. Override it for variants with values.
     fn id(self) -> String {
         return snake_case(&format!("{self:?}"));
     }
@@ -293,11 +287,9 @@ pub struct Binding<A> {
 
 /// Maps keys to a widget's actions. The same table drives event handling (`lookup`) and
 /// what gets displayed (`hints`, `key_for`), so the two can never drift apart.
-///
-/// The keys given to `bind` are the defaults: keys set in keybinds.toml take their place,
-/// checked on every use so a change applies straight away.
+/// Keys from keybinds.toml replace the ones passed to `bind`.
 pub struct Keymap<A> {
-    /// Names the keymap in keybinds.toml, e.g. `pattern` in `pattern.toggle_edit`.
+    /// Prefix of the action ids, e.g. `pattern`.
     scope: &'static str,
     bindings: Vec<Binding<A>>,
 }
@@ -315,18 +307,15 @@ impl<A: Action> Keymap<A> {
         return self;
     }
 
-    /// The action's name in keybinds.toml.
     pub fn id(&self, action: A) -> String {
         return format!("{}.{}", self.scope, action.id());
     }
 
-    /// Every binding as it applies now, in the order they were added, with an action's keys
-    /// from keybinds.toml in place of its defaults.
+    /// The bindings with keybinds.toml applied.
     pub fn bindings(&self) -> Cow<'_, [Binding<A>]> {
         return keybinds::with_overrides(|overrides| self.bindings_with(overrides));
     }
 
-    /// The bindings with `overrides`, keys by action id, in place of the defaults.
     fn bindings_with(&self, overrides: &HashMap<String, Vec<Key>>) -> Cow<'_, [Binding<A>]> {
         if overrides.is_empty() {
             return Cow::Borrowed(self.bindings.as_slice());
@@ -346,7 +335,7 @@ impl<A: Action> Keymap<A> {
         return Cow::Owned(bindings);
     }
 
-    /// The default bindings, e.g. to change a label.
+    /// The defaults, e.g. to change a label.
     pub fn default_bindings_mut(&mut self) -> &mut [Binding<A>] {
         return &mut self.bindings;
     }
@@ -369,15 +358,14 @@ impl<A: Action> Keymap<A> {
             .map(|b| b.key);
     }
 
-    /// The first key bound to `action` as shown on screen, or `--` when it has none, e.g.
-    /// after it was unbound in keybinds.toml.
+    /// The key as shown on screen, or `--` when unbound.
     pub fn key_text(&self, action: A) -> String {
         return self
             .key_for(action)
             .map_or_else(|| NO_KEY.to_owned(), |key| key.to_string());
     }
 
-    /// `key: label` for `action`, e.g. for a button, with `--` for the key when it has none.
+    /// `key: label`, e.g. for the header buttons.
     pub fn labelled_key(&self, action: A) -> String {
         let label = self
             .bindings
@@ -417,7 +405,7 @@ impl<A: Action> Keymap<A> {
 }
 
 impl<A: Action> Keymap<A> {
-    /// An entry per action, with its keys as they apply now.
+    /// One entry per action.
     pub fn help_entries(&self, describe: impl Fn(A) -> &'static str) -> Vec<HelpEntry> {
         let mut actions: Vec<A> = Vec::new();
         for binding in &self.bindings {
@@ -454,10 +442,8 @@ impl<A: Action> Keymap<A> {
     }
 }
 
-/// Shown in place of the keys of an action without any.
 pub const UNBOUND: &str = "none";
-/// Shown in place of a key in a tight spot, e.g. the header, when its action has none. Two
-/// dashes, since `-` is a key.
+/// Two dashes, since `-` is a key itself.
 const NO_KEY: &str = "--";
 
 /// Joins keys with "/", collapsing runs of three or more consecutive function keys into a

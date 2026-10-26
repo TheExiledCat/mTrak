@@ -58,7 +58,7 @@ pub enum MidiCommand {
     EndSlide, // Lands the track's running slide on this value and stops it, without starting a new one
     AfterTouch, // Sets Channel AfterTouch
     PitchBend, // Sets Pitchbend with low resolution as a single byte
-    Interval, // Bends the pitch by whole semitones, 80 being none, using the instrument's bend range
+    Interval, // Bends by whole semitones, scaled to the instrument's bend range
 }
 impl MidiCommand {
     /// Whether this command starts a slide towards the track's next CC or slide command.

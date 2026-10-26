@@ -88,9 +88,7 @@ fn bend_value(value: u8) -> u16 {
     return (BEND_CENTER as i32 + scaled) as u16;
 }
 
-/// The pitch bend for a whole number of semitones from 80, e.g. 83 for 3 up, assuming the
-/// synth bends linearly over `range` semitones each way. Bends past the range stop at a full
-/// bend, and a range of 0 can't bend at all.
+/// Semitones from 80 as a pitch bend over `range` semitones, clamped to a full bend.
 fn interval_bend(value: u8, range: u8) -> u16 {
     if range == 0 {
         return BEND_CENTER;
@@ -475,7 +473,7 @@ mod tests {
             &note,
             &CommandContext::default(),
         );
-        return events.into_iter().flat_map(|e| e.to_messages()).collect();
+        return events.into_iter().flat_map(|e| e.into_messages()).collect();
     }
 
     #[test]
@@ -586,7 +584,6 @@ mod tests {
             bend(&mut handler, 0x80),
             vec![Message::PitchBend(Channel::Ch2, 8192)]
         );
-        // 12 semitones each way by default: 3 up is a quarter of the way to full up
         assert_eq!(
             bend(&mut handler, 0x83),
             vec![Message::PitchBend(Channel::Ch2, 10239)]
@@ -639,7 +636,7 @@ mod tests {
         handle(&mut handler, 1, cc_note(MidiCommand::AfterTouch, 0x40, 5));
         let mut events = vec![];
         handler.reset(&mut events);
-        let messages: Vec<Message> = events.into_iter().flat_map(|e| e.to_messages()).collect();
+        let messages: Vec<Message> = events.into_iter().flat_map(|e| e.into_messages()).collect();
         assert_eq!(
             messages,
             vec![

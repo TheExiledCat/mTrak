@@ -200,7 +200,7 @@ impl Pattern {
     pub fn clear(&mut self, block: Block, target: ClearTarget) {
         self.clear_instrument(block, target, None);
     }
-    /// Clears like `clear`, but with an instrument only the cells that play it.
+    /// Like `clear`, but only cells using `instrument`, if given.
     pub fn clear_instrument(&mut self, block: Block, target: ClearTarget, instrument: Option<u8>) {
         for row in block.rows() {
             for track in block.tracks() {

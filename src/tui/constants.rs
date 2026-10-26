@@ -12,7 +12,7 @@ pub const NOTE_NAMES: &[&str] = &[
     "C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-",
 ];
 
-/// The piano keys, a semitone apart from C: the lower octave and the one above it.
+/// Piano keys from C, one semitone apart.
 pub const PIANO_KEYS_LOWER: [char; 13] = [
     'z', 's', 'x', 'd', 'c', 'v', 'g', 'b', 'h', 'n', 'j', 'm', ',',
 ];

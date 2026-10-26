@@ -1,6 +1,5 @@
-//! A parser for the small subset of TOML that mTrak's config files use: `key = "value"` pairs
-//! with `\\` and `\"` escapes, bare `true` and `false`, and `#` comments. Keys may be dotted, e.g. `global.save`, read
-//! as one name.
+//! A parser for the subset of TOML mTrak's config files use: `key = "value"` with `\\` and
+//! `\"` escapes, bare `true`/`false`, dotted keys read as one name, and `#` comments.
 
 use std::{
     fmt::{self, Display},
@@ -101,8 +100,7 @@ fn parse_value(text: &str) -> Result<String, &'static str> {
     return parse_string(text);
 }
 
-/// A double-quoted string, optionally followed by a comment. Of TOML's escapes it takes `\\`
-/// and `\"`, enough for any key.
+/// A double-quoted string, optionally followed by a comment.
 fn parse_string(text: &str) -> Result<String, &'static str> {
     let rest = text
         .strip_prefix('"')
@@ -127,7 +125,7 @@ fn parse_string(text: &str) -> Result<String, &'static str> {
     return Err("missing closing quote");
 }
 
-/// `text` as a double-quoted string that `parse` reads back as `text`.
+/// Quotes `text` so `parse` reads it back unchanged.
 pub fn quote(text: &str) -> String {
     return format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""));
 }

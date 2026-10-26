@@ -175,8 +175,7 @@ impl App {
         ));
         return Ok(());
     }
-    /// Every key, grouped by where it works: what the keybindings screen lists, and the
-    /// actions keybinds.toml can rebind.
+    /// Help for every keymap, used by the keybindings screen and keybinds.toml.
     pub fn help_sections(&self) -> Vec<HelpSection> {
         let mut sections = Vec::new();
         self.root.help(&mut sections);
@@ -838,11 +837,10 @@ impl AppState {
     pub fn project(&self) -> &Project {
         return &self.project;
     }
-    /// Whether the project was changed outside the undo history, e.g. in a dialog.
     pub fn has_changes(&self) -> bool {
         return self.has_changes;
     }
-    /// Puts back what `has_changes` was, after a dialog undid its own changes.
+    /// For dialogs that preview changes and undo them on cancel.
     pub fn restore_has_changes(&mut self, has_changes: bool) {
         self.has_changes = has_changes;
     }
@@ -1087,8 +1085,6 @@ impl AppState {
     pub fn decrease_line_add(&mut self) {
         self.line_add = self.line_add.saturating_sub(1);
     }
-    /// Asks the pattern editor to clear `target` in `option`, only in cells playing
-    /// `instrument` if one is given.
     pub fn request_clear(
         &mut self,
         option: ClearOption,

@@ -122,7 +122,6 @@ fn run(
     }
 
     let mut app = App::new(terminal, 120, theme, project)?;
-    // the keymaps exist once the app does, so every action is known now
     if let Err(e) = keybinds::set_entries(&app.help_sections()) {
         startup_errors.push(e);
     }

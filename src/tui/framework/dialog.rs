@@ -144,13 +144,11 @@ pub trait DialogComponent: MtrakWidget {
     fn indent_level(&self) -> u8 {
         return 0;
     }
-    /// Whether the component sees keys before the dialog does, so it can use keys like Enter
-    /// that would otherwise confirm the dialog. Keys it doesn't take still reach the dialog.
+    /// Lets the component handle keys like Enter before the dialog does.
     fn takes_keys_first(&self) -> bool {
         return false;
     }
-    /// Whether the component takes every key for now, e.g. while waiting for a key to bind,
-    /// so the dialog's own key hints don't apply.
+    /// Hides the dialog's own key hints, e.g. while capturing a key.
     fn takes_all_keys(&self) -> bool {
         return false;
     }
@@ -265,7 +263,7 @@ impl Dialog {
         return dialog;
     }
     pub fn popup(level: InfoLevel, title: impl Into<String>, text: impl Into<String>) -> Self {
-        let mut dialog = Dialog::new(title, vec![Label::new(text).boxed()]).is_cancellable(false);
+        let mut dialog = Dialog::new(title, vec![Label::new(text).boxed()]).cancellable(false);
         dialog.level = level;
         return dialog;
     }
@@ -286,7 +284,7 @@ impl Dialog {
         return self;
     }
 
-    pub fn is_cancellable(mut self, is_cancellable: bool) -> Self {
+    pub fn cancellable(mut self, is_cancellable: bool) -> Self {
         self.is_cancellable = is_cancellable;
         return self;
     }
@@ -532,7 +530,6 @@ impl MtrakWidget for Dialog {
         }
         let component_hints = hints.len();
         self.keys.hints(hints);
-        // a key the focused component takes first never reaches the dialog
         if let Some(index) = self.focus
             && self.components[index].takes_keys_first()
         {
@@ -1351,7 +1348,7 @@ impl KeyActions for Select {
 }
 
 impl MtrakWidget for Select {
-    /// Besides the arrows, a hex digit picks the option at that index, counting from 0.
+    /// A hex digit picks the option at that index.
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
         if self.dispatch(state, event) {
             return true;

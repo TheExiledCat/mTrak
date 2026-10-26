@@ -1,5 +1,4 @@
-//! Keys rebound in keybinds.toml or the keybindings screen, which keymaps use in place of
-//! their defaults.
+//! Key overrides from keybinds.toml and the keybindings screen.
 
 use std::{
     collections::HashMap,
@@ -20,7 +19,6 @@ use crate::{
     util::toml::{self, ParseError},
 };
 
-/// An action that can be rebound, as listed in the keybindings screen.
 struct Entry {
     section: &'static str,
     description: &'static str,
@@ -29,23 +27,22 @@ struct Entry {
 
 #[derive(Default)]
 struct Keybinds {
-    /// The keys of rebound actions, by action id. An empty list unbinds the action.
+    /// By action id. An empty list unbinds the action.
     overrides: HashMap<String, Vec<Key>>,
-    /// The line each override was read from, to point at unknown actions.
+    /// For pointing at unknown actions.
     lines: HashMap<String, usize>,
-    /// Every action that can be rebound, from the keybindings screen's sections.
+    /// Every action that can be rebound.
     entries: Vec<Entry>,
 }
 
 static KEYBINDS: LazyLock<RwLock<Keybinds>> = LazyLock::new(Default::default);
 
-/// Runs `f` with the rebound keys, by action id.
 pub fn with_overrides<T>(f: impl FnOnce(&HashMap<String, Vec<Key>>) -> T) -> T {
     let keybinds = KEYBINDS.read().unwrap_or_else(|e| e.into_inner());
     return f(&keybinds.overrides);
 }
 
-/// Reads keybinds.toml. Unknown actions are only found once `set_entries` knows them all.
+/// Unknown actions are reported by `set_entries`, once every action is known.
 pub fn load(path: &Path) -> Result<()> {
     let (overrides, lines) = toml::load_file(path, parse)?;
     let mut keybinds = KEYBINDS.write().unwrap_or_else(|e| e.into_inner());
@@ -74,8 +71,7 @@ fn parse(text: &str) -> std::result::Result<Parsed, ParseError> {
     return Ok((overrides, lines));
 }
 
-/// Learns every action that can be rebound, from the keybindings screen's sections, and
-/// reports actions in keybinds.toml that don't exist.
+/// Registers every action that can be rebound, and reports unknown ones in keybinds.toml.
 pub fn set_entries(sections: &[HelpSection]) -> Result<()> {
     let mut keybinds = KEYBINDS.write().unwrap_or_else(|e| e.into_inner());
     keybinds.entries.clear();
@@ -111,7 +107,7 @@ pub fn set_entries(sections: &[HelpSection]) -> Result<()> {
     )));
 }
 
-/// Rebinds an action, or puts back its default keys with `None`, and saves keybinds.toml.
+/// `None` puts back the defaults. Saves keybinds.toml.
 pub fn set(id: &str, keys: Option<Vec<Key>>) -> Result<()> {
     {
         let mut keybinds = KEYBINDS.write().unwrap_or_else(|e| e.into_inner());
@@ -132,7 +128,6 @@ pub fn set(id: &str, keys: Option<Vec<Key>>) -> Result<()> {
     return save(&files::get_keybinds_file_path()?);
 }
 
-/// Puts back the default keys of every action, and saves keybinds.toml.
 pub fn reset_all() -> Result<()> {
     KEYBINDS
         .write()
@@ -142,7 +137,6 @@ pub fn reset_all() -> Result<()> {
     return save(&files::get_keybinds_file_path()?);
 }
 
-/// The keys an action has now.
 pub fn keys(binding: &BindingInfo) -> Vec<Key> {
     return with_overrides(|overrides| {
         return overrides
@@ -152,8 +146,7 @@ pub fn keys(binding: &BindingInfo) -> Vec<Key> {
     });
 }
 
-/// What else `key` does, apart from the action `except`, e.g. "Pattern editor: Toggle edit
-/// mode". Includes the keys that can't be rebound, like the piano keys.
+/// Everything else `key` does, e.g. "Pattern editor: Toggle edit mode".
 pub fn uses(key: Key, except: &str) -> Vec<String> {
     let keybinds = KEYBINDS.read().unwrap_or_else(|e| e.into_inner());
     let mut uses: Vec<String> = keybinds
@@ -178,7 +171,7 @@ pub fn uses(key: Key, except: &str) -> Vec<String> {
     return uses;
 }
 
-/// Keys handled outside the keymaps, which can't be rebound yet.
+/// Keys handled outside the keymaps, which can't be rebound.
 fn fixed_keys() -> Vec<(Key, &'static str)> {
     let mut keys = Vec::new();
     for c in PIANO_KEYS_LOWER.iter().chain(PIANO_KEYS_UPPER.iter()) {
@@ -205,7 +198,6 @@ fn fixed_keys() -> Vec<(Key, &'static str)> {
     return keys;
 }
 
-/// Writes every action with its default keys as a comment, and the rebound ones as settings.
 pub fn save(path: &Path) -> Result<()> {
     fs::write(path, to_toml())?;
     return Ok(());

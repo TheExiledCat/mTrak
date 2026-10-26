@@ -110,7 +110,7 @@ pub fn open_midi_dialog(state: &mut AppState) {
 pub fn open_clear_dialog(state: &mut AppState) {
     let options = vec!["Block", "Track", "Pattern"];
     let targets = vec!["All", "Note", "Vel", "Cmd"];
-    // the instruments first, so a digit picks the instrument with that number
+    // All goes last so the digits match the instrument numbers
     let mut instruments: Vec<String> = state
         .project()
         .instruments
@@ -158,7 +158,7 @@ pub fn open_clear_dialog(state: &mut AppState) {
     state.open_dialog(dialog);
 }
 
-/// Changes apply as they're made, so they can be heard; cancelling puts the old values back.
+/// Previews changes live; cancelling restores the old values.
 pub fn open_instrument_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
     let original = state.project().instruments[instrument as usize].clone();
@@ -275,11 +275,11 @@ pub fn open_about_dialog(state: &mut AppState) {
     components.push(Link::new(REPOSITORY_URL).boxed());
     let dialog = Dialog::new("About", components)
         .level(InfoLevel::Success)
-        .is_cancellable(false);
+        .cancellable(false);
     state.open_dialog(dialog);
 }
 
-/// Changes apply as they're made, so they can be heard; cancelling puts the old values back.
+/// Previews changes live; cancelling restores the old values.
 pub fn open_global_dialog(state: &mut AppState) {
     let velocity = state.project().global_velocity;
     let transpose = state.project().transpose;

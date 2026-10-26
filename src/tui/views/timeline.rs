@@ -1381,9 +1381,8 @@ impl MtrakWidget for TimeLineView {
         let track_width = constants::TRACK_WIDTH as u16;
         // neighbouring tracks overlap by one column so they share a single border
         let tracks_width = (track_width - 1) * pattern.track_count as u16 + 1;
-        // a side without line numbers gets a spacer mirroring them, so the tracks themselves
-        // are centered, which gives way first when the area is too narrow. Without any line
-        // numbers there's nothing to mirror, so the tracks get the room
+        // mirror the line numbers on the other side so the tracks stay centered, unless
+        // there are none
         let spacer_width = top_bottom[1]
             .width
             .saturating_sub(2 + 2 * LINE_NUMBERS_WIDTH + tracks_width)

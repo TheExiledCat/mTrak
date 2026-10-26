@@ -38,7 +38,6 @@ pub enum KeyTableAction {
 
 impl Action for KeyTableAction {}
 
-/// Shown in place of the keys while waiting for the key to bind.
 const WAITING: &str = "...";
 
 enum Row {
@@ -47,18 +46,16 @@ enum Row {
     Blank,
 }
 
-/// A scrolling table of keys or commands. On the keybindings screen it's also where keys are
-/// rebound: Space waits for the key to bind to the selected action, Del puts back its default.
+/// A table of keys or commands. On the keybindings screen it also rebinds keys.
 struct KeyTable {
     rows: Vec<Row>,
     height: u8,
     visible: usize,
     offset: usize,
-    /// The selected row, on the keybindings screen.
+    /// Only on the keybindings screen.
     selected: Option<usize>,
-    /// Waiting for the key to bind to the selected action.
+    /// Waiting for the key to bind.
     capturing: bool,
-    /// The selection only shows while the table has focus.
     focused: bool,
     keys: Keymap<KeyTableAction>,
 }
@@ -97,7 +94,6 @@ impl KeyTable {
         return self.rows.len().saturating_sub(self.visible);
     }
 
-    /// The keys a row shows, as they apply now.
     fn key_text(&self, index: usize) -> String {
         let Row::Entry(key, _, binding) = &self.rows[index] else {
             return String::new();
@@ -123,7 +119,6 @@ impl KeyTable {
         };
     }
 
-    /// Moves the selection `steps` entries up or down, stopping at the first and last.
     fn move_selection(&mut self, steps: isize) {
         let Some(mut selected) = self.selected else {
             return;
@@ -137,8 +132,7 @@ impl KeyTable {
         self.selected = Some(selected);
     }
 
-    /// Binds the key just pressed to the selected action, after a warning when the key does
-    /// something else too.
+    /// Warns first when the key is already used.
     fn capture(&mut self, state: &mut AppState, key: Key) {
         self.capturing = false;
         let Some(binding) = self.selected_binding() else {
@@ -278,7 +272,7 @@ impl MtrakWidget for KeyTable {
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
         self.visible = area.height as usize;
         if let Some(selected) = self.selected {
-            // scroll just enough to keep the selection in view, along with its title
+            // keep the selection and the title above it in view
             let first = selected.saturating_sub(1);
             if first < self.offset {
                 self.offset = first;
@@ -347,7 +341,6 @@ impl DialogComponent for KeyTable {
     }
 }
 
-/// The keybindings screen's own keys, for the keybindings screen and keybinds.toml.
 pub fn help_section() -> HelpSection {
     return HelpSection::new("Keybindings screen")
         .entries(table_keymap(true).help_entries(KeyTable::describe));
@@ -359,10 +352,7 @@ fn table_dialog(title: &str, table: KeyTable) -> Dialog {
         .focus_first();
 }
 
-/// Every key, from `App::help_sections`, where keys can be rebound too, with a button below
-/// that puts back every default.
 pub fn keybindings_dialog(sections: Vec<HelpSection>, height: u8) -> Dialog {
-    // the button and the gap above it come out of the table's height
     let table = KeyTable::new(sections, height.saturating_sub(2).max(1), true);
     return Dialog::new(
         "Keybindings",
