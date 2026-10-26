@@ -1,8 +1,9 @@
 # Example themes
 
-Color themes for mTrak, ported from popular color schemes. To use one, copy it to `theme.toml`
-in the mTrak config folder (see the Configuration section of the main README), then pick `custom`
-with `Ctrl+P`, set `theme = "custom"` in `config.toml`, or start mTrak with `--color custom`.
+Color themes for mTrak, ported from popular color schemes. mTrak puts a copy of each in the
+`themes` folder of its config folder whenever it's missing there (see the Configuration section
+of the main README). Pick one with `Ctrl+P`, set `theme = "dracula"` (the file name without
+`.toml`) in `config.toml`, or start mTrak with `--color dracula`.
 
 | File                    | Scheme           |
 | ----------------------- | ---------------- |
@@ -15,8 +16,8 @@ with `Ctrl+P`, set `theme = "custom"` in `config.toml`, or start mTrak with `--c
 | `solarized-dark.toml`   | Solarized Dark   |
 | `tokyo-night.toml`      | Tokyo Night      |
 
-Every color the theme file accepts is listed, with what it's used for, in the `theme.toml`
-mTrak writes on first start.
+Every color a theme file accepts is listed, with what it's used for, in the Theme files
+section of the main README, and in any theme saved from the Config dialog.
 
 ## Credits
 

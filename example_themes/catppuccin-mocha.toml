@@ -1,14 +1,37 @@
-# Catppuccin Mocha for mTrak. Copy this file to theme.toml in the mTrak config folder and
-# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Catppuccin Mocha for mTrak. mTrak puts a copy in the themes folder of its config folder;
+# pick it in the Config dialog (Ctrl+P), set theme = "catppuccin-mocha" in config.toml or start
+# with --color catppuccin-mocha.
 # Colors from Catppuccin (https://github.com/catppuccin/catppuccin), Copyright (c) 2021 Catppuccin, MIT License.
 
+# the app backdrop around the panels, also the cursor row bar and subtle borders
 backdrop     = "#313244"
+
+# toned-down text and borders, also the fill behind the selection
 muted        = "#B4BEFE"
+
+# text and key fills for something unavailable, e.g. undo with nothing to undo
 disabled     = "#6C7086"
+
+# the content layer, e.g. the pattern editor, also the text on filled labels
 surface      = "#1E1E2E"
+
+# regular text on the surface
 surface_text = "#BAC2DE"
+
+# regular text on the backdrop, also the fill under the cursor
 text         = "#CDD6F4"
+
+# text that stands out, e.g. every 4th row number, the logo and section titles
+accent       = "#CBA6F7"
+
+# errors and edit mode
 danger       = "#F38BA8"
+
+# warnings and the playing row while the row is locked
 warning      = "#F9E2AF"
+
+# success, e.g. the About dialog border
 success      = "#A6E3A1"
+
+# the fill behind a marked block
 mark         = "#45475A"

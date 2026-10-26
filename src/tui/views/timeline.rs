@@ -37,7 +37,43 @@ use crate::{
 };
 
 const TRACK_PADDING_TOP: u16 = 1;
-const ROWS_TOP_OFFSET: u16 = 1 + TRACK_PADDING_TOP;
+/// The track header and the padding below it.
+const TRACK_HEADER_HEIGHT: u16 = 1 + TRACK_PADDING_TOP;
+/// The width of a column of line numbers.
+const LINE_NUMBERS_WIDTH: u16 = 2;
+
+/// How far below the top of the tracks the rows start.
+fn rows_top_offset(state: &AppState) -> u16 {
+    return if state.config.track_numbers {
+        TRACK_HEADER_HEIGHT
+    } else {
+        0
+    };
+}
+
+/// A row number as the settings show it: two hex digits, or decimal ones that start over at
+/// 100.
+fn line_number(state: &AppState, row: u16) -> String {
+    return if state.config.hex_line_numbers {
+        format!("{row:02X}")
+    } else {
+        format!("{:02}", row % 100)
+    };
+}
+
+/// A cell's text with the dashes of an empty instrument and volume blanked out.
+fn without_dashes(cell: &str) -> String {
+    return cell
+        .split('|')
+        .enumerate()
+        .map(|(column, text)| match (column, text) {
+            (1, "-") => " ",
+            (2, "--") => "  ",
+            _ => text,
+        })
+        .collect::<Vec<&str>>()
+        .join("|");
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TimelineAction {
@@ -1029,6 +1065,7 @@ impl TimeLineView {
         area: Rect,
         buf: &mut Buffer,
     ) {
+        let rows_top = rows_top_offset(state);
         let playback_row = self.locked_playback_row(state).map(u16::from);
         let lines = (0..row_count)
             .map(|i| {
@@ -1042,18 +1079,16 @@ impl TimeLineView {
                 if i == self.row_index as u16 {
                     style = style.patch(state.theme.selection);
                 }
-                Line::raw(format!("{:02X}", i)).style(style)
+                Line::raw(line_number(state, i)).style(style)
             })
             .collect::<Vec<Line>>();
         scrolled_to_middle(lines, self.row_index, rows_height)
-            .block(Block::new().padding(Padding::top(ROWS_TOP_OFFSET)))
+            .block(Block::new().padding(Padding::top(rows_top)))
             .right_aligned()
             .render(area, buf);
-    }
-
-    fn render_line_number_header(&self, area: Rect, buf: &mut Buffer) {
-        let lines = vec![Line::raw("No.")];
-        Paragraph::new(lines).right_aligned().render(area, buf);
+        if state.config.track_numbers {
+            Paragraph::new("No.").right_aligned().render(area, buf);
+        }
     }
 
     fn render_track(
@@ -1066,17 +1101,24 @@ impl TimeLineView {
     ) {
         // no bottom margin, so the rows run to the bottom of the area like the line numbers
         let track_layout = Layout::vertical([
-            Constraint::Length(1 + TRACK_PADDING_TOP),
+            Constraint::Length(rows_top_offset(state)),
             Constraint::Fill(1),
         ])
         .horizontal_margin(1)
         .split(area);
-        Line::raw(format!("Track {:02}", track_index + 1))
-            .centered()
-            .render(track_layout[0], buf);
+        if state.config.track_numbers {
+            Line::raw(format!("Track {:02}", track_index + 1))
+                .centered()
+                .render(track_layout[0], buf);
+        }
 
         let cache = self.track_cache.borrow();
         let mut rows = cache.get_all_rows_for_track(state.active_pattern, track_index as usize);
+        if !state.config.show_dashes {
+            for row in rows.iter_mut() {
+                *row = Line::from(without_dashes(&row.to_string()));
+            }
+        }
         if let Some(block) = self.marked_block(state) {
             if block.tracks().contains(&(track_index as usize)) {
                 let marked = block.rows();
@@ -1306,17 +1348,25 @@ impl MtrakWidget for TimeLineView {
         let track_width = constants::TRACK_WIDTH as u16;
         // neighbouring tracks overlap by one column so they share a single border
         let tracks_width = (track_width - 1) * pattern.track_count as u16 + 1;
-        // the trailing spacer mirrors the line numbers so the tracks themselves are centered,
-        // and gives way first when the area is too narrow
+        // a side without line numbers gets a spacer mirroring them, so the tracks themselves
+        // are centered, which gives way first when the area is too narrow
         let spacer_width = top_bottom[1]
             .width
-            .saturating_sub(2 + 2 + tracks_width)
-            .min(2);
+            .saturating_sub(2 + 2 * LINE_NUMBERS_WIDTH + tracks_width)
+            .min(LINE_NUMBERS_WIDTH);
+        let sides = state.config.line_numbers;
+        let side_width = |numbered: bool| {
+            return if numbered {
+                LINE_NUMBERS_WIDTH
+            } else {
+                spacer_width
+            };
+        };
         let layout = Layout::horizontal([
             Constraint::Fill(1),
-            Constraint::Length(2),
+            Constraint::Length(side_width(sides.on_left())),
             Constraint::Length(tracks_width),
-            Constraint::Length(spacer_width),
+            Constraint::Length(side_width(sides.on_right())),
             Constraint::Fill(1),
         ])
         .horizontal_margin(1)
@@ -1325,11 +1375,15 @@ impl MtrakWidget for TimeLineView {
             Layout::horizontal((0..pattern.track_count).map(|_| Constraint::Length(track_width)))
                 .spacing(-1)
                 .split(layout[2]);
-        let rows_top = layout[0].y + ROWS_TOP_OFFSET;
-        let rows_height = layout[0].height.saturating_sub(ROWS_TOP_OFFSET);
+        let rows_top = layout[0].y + rows_top_offset(state);
+        let rows_height = layout[0].height.saturating_sub(rows_top_offset(state));
 
-        self.render_line_numbers(state, pattern.row_count, rows_height, layout[1], buf);
-        self.render_line_number_header(layout[1], buf);
+        if sides.on_left() {
+            self.render_line_numbers(state, pattern.row_count, rows_height, layout[1], buf);
+        }
+        if sides.on_right() {
+            self.render_line_numbers(state, pattern.row_count, rows_height, layout[3], buf);
+        }
         for track_index in 0..pattern.track_count as usize {
             self.render_track(
                 state,
@@ -1513,6 +1567,23 @@ mod tests {
             (view.row_index, view.track_index, view.column_index),
             (0, 0, 0)
         );
+    }
+
+    #[test]
+    fn hidden_dashes_keep_the_columns_lined_up() {
+        assert_eq!(without_dashes("---|-|--|000"), "---| |  |000");
+        assert_eq!(without_dashes("C-4|1|7F|000"), "C-4|1|7F|000");
+        assert_eq!(without_dashes("C-4|-|40|---"), "C-4| |40|---");
+    }
+
+    #[test]
+    fn decimal_line_numbers_start_over_at_100() {
+        let (mut state, _) = editor();
+        assert_eq!(line_number(&state, 0xAB), "AB");
+        state.config.hex_line_numbers = false;
+        assert_eq!(line_number(&state, 0xAB), "71");
+        assert_eq!(line_number(&state, 99), "99");
+        assert_eq!(line_number(&state, 100), "00");
     }
 
     #[test]

@@ -1,14 +1,37 @@
-# Tokyo Night for mTrak. Copy this file to theme.toml in the mTrak config folder and
-# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Tokyo Night for mTrak. mTrak puts a copy in the themes folder of its config folder;
+# pick it in the Config dialog (Ctrl+P), set theme = "tokyo-night" in config.toml or start
+# with --color tokyo-night.
 # Colors from Tokyo Night (https://github.com/tokyo-night/tokyo-night-vscode-theme), Copyright (c) 2018-present Enkia, MIT License.
 
+# the app backdrop around the panels, also the cursor row bar and subtle borders
 backdrop     = "#292E42"
+
+# toned-down text and borders, also the fill behind the selection
 muted        = "#7AA2F7"
+
+# text and key fills for something unavailable, e.g. undo with nothing to undo
 disabled     = "#565F89"
+
+# the content layer, e.g. the pattern editor, also the text on filled labels
 surface      = "#1A1B26"
+
+# regular text on the surface
 surface_text = "#A9B1D6"
+
+# regular text on the backdrop, also the fill under the cursor
 text         = "#C0CAF5"
+
+# text that stands out, e.g. every 4th row number, the logo and section titles
+accent       = "#BB9AF7"
+
+# errors and edit mode
 danger       = "#F7768E"
+
+# warnings and the playing row while the row is locked
 warning      = "#E0AF68"
+
+# success, e.g. the About dialog border
 success      = "#9ECE6A"
+
+# the fill behind a marked block
 mark         = "#414868"

@@ -1,4 +1,5 @@
 mod channel_grid;
+mod config_dialog;
 mod dialogs;
 mod instruments;
 mod midi_events;

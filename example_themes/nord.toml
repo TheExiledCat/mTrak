@@ -1,14 +1,37 @@
-# Nord for mTrak. Copy this file to theme.toml in the mTrak config folder and
-# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Nord for mTrak. mTrak puts a copy in the themes folder of its config folder;
+# pick it in the Config dialog (Ctrl+P), set theme = "nord" in config.toml or start
+# with --color nord.
 # Colors from Nord (https://github.com/nordtheme/nord), Copyright (c) 2016-present Sven Greb, MIT License.
 
+# the app backdrop around the panels, also the cursor row bar and subtle borders
 backdrop     = "#3B4252"
+
+# toned-down text and borders, also the fill behind the selection
 muted        = "#88C0D0"
+
+# text and key fills for something unavailable, e.g. undo with nothing to undo
 disabled     = "#616E88"
+
+# the content layer, e.g. the pattern editor, also the text on filled labels
 surface      = "#2E3440"
+
+# regular text on the surface
 surface_text = "#D8DEE9"
+
+# regular text on the backdrop, also the fill under the cursor
 text         = "#ECEFF4"
+
+# text that stands out, e.g. every 4th row number, the logo and section titles
+accent       = "#B48EAD"
+
+# errors and edit mode
 danger       = "#BF616A"
+
+# warnings and the playing row while the row is locked
 warning      = "#EBCB8B"
+
+# success, e.g. the About dialog border
 success      = "#A3BE8C"
+
+# the fill behind a marked block
 mark         = "#434C5E"

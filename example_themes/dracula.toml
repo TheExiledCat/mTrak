@@ -1,14 +1,37 @@
-# Dracula for mTrak. Copy this file to theme.toml in the mTrak config folder and
-# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Dracula for mTrak. mTrak puts a copy in the themes folder of its config folder;
+# pick it in the Config dialog (Ctrl+P), set theme = "dracula" in config.toml or start
+# with --color dracula.
 # Colors from Dracula (https://github.com/dracula/dracula-theme), Copyright (c) 2023 Dracula Theme, MIT License.
 
+# the app backdrop around the panels, also the cursor row bar and subtle borders
 backdrop     = "#44475A"
+
+# toned-down text and borders, also the fill behind the selection
 muted        = "#BD93F9"
+
+# text and key fills for something unavailable, e.g. undo with nothing to undo
 disabled     = "#6272A4"
+
+# the content layer, e.g. the pattern editor, also the text on filled labels
 surface      = "#282A36"
+
+# regular text on the surface
 surface_text = "#F8F8F2"
+
+# regular text on the backdrop, also the fill under the cursor
 text         = "#F8F8F2"
+
+# text that stands out, e.g. every 4th row number, the logo and section titles
+accent       = "#FF79C6"
+
+# errors and edit mode
 danger       = "#FF5555"
+
+# warnings and the playing row while the row is locked
 warning      = "#F1FA8C"
+
+# success, e.g. the About dialog border
 success      = "#50FA7B"
+
+# the fill behind a marked block
 mark         = "#6272A4"
