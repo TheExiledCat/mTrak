@@ -524,6 +524,9 @@ impl AppState {
                 .set_default_cc(channel as u8, instrument.default_cc);
             state
                 .engine
+                .set_bend_range(channel as u8, instrument.pitch_wheel_range);
+            state
+                .engine
                 .set_channel_transpose(channel as u8, instrument.transpose);
         }
         state.engine.set_transpose(state.project.transpose);
@@ -827,6 +830,14 @@ impl AppState {
 
     pub fn project(&self) -> &Project {
         return &self.project;
+    }
+    /// Whether the project was changed outside the undo history, e.g. in a dialog.
+    pub fn has_changes(&self) -> bool {
+        return self.has_changes;
+    }
+    /// Puts back what `has_changes` was, after a dialog undid its own changes.
+    pub fn restore_has_changes(&mut self, has_changes: bool) {
+        self.has_changes = has_changes;
     }
     pub fn project_mut(&mut self) -> &mut Project {
         self.has_changes = true;
@@ -1226,7 +1237,7 @@ impl AppState {
     ) {
         self.edit_event(row, track, |note| {
             note.kind = NoteKind::On(pitch);
-            note.instrument_id = note.instrument_id.or(Some(instrument));
+            note.instrument_id = Some(instrument);
             note.velocity = vel.or(note.velocity);
         });
     }
@@ -1336,6 +1347,10 @@ impl AppState {
     pub fn set_default_cc(&mut self, channel: u8, control: u8) {
         self.project_mut().instruments[channel as usize].default_cc = control;
         self.engine.set_default_cc(channel, control);
+    }
+    pub fn set_bend_range(&mut self, channel: u8, range: u8) {
+        self.project_mut().instruments[channel as usize].pitch_wheel_range = range;
+        self.engine.set_bend_range(channel, range);
     }
     pub fn is_saved(&self) -> bool {
         return !self.has_changes && self.saved_position == self.undo_stack.position();

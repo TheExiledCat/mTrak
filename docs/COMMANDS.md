@@ -25,8 +25,8 @@ synth just before the note does.
 ## Values
 
 Command values go from `00` to `FF`, but MIDI controller values, velocities and aftertouch
-only go from 0 to 127, so command values are halved when used (pitch bend is the exception,
-see `P`):
+only go from 0 to 127, so command values are halved when used (pitch bends are the exception,
+see `P` and `I`):
 
 | Value | Sent as |
 |-------|---------|
@@ -155,6 +155,25 @@ C-4|1|--|PFF   note starts fully bent up
 - Pitch bend affects every note on the channel, including notes from other tracks playing
   the same instrument.
 - `P` has 256 steps, so on large bend ranges you may hear the steps between values.
+
+### `I` Interval
+
+Bends the pitch of the whole channel by whole semitones: `80` is no bend, `83` is 3 semitones
+up and `7D` 3 down. Useful for repitching chopped samples, e.g. drum hits, without retyping
+their notes.
+
+```
+C-4|1|--|I83   note plays 3 semitones higher (D#4)
+C-4|1|--|I7B   5 semitones lower (G-3)
+---|1|--|I80   back to normal pitch
+```
+
+- It works out the bend from the instrument's bend range, set in the instrument dialog
+  (`Ctrl+R`, `Bend range`, in hex: `0C` is 12 semitones, the default). Set it to the same
+  range as your synth, or the notes land out of tune.
+- Bends past the bend range stop at a full bend: with a range of 12, `I8F` bends 12 up, like
+  `I8C`. With a range of `00`, `I` sends no bend.
+- Like `P`, the bend affects every note on the channel and stays until the next `P` or `I`.
 
 ## Effect commands
 

@@ -15,6 +15,7 @@ use ratatui::{
 
 use crate::{
     data::{
+        config::LineNumbers,
         effect::Command,
         midi::{MIDI_CHANNEL_MAX, VELOCITY_MAX, VOLUME_MAX},
         note::{Note, NoteKind, NotePitch},
@@ -1349,7 +1350,8 @@ impl MtrakWidget for TimeLineView {
         // neighbouring tracks overlap by one column so they share a single border
         let tracks_width = (track_width - 1) * pattern.track_count as u16 + 1;
         // a side without line numbers gets a spacer mirroring them, so the tracks themselves
-        // are centered, which gives way first when the area is too narrow
+        // are centered, which gives way first when the area is too narrow. Without any line
+        // numbers there's nothing to mirror, so the tracks get the room
         let spacer_width = top_bottom[1]
             .width
             .saturating_sub(2 + 2 * LINE_NUMBERS_WIDTH + tracks_width)
@@ -1358,6 +1360,8 @@ impl MtrakWidget for TimeLineView {
         let side_width = |numbered: bool| {
             return if numbered {
                 LINE_NUMBERS_WIDTH
+            } else if sides == LineNumbers::None {
+                0
             } else {
                 spacer_width
             };
@@ -1567,6 +1571,16 @@ mod tests {
             (view.row_index, view.track_index, view.column_index),
             (0, 0, 0)
         );
+    }
+
+    #[test]
+    fn entering_a_note_over_another_uses_the_active_instrument() {
+        let (mut state, _) = editor();
+        state.enter_note(1, 0, 0, NotePitch::new(60), None);
+        state.enter_note(3, 0, 0, NotePitch::new(62), None);
+        let note = state.active_pattern().get_event(0, 0).unwrap();
+        assert_eq!(note.instrument_id, Some(3));
+        assert_eq!(note.kind, NoteKind::On(NotePitch::new(62)));
     }
 
     #[test]

@@ -31,7 +31,7 @@ Settings that aren't part of a project.
 | `update_check` | `true` or `false`                                       | `true`  | Look for a new version on startup                               |
 | `midi_input`   | A port name, or `""` for none                           | `""`    | The MIDI input a project connects to when it doesn't name one   |
 | `midi_output`  | A port name, or `""` for none                           | `""`    | The MIDI output a project connects to when it doesn't name one  |
-| `line_numbers` | `left`, `right` or `both`                               | `left`  | Which sides of the pattern editor show the row numbers          |
+| `line_numbers` | `left`, `right`, `both` or `none`                       | `left`  | Which sides of the pattern editor show the row numbers; `none` gives the room to the tracks |
 | `hex_line_numbers` | `true` or `false`                                   | `true`  | Row numbers in hex, or in decimal from `00` to `99` and round again, so they stay two digits |
 | `show_dashes`  | `true` or `false`                                       | `true`  | Dashes in empty instrument and volume columns; blank when `false` |
 | `track_numbers` | `true` or `false`                                      | `true`  | The header with the track numbers above the pattern editor; hiding it gives two more rows |

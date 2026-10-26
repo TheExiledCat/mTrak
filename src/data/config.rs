@@ -95,16 +95,22 @@ pub enum LineNumbers {
     Left,
     Right,
     Both,
+    None,
 }
 
 impl LineNumbers {
-    pub const ALL: [LineNumbers; 3] = [LineNumbers::Left, LineNumbers::Right, LineNumbers::Both];
+    pub const ALL: [LineNumbers; 4] = [
+        LineNumbers::Left,
+        LineNumbers::Right,
+        LineNumbers::Both,
+        LineNumbers::None,
+    ];
 
     pub fn on_left(self) -> bool {
-        return self != LineNumbers::Right;
+        return matches!(self, LineNumbers::Left | LineNumbers::Both);
     }
     pub fn on_right(self) -> bool {
-        return self != LineNumbers::Left;
+        return matches!(self, LineNumbers::Right | LineNumbers::Both);
     }
     pub fn name(self) -> String {
         return self
@@ -177,7 +183,7 @@ impl Config {
                 }
                 "line_numbers" => {
                     config.line_numbers = LineNumbers::from_str(&entry.value, true)
-                        .map_err(|_| error("must be left, right or both".to_owned()))?;
+                        .map_err(|_| error("must be left, right, both or none".to_owned()))?;
                 }
                 key => return Err(error(format!("unknown setting {key}"))),
             }
@@ -230,7 +236,7 @@ impl Config {
              show_dashes = {show_dashes}\n\
              # The header with the track numbers above the tracks.\n\
              track_numbers = {track_numbers}\n\
-             # Where the row numbers go: \"left\", \"right\" or \"both\".\n\
+             # Where the row numbers go: \"left\", \"right\", \"both\" or \"none\".\n\
              line_numbers = \"{line_numbers}\"\n"
         );
     }

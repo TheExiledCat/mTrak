@@ -275,6 +275,9 @@ impl MtrakEngine {
             EngineCommand::SetDefaultCC { channel, control } => self
                 .midi_command_handler
                 .set_default_control(channel as usize, control),
+            EngineCommand::SetBendRange { channel, range } => self
+                .midi_command_handler
+                .set_bend_range(channel as usize, range),
             EngineCommand::SetMidiClock(enabled) => self.send_midi_clock = enabled,
             EngineCommand::SetClockSource(source) => self.set_clock_source(source),
             EngineCommand::ExternalClock(timestamp) => self.external_pulse(timestamp),

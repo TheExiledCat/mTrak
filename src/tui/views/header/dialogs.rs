@@ -11,8 +11,8 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{
-                Checkbox, Dialog, DialogComponent, InfoLevel, Label, Link, NumberBox, Select,
-                TextPrompt,
+                Checkbox, Dialog, DialogComponent, DialogResult, InfoLevel, Label, Link, NumberBox,
+                Select, TextPrompt,
             },
         },
         glyphs,
@@ -140,9 +140,12 @@ pub fn open_clear_dialog(state: &mut AppState) {
     state.open_dialog(dialog);
 }
 
+/// Changes apply as they're made, so they can be heard; cancelling puts the old values back.
 pub fn open_instrument_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
-    let settings = &state.project().instruments[instrument as usize];
+    let original = state.project().instruments[instrument as usize].clone();
+    let had_changes = state.has_changes();
+    let settings = &original;
     let dialog = Dialog::new(
         format!("Instrument {:1X}", instrument),
         vec![
@@ -166,25 +169,41 @@ pub fn open_instrument_dialog(state: &mut AppState) {
         ],
     )
     .focus_first()
-    .on_submit(move |state, result| {
-        if let Some(name) = result.text("name") {
-            state.project_mut().instruments[instrument as usize].name = name.into();
-        }
-        if let Some(volume) = result.number("volume") {
-            state.set_global_volume(instrument, volume as u8);
-        }
-        if let Some(range) = result.number("pitch_wheel_range") {
-            state.project_mut().instruments[instrument as usize].pitch_wheel_range = range as u8;
-        }
-        if let Some(control) = result.number("default_cc") {
-            state.set_default_cc(instrument, control as u8);
-        }
-        if let Some(transpose) = result.number("transpose") {
-            state.set_instrument_transpose(instrument, transpose as i8);
-        }
+    .on_update(move |state, fields| {
+        apply_instrument(state, instrument, fields);
         return Ok(());
+    })
+    .on_submit(move |state, result| {
+        apply_instrument(state, instrument, &result);
+        return Ok(());
+    })
+    .on_cancel(move |state| {
+        state.project_mut().instruments[instrument as usize].name = original.name;
+        state.set_global_volume(instrument, original.volume);
+        state.set_bend_range(instrument, original.pitch_wheel_range);
+        state.set_default_cc(instrument, original.default_cc);
+        state.set_instrument_transpose(instrument, original.transpose);
+        state.restore_has_changes(had_changes);
     });
     state.open_dialog(dialog);
+}
+
+fn apply_instrument(state: &mut AppState, instrument: u8, result: &DialogResult) {
+    if let Some(name) = result.text("name") {
+        state.project_mut().instruments[instrument as usize].name = name.into();
+    }
+    if let Some(volume) = result.number("volume") {
+        state.set_global_volume(instrument, volume as u8);
+    }
+    if let Some(range) = result.number("pitch_wheel_range") {
+        state.set_bend_range(instrument, range as u8);
+    }
+    if let Some(control) = result.number("default_cc") {
+        state.set_default_cc(instrument, control as u8);
+    }
+    if let Some(transpose) = result.number("transpose") {
+        state.set_instrument_transpose(instrument, transpose as i8);
+    }
 }
 
 pub fn open_about_dialog(state: &mut AppState) {
@@ -242,7 +261,11 @@ pub fn open_about_dialog(state: &mut AppState) {
     state.open_dialog(dialog);
 }
 
+/// Changes apply as they're made, so they can be heard; cancelling puts the old values back.
 pub fn open_global_dialog(state: &mut AppState) {
+    let velocity = state.project().global_velocity;
+    let transpose = state.project().transpose;
+    let had_changes = state.has_changes();
     let dialog = Dialog::new(
         "Global",
         vec![
@@ -256,14 +279,27 @@ pub fn open_global_dialog(state: &mut AppState) {
         ],
     )
     .focus_first()
-    .on_submit(move |state, result| {
-        if let Some(velocity) = result.number("velocity") {
-            state.set_global_velocity(velocity as u8);
-        }
-        if let Some(transpose) = result.number("transpose") {
-            state.set_transpose(transpose as i8);
-        }
+    .on_update(|state, fields| {
+        apply_globals(state, fields);
         return Ok(());
+    })
+    .on_submit(|state, result| {
+        apply_globals(state, &result);
+        return Ok(());
+    })
+    .on_cancel(move |state| {
+        state.set_global_velocity(velocity);
+        state.set_transpose(transpose);
+        state.restore_has_changes(had_changes);
     });
     state.open_dialog(dialog);
+}
+
+fn apply_globals(state: &mut AppState, result: &DialogResult) {
+    if let Some(velocity) = result.number("velocity") {
+        state.set_global_velocity(velocity as u8);
+    }
+    if let Some(transpose) = result.number("transpose") {
+        state.set_transpose(transpose as i8);
+    }
 }

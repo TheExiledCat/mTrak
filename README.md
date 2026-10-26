@@ -152,6 +152,7 @@ Planned features, in no particular order:
     - [X] Note probability (`Y`)
     - [X] Note Cut (`EC`)
     - [X] Legato (overlap notes, `L`)
+    - [X] Pitch bend in semitones, using the instrument's bend range (`I`)
     - [ ] Shorthand commands for common CCs
         - [X] Mod wheel (`W`)
         - [ ] filter cutoff, etc.
