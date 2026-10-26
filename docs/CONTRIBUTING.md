@@ -34,6 +34,13 @@ before you spend time on it.
 3. Run the checks below and make sure they pass.
 4. Open a pull request describing what changed and why, and link the related issue.
 
+### AI-written code
+
+We prefer code written by people wherever possible. If you do use AI tools for part of a
+change, say so in the pull request: what they were used for, and how you checked the result.
+Read and understand every line before submitting, test the change yourself in mTrak (not only
+with `cargo test`), and make sure it follows the code style below.
+
 ### Checks
 
 ```sh
