@@ -180,3 +180,6 @@ Bug reports, feature requests and pull requests are welcome. See
 [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for how to get started and
 [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for the code style. Run `./fmt.sh` before
 committing to format the code and apply lint fixes.
+
+Note that most of the code was very quickly written so there might be some lines that might be confusing or dirty.
+I will make a big refactoring PR in the future when my primary roadmap targets have been finished.
