@@ -36,6 +36,7 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, InfoLevel},
+            keymap::HelpSection,
             widget::MtrakWidget,
             widgets::container::Container,
         },
@@ -174,6 +175,16 @@ impl App {
         ));
         return Ok(());
     }
+    /// Every key, grouped by where it works: what the keybindings screen lists, and the
+    /// actions keybinds.toml can rebind.
+    pub fn help_sections(&self) -> Vec<HelpSection> {
+        let mut sections = Vec::new();
+        self.root.help(&mut sections);
+        self.file_browser.help(&mut sections);
+        Dialog::help(&mut sections);
+        sections.push(keybindings::help_section());
+        return sections;
+    }
     fn table_dialog_height(&self) -> u8 {
         let terminal_height = self.terminal.size().map(|s| s.height).unwrap_or(24);
         return (terminal_height * 3 / 5)
@@ -207,12 +218,8 @@ impl App {
             ));
         }
         if std::mem::take(&mut self.state.help_requested) {
-            let mut sections = Vec::new();
-            self.root.help(&mut sections);
-            self.file_browser.help(&mut sections);
-            Dialog::help(&mut sections);
             self.dialogs.push(keybindings::keybindings_dialog(
-                sections,
+                self.help_sections(),
                 self.table_dialog_height(),
             ));
         }
@@ -1190,17 +1197,15 @@ impl AppState {
         self.current_octave = octave.clamp(0, 7);
     }
     fn key_to_note_pitch(&self, key: char) -> Option<NotePitch> {
-        let bottom_octave = [
-            'z', 's', 'x', 'd', 'c', 'v', 'g', 'b', 'h', 'n', 'j', 'm', ',',
-        ];
-        let top_octave = [
-            'q', '2', 'w', '3', 'e', 'r', '5', 't', '6', 'y', '7', 'u', 'i',
-        ];
-        let note = bottom_octave
+        let note = constants::PIANO_KEYS_LOWER
             .iter()
             .position(|p| *p == key)
-            .or_else(|| top_octave.iter().position(|p| *p == key).map(|n| n + 12))?
-            as u8;
+            .or_else(|| {
+                constants::PIANO_KEYS_UPPER
+                    .iter()
+                    .position(|p| *p == key)
+                    .map(|n| n + 12)
+            })? as u8;
         return Some(NotePitch::new(note + 12 * (self.current_octave + 1)));
     }
     fn send_all_to_engine(&mut self) {

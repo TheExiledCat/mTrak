@@ -209,8 +209,8 @@ impl Config {
             line_numbers,
         } = self;
         let line_numbers = line_numbers.name();
-        let midi_input = midi_input.as_deref().unwrap_or_default();
-        let midi_output = midi_output.as_deref().unwrap_or_default();
+        let midi_input = toml::quote(midi_input.as_deref().unwrap_or_default());
+        let midi_output = toml::quote(midi_output.as_deref().unwrap_or_default());
         return format!(
             "# mTrak settings. Delete this file to get the defaults back.\n\
              \n\
@@ -227,8 +227,8 @@ impl Config {
              update_check = {update_check}\n\
              \n\
              # The MIDI ports a project connects to when it doesn't name its own, \"\" for none.\n\
-             midi_input = \"{midi_input}\"\n\
-             midi_output = \"{midi_output}\"\n\
+             midi_input = {midi_input}\n\
+             midi_output = {midi_output}\n\
              \n\
              # Pattern editor: row numbers in hex, or in decimal from 00 to 99 when false.\n\
              hex_line_numbers = {hex_line_numbers}\n\
@@ -270,7 +270,7 @@ mod tests {
                 ascii_mode: true,
                 update_check: false,
                 midi_input: Some("Keys".to_owned()),
-                midi_output: Some("USB MIDI Out".to_owned()),
+                midi_output: Some("USB \\MIDI \"Out\"".to_owned()),
                 hex_line_numbers: false,
                 show_dashes: false,
                 track_numbers: false,

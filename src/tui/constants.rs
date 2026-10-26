@@ -11,3 +11,13 @@ pub const TRACK_COLUMN_COUNT: u8 = 7;
 pub const NOTE_NAMES: &[&str] = &[
     "C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-",
 ];
+
+/// The piano keys, a semitone apart from C: the lower octave and the one above it.
+pub const PIANO_KEYS_LOWER: [char; 13] = [
+    'z', 's', 'x', 'd', 'c', 'v', 'g', 'b', 'h', 'n', 'j', 'm', ',',
+];
+pub const PIANO_KEYS_UPPER: [char; 13] = [
+    'q', '2', 'w', '3', 'e', 'r', '5', 't', '6', 'y', '7', 'u', 'i',
+];
+/// The letters that, with Alt, jump to tracks 1 to 8, as in FT2.
+pub const TRACK_JUMP_KEYS: [char; 8] = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i'];

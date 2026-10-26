@@ -29,7 +29,10 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, Label, Select},
-            keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, HelpSection, Key, KeyActions, KeyHint, Keymap},
+            keymap::{
+                ALT_SYMBOL, ASCII_ALT_SYMBOL, Action, HelpSection, Key, KeyActions, KeyHint,
+                Keymap, snake_case,
+            },
             widget::MtrakWidget,
         },
         glyphs,
@@ -76,7 +79,7 @@ fn without_dashes(cell: &str) -> String {
         .join("|");
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TimelineAction {
     RowUp,
     RowDown,
@@ -126,7 +129,30 @@ pub enum TimelineAction {
     RowLock,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+impl Action for TimelineAction {
+    fn id(self) -> String {
+        return match self {
+            TimelineAction::JumpToMarker(marker) => format!("jump_to_marker_{}", marker + 1),
+            TimelineAction::Transpose {
+                area,
+                all_instruments,
+                delta,
+            } => {
+                let area = format!("{area:?}").to_lowercase();
+                let all = if all_instruments {
+                    "_all_instruments"
+                } else {
+                    ""
+                };
+                let direction = if delta < 0 { "down" } else { "up" };
+                format!("transpose_{area}{all}_{direction}")
+            }
+            _ => snake_case(&format!("{self:?}")),
+        };
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TransposeArea {
     Track,
     Pattern,
@@ -135,8 +161,6 @@ pub enum TransposeArea {
 
 /// Rows F9..F12 jump to, as in FT2. Clamped to the last row for shorter patterns.
 const JUMP_ROWS: [u8; 4] = [0, 16, 32, 48];
-/// Alt+key jumps to the track at the key's index, as in FT2.
-const TRACK_JUMP_KEYS: [char; 8] = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i'];
 
 /// Cursor movement shared by both modes. As in FT2, left/right move between columns and
 /// run over into the neighbouring track, while Tab/Shift+Tab move a whole track.
@@ -251,7 +275,7 @@ fn clipboard_keys(keymap: Keymap<TimelineAction>) -> Keymap<TimelineAction> {
 fn normal_keymap() -> Keymap<TimelineAction> {
     use TimelineAction::*;
     return transpose_keys(clipboard_keys(movement_keys(
-        Keymap::new()
+        Keymap::new("pattern")
             .bind(Key::char(' '), ToggleEdit, "Edit")
             .bind(Key::ctrl('l'), RowLock, "Lock")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
@@ -262,7 +286,7 @@ fn normal_keymap() -> Keymap<TimelineAction> {
 fn edit_keymap() -> Keymap<TimelineAction> {
     use TimelineAction::*;
     return transpose_keys(clipboard_keys(movement_keys(
-        Keymap::new()
+        Keymap::new("pattern")
             .bind(Key::char(' '), ToggleEdit, "Edit")
             .bind(Key::ctrl('l'), RowLock, "Lock")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
@@ -373,7 +397,7 @@ fn track_jump(key: &KeyEvent) -> Option<u8> {
     let KeyCode::Char(c) = key.code else {
         return None;
     };
-    let index = TRACK_JUMP_KEYS.iter().position(|&k| k == c)? as u8;
+    let index = constants::TRACK_JUMP_KEYS.iter().position(|&k| k == c)? as u8;
     return (index < constants::TRACK_COUNT).then_some(index);
 }
 

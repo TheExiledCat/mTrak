@@ -1,10 +1,14 @@
-use std::fmt::{self, Display};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    fmt::{self, Display, Write},
+};
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::{
     error::Result,
-    tui::{app::AppState, glyphs},
+    tui::{app::AppState, glyphs, keybinds},
 };
 
 #[cfg(target_os = "macos")]
@@ -86,16 +90,24 @@ impl Key {
     }
 }
 
-impl Display for Key {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Key {
+    /// Writes the key with the symbols of the current glyph mode, or always in ASCII.
+    fn write(&self, f: &mut impl Write, ascii: bool) -> fmt::Result {
+        let pick = |unicode, plain| {
+            if ascii {
+                plain
+            } else {
+                glyphs::pick(unicode, plain)
+            }
+        };
         if self.modifiers.contains(KeyModifiers::CONTROL) {
-            write!(f, "{}", glyphs::pick(CONTROL_SYMBOL, ASCII_CONTROL_SYMBOL))?;
+            write!(f, "{}", pick(CONTROL_SYMBOL, ASCII_CONTROL_SYMBOL))?;
         }
         if self.modifiers.contains(KeyModifiers::ALT) {
-            write!(f, "{}", glyphs::pick(ALT_SYMBOL, ASCII_ALT_SYMBOL))?;
+            write!(f, "{}", pick(ALT_SYMBOL, ASCII_ALT_SYMBOL))?;
         }
         if self.modifiers.contains(KeyModifiers::SHIFT) {
-            write!(f, "{}", glyphs::pick(SHIFT_SYMBOL, ASCII_SHIFT_SYMBOL))?;
+            write!(f, "{}", pick(SHIFT_SYMBOL, ASCII_SHIFT_SYMBOL))?;
         }
         let has_modifier = self
             .modifiers
@@ -104,12 +116,12 @@ impl Display for Key {
             KeyCode::Char(' ') => write!(f, "Spc"),
             KeyCode::Char(c) if has_modifier => write!(f, "{}", c.to_ascii_uppercase()),
             KeyCode::Char(c) => write!(f, "{c}"),
-            KeyCode::Up => write!(f, "{}", glyphs::pick("↑", "Up")),
-            KeyCode::Down => write!(f, "{}", glyphs::pick("↓", "Dn")),
-            KeyCode::Left => write!(f, "{}", glyphs::pick("←", "Lt")),
-            KeyCode::Right => write!(f, "{}", glyphs::pick("→", "Rt")),
+            KeyCode::Up => write!(f, "{}", pick("↑", "Up")),
+            KeyCode::Down => write!(f, "{}", pick("↓", "Dn")),
+            KeyCode::Left => write!(f, "{}", pick("←", "Lt")),
+            KeyCode::Right => write!(f, "{}", pick("→", "Rt")),
             KeyCode::F(n) => write!(f, "F{n}"),
-            KeyCode::BackTab => write!(f, "{}Tab", glyphs::pick(SHIFT_SYMBOL, ASCII_SHIFT_SYMBOL)),
+            KeyCode::BackTab => write!(f, "{}Tab", pick(SHIFT_SYMBOL, ASCII_SHIFT_SYMBOL)),
             KeyCode::PageUp => write!(f, "PgUp"),
             KeyCode::PageDown => write!(f, "PgDn"),
             KeyCode::Insert => write!(f, "Ins"),
@@ -117,6 +129,78 @@ impl Display for Key {
             KeyCode::Backspace => write!(f, "Bksp"),
             other => write!(f, "{other:?}"),
         };
+    }
+
+    /// How the key is written in keybinds.toml: the ASCII form shown on screen, with a
+    /// shifted letter as just the capital, e.g. `Z`, `^S`, `A-O` or `S-Tab`.
+    pub fn to_text(self) -> String {
+        if self.modifiers == KeyModifiers::SHIFT
+            && let KeyCode::Char(c) = self.code
+            && c.is_ascii_alphabetic()
+        {
+            return c.to_ascii_uppercase().to_string();
+        }
+        let mut text = String::new();
+        let _ = self.write(&mut text, true);
+        return text;
+    }
+
+    /// Reads a key written like `to_text` writes it. The prefixes `^`, `A-` and `S-` only
+    /// count when something follows them, so `^` alone is the caret key.
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut modifiers = KeyModifiers::NONE;
+        let mut rest = text;
+        loop {
+            let (modifier, after) = if let Some(after) = rest.strip_prefix(ASCII_CONTROL_SYMBOL) {
+                (KeyModifiers::CONTROL, after)
+            } else if let Some(after) = rest.strip_prefix(ASCII_ALT_SYMBOL) {
+                (KeyModifiers::ALT, after)
+            } else if let Some(after) = rest.strip_prefix(ASCII_SHIFT_SYMBOL) {
+                (KeyModifiers::SHIFT, after)
+            } else {
+                break;
+            };
+            if after.is_empty() {
+                break;
+            }
+            modifiers.insert(modifier);
+            rest = after;
+        }
+        let code = match rest {
+            "Spc" => KeyCode::Char(' '),
+            "Up" => KeyCode::Up,
+            "Dn" | "Down" => KeyCode::Down,
+            "Lt" | "Left" => KeyCode::Left,
+            "Rt" | "Right" => KeyCode::Right,
+            "PgUp" => KeyCode::PageUp,
+            "PgDn" => KeyCode::PageDown,
+            "Ins" => KeyCode::Insert,
+            "Del" => KeyCode::Delete,
+            "Bksp" => KeyCode::Backspace,
+            "Enter" => KeyCode::Enter,
+            "Esc" => KeyCode::Esc,
+            "Tab" => KeyCode::Tab,
+            "Home" => KeyCode::Home,
+            "End" => KeyCode::End,
+            _ => {
+                let mut chars = rest.chars();
+                match (chars.next(), chars.next()) {
+                    // with a modifier written out, a capital is just how the letter is shown
+                    (Some(c), None) if !modifiers.is_empty() => {
+                        KeyCode::Char(c.to_ascii_lowercase())
+                    }
+                    (Some(c), None) => KeyCode::Char(c),
+                    _ => KeyCode::F(rest.strip_prefix('F')?.parse().ok()?),
+                }
+            }
+        };
+        return Some(Self::new(code, modifiers));
+    }
+}
+
+impl Display for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        return self.write(f, false);
     }
 }
 
@@ -136,6 +220,40 @@ impl KeyHint {
 pub struct HelpEntry {
     pub key: String,
     pub description: &'static str,
+    /// The action behind the entry, for entries that can be rebound.
+    pub binding: Option<BindingInfo>,
+}
+
+/// An action that can be rebound, and the keys it has by default.
+#[derive(Clone)]
+pub struct BindingInfo {
+    /// The action's name in keybinds.toml, e.g. `pattern.toggle_edit`.
+    pub id: String,
+    pub defaults: Vec<Key>,
+}
+
+/// An action keys can be bound to.
+pub trait Action: Copy + PartialEq + fmt::Debug {
+    /// The action's name in keybinds.toml within its keymap, in snake_case, e.g.
+    /// `toggle_edit`. Actions that carry values override this.
+    fn id(self) -> String {
+        return snake_case(&format!("{self:?}"));
+    }
+}
+
+pub fn snake_case(name: &str) -> String {
+    let mut text = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i > 0 {
+                text.push('_');
+            }
+            text.push(c.to_ascii_lowercase());
+        } else {
+            text.push(c);
+        }
+    }
+    return text;
 }
 
 pub struct HelpSection {
@@ -155,6 +273,7 @@ impl HelpSection {
         self.entries.push(HelpEntry {
             key: key.into(),
             description,
+            binding: None,
         });
         return self;
     }
@@ -165,6 +284,7 @@ impl HelpSection {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Binding<A> {
     pub key: Key,
     pub action: A,
@@ -173,19 +293,19 @@ pub struct Binding<A> {
 
 /// Maps keys to a widget's actions. The same table drives event handling (`lookup`) and
 /// what gets displayed (`hints`, `key_for`), so the two can never drift apart.
+///
+/// The keys given to `bind` are the defaults: keys set in keybinds.toml take their place,
+/// checked on every use so a change applies straight away.
 pub struct Keymap<A> {
+    /// Names the keymap in keybinds.toml, e.g. `pattern` in `pattern.toggle_edit`.
+    scope: &'static str,
     bindings: Vec<Binding<A>>,
 }
 
-impl<A: Copy + PartialEq> Default for Keymap<A> {
-    fn default() -> Self {
-        return Self::new();
-    }
-}
-
-impl<A: Copy + PartialEq> Keymap<A> {
-    pub fn new() -> Self {
+impl<A: Action> Keymap<A> {
+    pub fn new(scope: &'static str) -> Self {
         return Self {
+            scope,
             bindings: Vec::new(),
         };
     }
@@ -195,19 +315,46 @@ impl<A: Copy + PartialEq> Keymap<A> {
         return self;
     }
 
-    /// Every binding, in the order they were added.
-    pub fn bindings(&self) -> &[Binding<A>] {
-        return &self.bindings;
+    /// The action's name in keybinds.toml.
+    pub fn id(&self, action: A) -> String {
+        return format!("{}.{}", self.scope, action.id());
     }
 
-    pub fn bindings_mut(&mut self) -> &mut [Binding<A>] {
+    /// Every binding as it applies now, in the order they were added, with an action's keys
+    /// from keybinds.toml in place of its defaults.
+    pub fn bindings(&self) -> Cow<'_, [Binding<A>]> {
+        return keybinds::with_overrides(|overrides| self.bindings_with(overrides));
+    }
+
+    /// The bindings with `overrides`, keys by action id, in place of the defaults.
+    fn bindings_with(&self, overrides: &HashMap<String, Vec<Key>>) -> Cow<'_, [Binding<A>]> {
+        if overrides.is_empty() {
+            return Cow::Borrowed(self.bindings.as_slice());
+        }
+        let mut bindings = Vec::new();
+        let mut overridden: Vec<A> = Vec::new();
+        for binding in &self.bindings {
+            let Some(keys) = overrides.get(&self.id(binding.action)) else {
+                bindings.push(*binding);
+                continue;
+            };
+            if !overridden.contains(&binding.action) {
+                overridden.push(binding.action);
+                bindings.extend(keys.iter().map(|&key| Binding { key, ..*binding }));
+            }
+        }
+        return Cow::Owned(bindings);
+    }
+
+    /// The default bindings, e.g. to change a label.
+    pub fn default_bindings_mut(&mut self) -> &mut [Binding<A>] {
         return &mut self.bindings;
     }
 
     /// The action bound to the pressed key, if any.
     pub fn lookup(&self, event: &KeyEvent) -> Option<A> {
         return self
-            .bindings
+            .bindings()
             .iter()
             .find(|b| b.key.matches(event))
             .map(|b| b.action);
@@ -216,15 +363,33 @@ impl<A: Copy + PartialEq> Keymap<A> {
     /// The first key bound to `action`, for showing it next to the thing it controls.
     pub fn key_for(&self, action: A) -> Option<Key> {
         return self
-            .bindings
+            .bindings()
             .iter()
             .find(|b| b.action == action)
             .map(|b| b.key);
     }
 
+    /// The first key bound to `action` as shown on screen, or `--` when it has none, e.g.
+    /// after it was unbound in keybinds.toml.
+    pub fn key_text(&self, action: A) -> String {
+        return self
+            .key_for(action)
+            .map_or_else(|| NO_KEY.to_owned(), |key| key.to_string());
+    }
+
+    /// `key: label` for `action`, e.g. for a button, with `--` for the key when it has none.
+    pub fn labelled_key(&self, action: A) -> String {
+        let label = self
+            .bindings
+            .iter()
+            .find(|b| b.action == action)
+            .map_or("", |b| b.label);
+        return format!("{}: {label}", self.key_text(action));
+    }
+
     pub fn hint_for(&self, action: A) -> Option<KeyHint> {
         return self
-            .bindings
+            .bindings()
             .iter()
             .find(|b| b.action == action)
             .map(|b| KeyHint {
@@ -237,7 +402,7 @@ impl<A: Copy + PartialEq> Keymap<A> {
     /// Appends a hint per label, merging the keys that share it, e.g. "↑/↓ Move row".
     pub fn hints(&self, hints: &mut Vec<KeyHint>) {
         let mut groups: Vec<(&'static str, Vec<Key>)> = Vec::new();
-        for binding in &self.bindings {
+        for binding in self.bindings().iter() {
             match groups.iter_mut().find(|(label, _)| *label == binding.label) {
                 Some((_, keys)) => keys.push(binding.key),
                 None => groups.push((binding.label, vec![binding.key])),
@@ -251,29 +416,53 @@ impl<A: Copy + PartialEq> Keymap<A> {
     }
 }
 
-impl<A: Copy + PartialEq> Keymap<A> {
+impl<A: Action> Keymap<A> {
+    /// An entry per action, with its keys as they apply now.
     pub fn help_entries(&self, describe: impl Fn(A) -> &'static str) -> Vec<HelpEntry> {
-        let mut groups: Vec<(&'static str, Vec<Key>)> = Vec::new();
+        let mut actions: Vec<A> = Vec::new();
         for binding in &self.bindings {
-            let description = describe(binding.action);
-            match groups.iter_mut().find(|(d, _)| *d == description) {
-                Some((_, keys)) => keys.push(binding.key),
-                None => groups.push((description, vec![binding.key])),
+            if !actions.contains(&binding.action) {
+                actions.push(binding.action);
             }
         }
-        return groups
+        let bindings = self.bindings();
+        return actions
             .into_iter()
-            .map(|(description, keys)| HelpEntry {
-                key: join_keys(&keys),
-                description,
+            .map(|action| {
+                let keys_of = |bindings: &[Binding<A>]| -> Vec<Key> {
+                    return bindings
+                        .iter()
+                        .filter(|b| b.action == action)
+                        .map(|b| b.key)
+                        .collect();
+                };
+                let keys = keys_of(&bindings);
+                return HelpEntry {
+                    key: if keys.is_empty() {
+                        UNBOUND.to_owned()
+                    } else {
+                        join_keys(&keys)
+                    },
+                    description: describe(action),
+                    binding: Some(BindingInfo {
+                        id: self.id(action),
+                        defaults: keys_of(&self.bindings),
+                    }),
+                };
             })
             .collect();
     }
 }
 
+/// Shown in place of the keys of an action without any.
+pub const UNBOUND: &str = "none";
+/// Shown in place of a key in a tight spot, e.g. the header, when its action has none. Two
+/// dashes, since `-` is a key.
+const NO_KEY: &str = "--";
+
 /// Joins keys with "/", collapsing runs of three or more consecutive function keys into a
 /// range, e.g. "Fn9-12" instead of "F9/F10/F11/F12".
-fn join_keys(keys: &[Key]) -> String {
+pub fn join_keys(keys: &[Key]) -> String {
     let mut parts = Vec::new();
     let mut start = 0;
     while start < keys.len() {
@@ -302,7 +491,7 @@ fn join_keys(keys: &[Key]) -> String {
 /// Implemented by widgets that react to keys through a `Keymap`. Provides the shared glue
 /// (event -> lookup -> perform) so each widget only has to say what its actions do.
 pub trait KeyActions {
-    type Action: Copy + PartialEq;
+    type Action: Action;
 
     /// The keymap that is currently active, e.g. a different one per mode.
     fn keymap(&self) -> &Keymap<Self::Action>;
@@ -332,8 +521,70 @@ pub trait KeyActions {
 }
 
 #[cfg(test)]
+impl Action for i32 {}
+#[cfg(test)]
+impl Action for u8 {}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keys_read_back_from_text() {
+        let keys = [
+            Key::ctrl('s'),
+            Key::alt('o'),
+            Key::char('Z'),
+            Key::char('z'),
+            Key::char(' '),
+            Key::char('^'),
+            Key::char('-'),
+            Key::new(KeyCode::Char('-'), KeyModifiers::ALT),
+            Key::new(
+                KeyCode::Char('s'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+            Key::new(KeyCode::Tab, KeyModifiers::SHIFT),
+            Key::plain(KeyCode::Up),
+            Key::plain(KeyCode::F(12)),
+            Key::new(KeyCode::Delete, KeyModifiers::ALT),
+        ];
+        for key in keys {
+            assert_eq!(Key::parse(&key.to_text()), Some(key), "{}", key.to_text());
+        }
+        assert_eq!(Key::char('Z').to_text(), "Z");
+        assert_eq!(Key::ctrl('s').to_text(), "^S");
+        assert_eq!(Key::parse("^"), Some(Key::char('^')));
+        assert_eq!(
+            Key::parse("^^"),
+            Some(Key::new(KeyCode::Char('^'), KeyModifiers::CONTROL))
+        );
+        assert_eq!(Key::parse("Down"), Some(Key::plain(KeyCode::Down)));
+        assert_eq!(Key::parse("Fx"), None);
+        assert_eq!(Key::parse(""), None);
+    }
+
+    #[test]
+    fn overrides_replace_every_default_key_of_their_action() {
+        let keymap = Keymap::new("test")
+            .bind(Key::plain(KeyCode::Up), 0, "Row")
+            .bind(Key::char('k'), 0, "Row")
+            .bind(Key::plain(KeyCode::Down), 1, "Row");
+        let overrides = HashMap::from([
+            ("test.0".to_owned(), vec![Key::char('w')]),
+            ("test.1".to_owned(), vec![]),
+        ]);
+        let bindings = keymap.bindings_with(&overrides);
+        let keys: Vec<(Key, i32)> = bindings.iter().map(|b| (b.key, b.action)).collect();
+        assert_eq!(keys, vec![(Key::char('w'), 0)]);
+        assert_eq!(keymap.bindings_with(&HashMap::new()).len(), 3);
+    }
+
+    #[test]
+    fn action_ids_are_snake_case() {
+        assert_eq!(snake_case("ToggleEdit"), "toggle_edit");
+        assert_eq!(snake_case("Up"), "up");
+    }
 
     fn press(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         return KeyEvent::new(code, modifiers);
@@ -385,7 +636,7 @@ mod tests {
 
     #[test]
     fn hints_merge_keys_with_the_same_label() {
-        let keymap = Keymap::new()
+        let keymap = Keymap::new("test")
             .bind(Key::plain(KeyCode::Up), 0, "ROW")
             .bind(Key::plain(KeyCode::Down), 1, "ROW")
             .bind(Key::ctrl('s'), 2, "Save");
@@ -404,7 +655,7 @@ mod tests {
     #[test]
     fn hints_collapse_function_key_runs() {
         let keymap = (9..=12)
-            .fold(Keymap::new(), |keymap, n| {
+            .fold(Keymap::new("test"), |keymap, n| {
                 keymap.bind(Key::plain(KeyCode::F(n)), n, "JMP")
             })
             .bind(Key::plain(KeyCode::F(1)), 1, "Help")
@@ -420,7 +671,7 @@ mod tests {
 
     #[test]
     fn hints_merge_any_number_of_keys() {
-        let keymap = Keymap::new()
+        let keymap = Keymap::new("test")
             .bind(Key::plain(KeyCode::Delete), 0, "Del")
             .bind(Key::plain(KeyCode::Backspace), 1, "Del")
             .bind(Key::new(KeyCode::Delete, KeyModifiers::SHIFT), 2, "Del")
