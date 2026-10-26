@@ -56,7 +56,8 @@ or `TERM=dumb` select `mono` when `theme` is `auto`.
 options, and every change previews straight away; `Esc` puts back what was there. Confirm
 with `Save to config.toml` ticked to keep the settings for next time, or unticked to use them
 for this session only. Confirming default MIDI ports also connects them if the open project
-has none. The update check takes effect on the next start.
+has none. The update check takes effect on the next start. `Open config folder` opens the
+config folder in your file manager, to get at the files directly.
 
 The dialog can also edit the colors of the selected theme, previewing every change:
 

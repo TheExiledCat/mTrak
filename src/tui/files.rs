@@ -1,6 +1,8 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
 };
 
 use crate::{
@@ -94,6 +96,48 @@ pub fn list_themes() -> Vec<String> {
         .collect();
     names.sort();
     return names;
+}
+
+/// Opens `folder` in the system's file manager, without waiting for it to close.
+pub fn open_in_file_manager(folder: &Path) -> Result<()> {
+    let mut command = file_manager_command(folder)?;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    // reap it once it exits, so it doesn't linger until mTrak quits
+    thread::spawn(move || child.wait());
+    return Ok(());
+}
+
+#[cfg(windows)]
+fn file_manager_command(folder: &Path) -> Result<Command> {
+    let mut command = Command::new("explorer");
+    command.arg(folder);
+    return Ok(command);
+}
+
+#[cfg(target_os = "macos")]
+fn file_manager_command(folder: &Path) -> Result<Command> {
+    let mut command = Command::new("open");
+    command.arg(folder);
+    return Ok(command);
+}
+
+/// xdg-open, or on WSL, where it often has nothing to open folders with, Windows Explorer.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn file_manager_command(folder: &Path) -> Result<Command> {
+    if std::env::var_os("WSL_DISTRO_NAME").is_none() {
+        let mut command = Command::new("xdg-open");
+        command.arg(folder);
+        return Ok(command);
+    }
+    let output = Command::new("wslpath").arg("-w").arg(folder).output()?;
+    let windows_path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let mut command = Command::new("explorer.exe");
+    command.arg(windows_path);
+    return Ok(command);
 }
 
 fn config_file(name: &str) -> Result<PathBuf> {
