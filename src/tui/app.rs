@@ -17,7 +17,7 @@ use ratatui::{
 use super::constants;
 use crate::{
     data::{
-        config::{Config, TITLE, ThemeChoice},
+        config::{Config, TITLE},
         effect::CommandKind,
         midi::{
             MAX_SPEED, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX, bytes_to_message,
@@ -159,8 +159,10 @@ impl App {
             }
         };
         let theme = std::mem::replace(&mut self.state.theme, Theme::monochrome());
+        let config = self.state.config.clone();
         self.state.shut_down();
         self.state = AppState::new(project, theme)?;
+        self.state.apply_config(config);
         self.state.project_path = Some(path.clone());
         self.root = Container::new(MainView::new(&self.state).boxed(), Padding::ZERO);
         self.terminal.clear()?;
@@ -399,6 +401,8 @@ struct InputRoute {
     clock: Option<Sender<EngineCommand>>,
 }
 pub struct AppState {
+    /// The settings this session uses: config.toml with the command line options applied, and
+    /// any changes from the Config dialog.
     pub config: Config,
     project: Project,
     pub engine: EngineHandle,
@@ -419,9 +423,6 @@ pub struct AppState {
     pub current_octave: u8,
     pub recording: bool,
     pub header_collapsed: bool,
-    /// The theme this session is using, which `--color` or the Config dialog can set apart
-    /// from the one in config.toml.
-    pub theme_choice: Option<ThemeChoice>,
     /// Where the project was last loaded from or saved to, so saving again skips the browser.
     pub project_path: Option<PathBuf>,
     pub copy_buffers: CopyBuffers,
@@ -496,7 +497,6 @@ impl AppState {
             current_octave: 4,
             recording: false,
             header_collapsed: false,
-            theme_choice: None,
             project_path: None,
             line_add: 1,
             pending_dialogs: Vec::new(),
@@ -600,6 +600,30 @@ impl AppState {
         let index = choice.checked_sub(1)?;
         return self.midi_in_client.as_ref()?.ports().get(index).cloned();
     }
+    /// Takes on the settings this session uses, connecting the default ports if the project
+    /// has none. The theme is built separately, since building it can fail.
+    pub fn apply_config(&mut self, config: Config) {
+        glyphs::set_ascii_mode(config.ascii_mode);
+        self.config = config;
+        self.use_default_ports();
+    }
+
+    /// Connects the default ports from config.toml for a project that doesn't name its own.
+    pub fn use_default_ports(&mut self) {
+        if self.project.midi_output.is_none()
+            && let Some(name) = self.config.midi_output.clone()
+        {
+            self.project.midi_output = Some(name);
+            self.restore_midi_output();
+        }
+        if self.project.midi_input.is_none()
+            && let Some(name) = self.config.midi_input.clone()
+        {
+            self.project.midi_input = Some(name);
+            self.restore_midi_input();
+        }
+    }
+
     fn restore_midi_input(&mut self) {
         let Some(name) = self.project.midi_input.clone() else {
             return;

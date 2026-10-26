@@ -3,7 +3,7 @@ use std::{io, process::ExitCode};
 use clap::Parser;
 use cli::Cli;
 use data::{
-    config::{Config, ThemeChoice},
+    config::{Config, ThemeSetting},
     project::Project,
 };
 use error::{MTrakError, Result};
@@ -27,10 +27,30 @@ mod util;
 
 fn main() -> ExitCode {
     let args = Cli::parse();
-    glyphs::set_ascii_mode(args.ascii_mode);
+    let mut startup_errors = Vec::new();
+    let initialized = match files::initialize() {
+        Ok(()) => true,
+        Err(e) => {
+            startup_errors.push(e);
+            false
+        }
+    };
+    // without a config folder there's nothing to load, and its error is already reported
+    let mut config = if initialized {
+        files::get_config_file_path()
+            .and_then(|path| Config::load(&path))
+            .unwrap_or_else(|e| {
+                startup_errors.push(e);
+                Config::default()
+            })
+    } else {
+        Config::default()
+    };
+    config.ascii_mode |= args.ascii_mode;
+    glyphs::set_ascii_mode(config.ascii_mode);
     updater::remove_old_exe();
 
-    if !args.no_update_check {
+    if !args.no_update_check && config.update_check {
         if let UpdateOutcome::Updated(version) = updater::check_for_update() {
             println!(
                 "mTrak was updated to v{}. Start it again to use the new version.",
@@ -40,7 +60,7 @@ fn main() -> ExitCode {
         }
     }
     let terminal = ratatui::init();
-    let result = run(terminal, args);
+    let result = run(terminal, args, config, initialized, startup_errors);
     let _ = execute!(io::stdout(), DisableMouseCapture);
     ratatui::restore();
 
@@ -54,16 +74,14 @@ fn main() -> ExitCode {
 
 /// Runs the app until the user quits. Errors that leave the app usable are shown in a
 /// dialog instead; only errors that stop the app are returned.
-fn run(terminal: DefaultTerminal, args: Cli) -> Result<()> {
+fn run(
+    terminal: DefaultTerminal,
+    args: Cli,
+    mut config: Config,
+    initialized: bool,
+    mut startup_errors: Vec<MTrakError>,
+) -> Result<()> {
     execute!(io::stdout(), EnableMouseCapture)?;
-    let mut startup_errors = Vec::new();
-    let initialized = match files::initialize() {
-        Ok(()) => true,
-        Err(e) => {
-            startup_errors.push(e);
-            false
-        }
-    };
     let (project, project_path) = match args.project_file {
         Some(path) => match Project::load(path.clone()) {
             Ok(project) => (project, Some(path)),
@@ -78,31 +96,21 @@ fn run(terminal: DefaultTerminal, args: Cli) -> Result<()> {
         None => (Project::empty(), None),
     };
 
-    // without a config folder there's nothing to load, and its error is already reported
-    let config = if initialized {
-        files::get_config_file_path()
-            .and_then(|path| Config::load(&path))
-            .unwrap_or_else(|e| {
-                startup_errors.push(e);
-                Config::default()
-            })
-    } else {
-        Config::default()
-    };
-    let mut theme_choice = args.color.or(config.theme);
-    if !initialized && theme_choice == Some(ThemeChoice::Custom) {
-        theme_choice = None;
+    if let Some(theme) = args.color {
+        config.theme = theme;
     }
-    let theme = Theme::from_choice(theme_choice).unwrap_or_else(|e| {
+    if !initialized && matches!(config.theme, ThemeSetting::Named(_)) {
+        config.theme = ThemeSetting::Auto;
+    }
+    let theme = Theme::from_setting(&config.theme).unwrap_or_else(|e| {
         startup_errors.push(e);
-        theme_choice = None;
+        config.theme = ThemeSetting::Auto;
         Theme::detect()
     });
 
     let mut app = App::new(terminal, 120, theme, project)?;
     app.state.project_path = project_path;
-    app.state.config = config;
-    app.state.theme_choice = theme_choice;
+    app.state.apply_config(config);
     for error in startup_errors {
         app.state.report_error(error);
     }

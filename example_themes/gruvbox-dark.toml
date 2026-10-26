@@ -1,14 +1,37 @@
-# Gruvbox Dark for mTrak. Copy this file to theme.toml in the mTrak config folder and
-# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Gruvbox Dark for mTrak. mTrak puts a copy in the themes folder of its config folder;
+# pick it in the Config dialog (Ctrl+P), set theme = "gruvbox-dark" in config.toml or start
+# with --color gruvbox-dark.
 # Colors from Gruvbox (https://github.com/morhetz/gruvbox) by morhetz, MIT License.
 
+# the app backdrop around the panels, also the cursor row bar and subtle borders
 backdrop     = "#3C3836"
+
+# toned-down text and borders, also the fill behind the selection
 muted        = "#A89984"
+
+# text and key fills for something unavailable, e.g. undo with nothing to undo
 disabled     = "#7C6F64"
+
+# the content layer, e.g. the pattern editor, also the text on filled labels
 surface      = "#282828"
+
+# regular text on the surface
 surface_text = "#D5C4A1"
+
+# regular text on the backdrop, also the fill under the cursor
 text         = "#EBDBB2"
+
+# text that stands out, e.g. every 4th row number, the logo and section titles
+accent       = "#FE8019"
+
+# errors and edit mode
 danger       = "#FB4934"
+
+# warnings and the playing row while the row is locked
 warning      = "#FABD2F"
+
+# success, e.g. the About dialog border
 success      = "#B8BB26"
+
+# the fill behind a marked block
 mark         = "#504945"

@@ -80,12 +80,14 @@ Press `/` to see every pattern command with a short description. The full guide 
 
 ### Options
 
-| Option                                | Description                                                         |
-| ------------------------------------- | ------------------------------------------------------------------- |
-| `--color <mono\|ansi16\|full\|custom>` | Use this theme instead of the one in `config.toml` or the detected one |
-| `--ascii-mode`                        | Draw with ASCII characters only                                     |
+| Option              | Description                                                                         |
+| ------------------- | ----------------------------------------------------------------------------------- |
+| `--color <theme>`   | Use this theme instead of the one in `config.toml`: `auto`, `mono`, `ansi16`, `full` or the name of a theme in the `themes` folder. `--theme` works too |
+| `--ascii-mode`      | Draw with ASCII characters only                                                     |
+| `--no-update-check` | Don't look for a new version this time                                              |
 
-Setting `NO_COLOR` or `TERM=dumb` also selects the monochrome theme.
+Each overrides its setting in [config.toml](docs/CONFIG.md#configtoml) for one session.
+Setting `NO_COLOR` or `TERM=dumb` selects the monochrome theme when the theme is `auto`.
 
 ## Configuration
 
@@ -104,63 +106,8 @@ folder. Both are created on startup if they don't exist yet.
 On Linux the music folder follows `XDG_MUSIC_DIR` and the config folder follows
 `XDG_CONFIG_HOME`, if they're set.
 
-The config folder holds two files, `config.toml` and `theme.toml`. Both are written with
-their defaults when they're missing, so deleting one resets it. They use a small part of TOML:
-one `key = "value"` per line, with `#` starting a comment. An error in either file is shown
-when mTrak starts, with the line it's on, and the defaults are used instead.
-
-### config.toml
-
-Settings that aren't part of a project.
-
-| Setting | Values                                         | Default  | Description          |
-| ------- | ---------------------------------------------- | -------- | -------------------- |
-| `theme` | `auto`, `mono`, `ansi16`, `full` or `custom`   | `auto`   | The theme to open with |
-
-The themes:
-
-| Theme    | Description                                                                      |
-| -------- | -------------------------------------------------------------------------------- |
-| `auto`   | Picks one from what the terminal supports: `full`, `ansi16` or `mono`            |
-| `mono`   | No colors, only bold, dim, underline and reverse                                 |
-| `ansi16` | The 16 standard terminal colors, so it follows your terminal's color scheme      |
-| `full`   | The FT2 theme, for terminals with 24-bit color                                   |
-| `custom` | The colors in `theme.toml`                                                       |
-
-`Ctrl+P` opens the Config dialog, which changes the theme straight away. Tick
-`Save to config.toml` to keep it for next time, or untick it to try a theme for this session
-only. `--color` overrides `theme` for one session, and `NO_COLOR` or `TERM=dumb` select `mono`
-when `theme` is `auto`.
-
-### theme.toml
-
-The colors of the `custom` theme. Every part of mTrak is drawn with these ten colors:
-
-| Color          | Used for                                                                    |
-| -------------- | --------------------------------------------------------------------------- |
-| `backdrop`     | The background around the panels, the cursor row bar and subtle borders     |
-| `muted`        | Toned-down text and borders, and the fill behind the selection              |
-| `disabled`     | Text and key fills for something unavailable, e.g. undo with nothing to undo |
-| `surface`      | The pattern editor's background, and the text on filled labels             |
-| `surface_text` | Text in the pattern editor                                                  |
-| `text`         | Text on the backdrop, and the fill under the cursor                         |
-| `danger`       | Errors, edit mode and recording                                             |
-| `warning`      | Warnings, and the playing row while the row is locked                       |
-| `success`      | Success, e.g. the About dialog's border                                     |
-| `mark`         | The fill behind a marked block                                              |
-
-Colors are hex (`"#49688C"`) or ANSI color names (`"Red"`, `"DarkGray"`, `"LightBlue"`, ...).
-Colors you leave out come from the palette named by `base`, `"ft2"` (the default) or
-`"ansi16"`, so a theme can change just a few:
-
-```toml
-base = "ansi16"
-danger = "#FF5555"
-mark = "#44475A"
-```
-
-The [example_themes](example_themes) folder has ports of Catppuccin, Dracula, Gruvbox, Nord,
-One Dark, Solarized and Tokyo Night. Copy one to `theme.toml` and pick `custom`.
+Settings and themes are explained in [docs/CONFIG.md](docs/CONFIG.md), which is also
+included in every release zip. Press `Ctrl+P` to change them in the Config dialog.
 
 ### Project files
 
@@ -219,8 +166,10 @@ Planned features, in no particular order:
         - [ ] Glide global velocity
 - [ ] **Autosave and crash recovery**
 - [x] **Custom themes**
+    - [x] theme files, with ports of popular color schemes
+    - [x] editing themes in the Config dialog, with a live preview
 - [ ] **Keyboard remapping**, with default layouts per OS/shell
-- [ ] **Proper CLI argument parsing** and a global app config
+- [x] **Proper CLI argument parsing** and a global app config
 - [ ] ...and more
 
 Have an idea? Feel free to open an issue.

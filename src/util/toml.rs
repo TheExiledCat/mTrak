@@ -1,5 +1,5 @@
-//! A parser for the small subset of TOML that mTrak's config files use: `key = "value"` pairs
-//! and `#` comments.
+//! A parser for the small subset of TOML that mTrak's config files use: `key = "value"` pairs,
+//! bare `true` and `false`, and `#` comments.
 
 use std::{
     fmt::{self, Display},
@@ -63,7 +63,7 @@ pub fn parse(text: &str) -> Result<Vec<Entry>, ParseError> {
         if !is_bare_key(key) {
             return Err(ParseError::new(line, format!("invalid key {key:?}")));
         }
-        let value = parse_string(value.trim()).map_err(|message| ParseError::new(line, message))?;
+        let value = parse_value(value.trim()).map_err(|message| ParseError::new(line, message))?;
         let key = key.to_owned();
         if entries.iter().any(|e| e.key == key) {
             return Err(ParseError::new(line, format!("{key} is set twice")));
@@ -83,6 +83,18 @@ fn is_bare_key(key: &str) -> bool {
 fn is_comment_or_empty(text: &str) -> bool {
     let text = text.trim();
     return text.is_empty() || text.starts_with('#');
+}
+
+/// A string, or a bare `true` or `false`, which read as the strings "true" and "false".
+fn parse_value(text: &str) -> Result<String, &'static str> {
+    for word in ["true", "false"] {
+        if let Some(after) = text.strip_prefix(word)
+            && is_comment_or_empty(after)
+        {
+            return Ok(word.to_owned());
+        }
+    }
+    return parse_string(text);
 }
 
 /// A double-quoted string without escapes, optionally followed by a comment.
@@ -134,6 +146,18 @@ mod tests {
             pairs("\u{feff}a = \"1\""),
             vec![("a".to_owned(), "1".to_owned())]
         );
+    }
+
+    #[test]
+    fn reads_bare_booleans() {
+        assert_eq!(
+            pairs("a = true # on\nb = false"),
+            vec![
+                ("a".to_owned(), "true".to_owned()),
+                ("b".to_owned(), "false".to_owned()),
+            ]
+        );
+        assert_eq!(error_line("a = truest"), 1);
     }
 
     #[test]

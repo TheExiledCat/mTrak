@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Deref};
 
 use ratatui::{
     buffer::Buffer,
     crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers},
     layout::{Constraint, Layout, Rect},
-    style::Style,
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Clear, Padding, Paragraph, Widget},
 };
@@ -23,6 +23,10 @@ use crate::{
     },
 };
 
+mod color_picker;
+
+pub use color_picker::ColorPicker;
+
 /// The value a single input component contributes to a `DialogResult`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DialogValue {
@@ -30,9 +34,16 @@ pub enum DialogValue {
     Bool(bool),
     Choice(usize),
     Number(i32),
+    Color(Color),
+    /// The last button pressed in a row of buttons, and how many presses there have been.
+    Press {
+        button: usize,
+        count: u32,
+    },
 }
 
-/// The values of every input component when the dialog was submitted, keyed by component id.
+/// The values of every input component, keyed by component id.
+#[derive(PartialEq)]
 pub struct DialogResult {
     values: HashMap<&'static str, DialogValue>,
 }
@@ -69,27 +80,95 @@ impl DialogResult {
             _ => None,
         };
     }
+
+    /// The button of a row of buttons that was pressed last, if any was.
+    pub fn pressed(&self, id: &str) -> Option<usize> {
+        return match self.values.get(id) {
+            Some(DialogValue::Press { button, count }) if *count > 0 => Some(*button),
+            _ => None,
+        };
+    }
+
+    pub fn color(&self, id: &str) -> Option<Color> {
+        return match self.values.get(id) {
+            Some(DialogValue::Color(c)) => Some(*c),
+            _ => None,
+        };
+    }
+}
+
+/// The fields of an open dialog, handed to `on_update` after one of them changed. It reads
+/// like a `DialogResult` and can also set fields, so one field can follow another.
+pub struct DialogFields<'a> {
+    components: &'a mut [Box<dyn DialogComponent>],
+    result: DialogResult,
+    changed: &'static str,
+}
+
+impl DialogFields<'_> {
+    /// The id of the field whose change triggered this update.
+    pub fn changed(&self) -> &'static str {
+        return self.changed;
+    }
+
+    /// Sets the field with this id, if it takes that kind of value. Doesn't trigger another
+    /// update.
+    pub fn set(&mut self, id: &str, value: DialogValue) {
+        let Some(component) = self
+            .components
+            .iter_mut()
+            .find(|c| c.value().is_some_and(|(cid, _)| cid == id))
+        else {
+            return;
+        };
+        component.set_value(value);
+        if let Some((id, value)) = component.value() {
+            self.result.values.insert(id, value);
+        }
+    }
+}
+
+impl Deref for DialogFields<'_> {
+    type Target = DialogResult;
+
+    fn deref(&self) -> &DialogResult {
+        return &self.result;
+    }
 }
 
 pub trait DialogComponent: MtrakWidget {
     fn get_height(&self) -> u8 {
         return 1;
     }
+    /// How many levels the component is indented by, see `Indent::indent`.
+    fn indent_level(&self) -> u8 {
+        return 0;
+    }
     /// Whether Tab can move focus onto this component. Static content should return false.
     fn focusable(&self) -> bool {
         return false;
     }
     fn set_focused(&mut self, _focused: bool) {}
+    /// How many fields Tab moves through inside this component before going on to the next
+    /// one; 0 for a component that is a single field.
+    fn subcomponents(&self) -> usize {
+        return 0;
+    }
+    /// Focuses one of the fields counted by `subcomponents`, while the component has focus.
+    fn focus_subcomponent(&mut self, _index: usize) {}
     /// Draws on top of the whole dialog, e.g. an open dropdown list.
     fn render_overlay(&mut self, _state: &AppState, _bounds: Rect, _buf: &mut Buffer) {}
     /// The id and current value of an input component; `None` for static content.
     fn value(&self) -> Option<(&'static str, DialogValue)> {
         return None;
     }
+    /// Replaces the value of an input component; values of the wrong kind are ignored.
+    fn set_value(&mut self, _value: DialogValue) {}
 }
 
 type OnSubmit = Box<dyn FnOnce(&mut AppState, DialogResult) -> Result<()>>;
 type OnCancel = Box<dyn FnOnce(&mut AppState)>;
+type OnUpdate = Box<dyn FnMut(&mut AppState, &mut DialogFields) -> Result<()>>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DialogAction {
@@ -109,6 +188,7 @@ pub enum InfoLevel {
 
 /// A modal popup made of components. Open one with `AppState::open_dialog`; once the user
 /// submits or cancels, the matching callback runs with the app state and the dialog closes.
+/// `on_update` runs whenever a value changes while it's open, e.g. to preview a choice.
 pub struct Dialog {
     title: String,
     width: u16,
@@ -116,8 +196,11 @@ pub struct Dialog {
     is_cancellable: bool,
     components: Vec<Box<dyn DialogComponent>>,
     focus: Option<usize>,
+    /// The focused field inside the focused component, for one with subcomponents.
+    sub_focus: usize,
     on_submit: Option<OnSubmit>,
     on_cancel: Option<OnCancel>,
+    on_update: Option<OnUpdate>,
     closed: bool,
     keys: Keymap<DialogAction>,
     footer: Footer,
@@ -132,8 +215,10 @@ impl Dialog {
             is_cancellable: true,
             components,
             focus: None,
+            sub_focus: 0,
             on_submit: None,
             on_cancel: None,
+            on_update: None,
             closed: false,
             footer: Footer::new(),
             keys: Keymap::new()
@@ -209,16 +294,28 @@ impl Dialog {
         return self;
     }
 
+    /// Runs every time the value of an input component changes, receiving the fields to read
+    /// or set.
+    pub fn on_update(
+        mut self,
+        f: impl FnMut(&mut AppState, &mut DialogFields) -> Result<()> + 'static,
+    ) -> Self {
+        self.on_update = Some(Box::new(f));
+        return self;
+    }
+
     pub fn help(sections: &mut Vec<HelpSection>) {
         let dialog = Dialog::new("", Vec::new());
         let select = Select::new("", Vec::<String>::new());
         let checkbox = Checkbox::new("", "");
-        let number = NumberBox::new("", "", 2);
+        let buttons = Buttons::new("", Vec::<String>::new());
+        let number = NumberBox::new("", "", 2).steps();
         sections.push(
             dialog
                 .help_section("Dialogs")
                 .entries(select.keys.help_entries(Select::describe))
                 .entries(checkbox.keys.help_entries(Checkbox::describe))
+                .entries(buttons.keys.help_entries(Buttons::describe))
                 .entries(number.keys.help_entries(NumberBox::describe))
                 .entry("Bksp", "Delete the last character of a text field"),
         );
@@ -228,13 +325,17 @@ impl Dialog {
         return self.closed;
     }
 
-    fn submit(&mut self, state: &mut AppState) -> Result<()> {
+    fn result(&self) -> DialogResult {
         let values = self.components.iter().filter_map(|c| c.value()).collect();
+        return DialogResult { values };
+    }
+
+    fn submit(&mut self, state: &mut AppState) -> Result<()> {
         self.closed = true;
         let Some(f) = self.on_submit.take() else {
             return Ok(());
         };
-        return f(state, DialogResult { values });
+        return f(state, self.result());
     }
 
     fn cancel(&mut self, state: &mut AppState) {
@@ -244,8 +345,22 @@ impl Dialog {
         }
     }
 
-    /// Moves focus to the next or previous field, wrapping round through none.
+    /// Moves focus to the next or previous field, going through the subcomponents of a
+    /// component before leaving it, and wrapping round through none.
     fn move_focus(&mut self, forward: bool) {
+        if let Some(focus) = self.focus {
+            let count = self.components[focus].subcomponents();
+            let next = if forward {
+                Some(self.sub_focus + 1).filter(|&sub| sub < count)
+            } else {
+                self.sub_focus.checked_sub(1).filter(|_| count > 0)
+            };
+            if let Some(sub) = next {
+                self.sub_focus = sub;
+                self.components[focus].focus_subcomponent(sub);
+                return;
+            }
+        }
         let focusable: Vec<usize> = (0..self.components.len())
             .filter(|&i| self.components[i].focusable())
             .collect();
@@ -263,8 +378,51 @@ impl Dialog {
         }
         if let Some(new) = next {
             self.components[new].set_focused(true);
+            let count = self.components[new].subcomponents();
+            self.sub_focus = if forward { 0 } else { count.saturating_sub(1) };
+            if count > 0 {
+                self.components[new].focus_subcomponent(self.sub_focus);
+            }
         }
         self.focus = next;
+    }
+
+    /// The lines in front of an indented component, as in a folder tree: a branch on each of
+    /// its rows, ending in a corner unless another component follows at its level, and the
+    /// lines of outer levels passing by.
+    fn render_tree_lines(&self, state: &AppState, index: usize, area: Rect, buf: &mut Buffer) {
+        let level = self.components[index].indent_level();
+        for depth in 1..=level {
+            let x = area.x + (depth as u16 - 1) * INDENT_WIDTH;
+            if x + INDENT_WIDTH > area.right() {
+                return;
+            }
+            let continues = self.has_later_sibling(index, depth);
+            for y in area.top()..area.bottom() {
+                let last_row = y + 1 == area.bottom();
+                let symbol = match (depth == level, continues || !last_row) {
+                    (true, true) => glyphs::pick("\u{251C}\u{2500}", "|-"),
+                    (true, false) => glyphs::pick("\u{2514}\u{2500}", "`-"),
+                    (false, true) => glyphs::pick("\u{2502}", "|"),
+                    (false, false) => " ",
+                };
+                buf.set_string(x, y, symbol, state.theme.border);
+            }
+        }
+    }
+
+    /// Whether a component at `depth` comes after `index` before the tree steps back out of it.
+    fn has_later_sibling(&self, index: usize, depth: u8) -> bool {
+        for component in &self.components[index + 1..] {
+            let level = component.indent_level();
+            if level < depth {
+                return false;
+            }
+            if level == depth {
+                return true;
+            }
+        }
+        return false;
     }
 
     fn content_height(&self) -> u16 {
@@ -309,9 +467,30 @@ impl MtrakWidget for Dialog {
 
     /// Always returns true: a dialog is modal, so nothing beneath it sees input.
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
-        if !self.dispatch(state, event) {
-            if let Some(index) = self.focus {
-                self.components[index].handle_event(state, event);
+        if self.dispatch(state, event) {
+            return true;
+        }
+        let Some(index) = self.focus else {
+            return true;
+        };
+        let before = self.components[index].value();
+        self.components[index].handle_event(state, event);
+        let after = self.components[index].value();
+        if after == before {
+            return true;
+        }
+        let Some((changed, _)) = after else {
+            return true;
+        };
+        let result = self.result();
+        if let Some(on_update) = self.on_update.as_mut() {
+            let mut fields = DialogFields {
+                components: &mut self.components,
+                result,
+                changed,
+            };
+            if let Err(e) = on_update(state, &mut fields) {
+                state.report_error(e);
             }
         }
         return true;
@@ -368,6 +547,9 @@ impl MtrakWidget for Dialog {
                 .map(|c| Constraint::Length(c.get_height() as u16)),
         )
         .split(content);
+        for (index, row) in rows.iter().enumerate() {
+            self.render_tree_lines(state, index, *row, buf);
+        }
         for (component, row) in self.components.iter_mut().zip(rows.iter()) {
             component.render(state, *row, buf);
         }
@@ -383,8 +565,86 @@ impl MtrakWidget for Dialog {
     }
 }
 
+/// How many cells one level of `Indent::indent` moves a component in, room for a tree line
+/// like `├─ `.
+const INDENT_WIDTH: u16 = 3;
+
+/// Draws any component further in, e.g. fields that belong to the one above them.
+pub trait Indent: DialogComponent + Sized {
+    fn indent(self, levels: u8) -> Indented<Self> {
+        return Indented {
+            inner: self,
+            levels,
+        };
+    }
+}
+
+impl<T: DialogComponent> Indent for T {}
+
+pub struct Indented<T> {
+    inner: T,
+    levels: u8,
+}
+
+impl<T: DialogComponent> MtrakWidget for Indented<T> {
+    fn update(&mut self, state: &mut AppState) {
+        self.inner.update(state);
+    }
+    fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
+        return self.inner.handle_event(state, event);
+    }
+    fn key_hints(&self, state: &AppState, hints: &mut Vec<KeyHint>) {
+        self.inner.key_hints(state, hints);
+    }
+    fn help(&self, sections: &mut Vec<HelpSection>) {
+        self.inner.help(sections);
+    }
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
+        let indent = (self.levels as u16 * INDENT_WIDTH).min(area.width);
+        let area = Rect {
+            x: area.x + indent,
+            width: area.width - indent,
+            ..area
+        };
+        self.inner.render(state, area, buf);
+    }
+}
+
+impl<T: DialogComponent> DialogComponent for Indented<T> {
+    fn get_height(&self) -> u8 {
+        return self.inner.get_height();
+    }
+    fn indent_level(&self) -> u8 {
+        return self.levels;
+    }
+    fn focusable(&self) -> bool {
+        return self.inner.focusable();
+    }
+    fn set_focused(&mut self, focused: bool) {
+        self.inner.set_focused(focused);
+    }
+    fn subcomponents(&self) -> usize {
+        return self.inner.subcomponents();
+    }
+    fn focus_subcomponent(&mut self, index: usize) {
+        self.inner.focus_subcomponent(index);
+    }
+    fn render_overlay(&mut self, state: &AppState, bounds: Rect, buf: &mut Buffer) {
+        self.inner.render_overlay(state, bounds, buf);
+    }
+    fn value(&self) -> Option<(&'static str, DialogValue)> {
+        return self.inner.value();
+    }
+    fn set_value(&mut self, value: DialogValue) {
+        self.inner.set_value(value);
+    }
+}
+
 /// A component's label followed by its separator, marked while the component has focus.
 fn label_spans<'a>(state: &AppState, label: &'a str, focused: bool) -> [Span<'a>; 2] {
+    if label.is_empty() {
+        return [Span::raw(""), Span::raw("")];
+    }
     let style = if focused {
         state.theme.selection_subtle
     } else {
@@ -463,6 +723,7 @@ pub struct TextPrompt {
     label: String,
     text: String,
     focused: bool,
+    allowed: fn(char) -> bool,
 }
 
 impl TextPrompt {
@@ -472,11 +733,18 @@ impl TextPrompt {
             label: label.into(),
             text: String::new(),
             focused: false,
+            allowed: |_| true,
         };
     }
 
     pub fn initial(mut self, text: impl Into<String>) -> Self {
         self.text = text.into();
+        return self;
+    }
+
+    /// Only takes the characters `allowed` accepts.
+    pub fn allowed(mut self, allowed: fn(char) -> bool) -> Self {
+        self.allowed = allowed;
         return self;
     }
 }
@@ -491,9 +759,10 @@ impl MtrakWidget for TextPrompt {
         }
         match key.code {
             KeyCode::Char(c)
-                if !key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                if (self.allowed)(c)
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
                 self.text.push(c);
             }
@@ -525,6 +794,11 @@ impl DialogComponent for TextPrompt {
     fn value(&self) -> Option<(&'static str, DialogValue)> {
         return Some((self.id, DialogValue::Text(self.text.clone())));
     }
+    fn set_value(&mut self, value: DialogValue) {
+        if let DialogValue::Text(text) = value {
+            self.text = text;
+        }
+    }
 }
 
 /// A hex number input that Up and Down step within its range.
@@ -540,10 +814,15 @@ pub struct NumberBox {
     keys: Keymap<NumberBoxAction>,
 }
 
+/// How far Left and Right move a number box with `steps`.
+const BIG_STEP: i32 = 0x10;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NumberBoxAction {
     Increment,
     Decrement,
+    StepUp,
+    StepDown,
 }
 
 impl NumberBox {
@@ -576,6 +855,15 @@ impl NumberBox {
 
     pub fn value(mut self, value: i32) -> Self {
         self.set(value);
+        return self;
+    }
+
+    /// Lets Left and Right move the value in bigger steps.
+    pub fn steps(mut self) -> Self {
+        self.keys = self
+            .keys
+            .bind(Key::plain(KeyCode::Right), NumberBoxAction::StepUp, "Step")
+            .bind(Key::plain(KeyCode::Left), NumberBoxAction::StepDown, "Step");
         return self;
     }
 
@@ -634,6 +922,8 @@ impl KeyActions for NumberBox {
         self.set(match action {
             NumberBoxAction::Increment => value.saturating_add(1),
             NumberBoxAction::Decrement => value.saturating_sub(1),
+            NumberBoxAction::StepUp => value.saturating_add(BIG_STEP),
+            NumberBoxAction::StepDown => value.saturating_sub(BIG_STEP),
         });
         return Ok(());
     }
@@ -642,6 +932,8 @@ impl KeyActions for NumberBox {
         return match action {
             NumberBoxAction::Increment => "Increase a number field",
             NumberBoxAction::Decrement => "Decrease a number field",
+            NumberBoxAction::StepUp => "Increase a number field in bigger steps",
+            NumberBoxAction::StepDown => "Decrease a number field in bigger steps",
         };
     }
 }
@@ -699,6 +991,116 @@ impl DialogComponent for NumberBox {
     }
     fn value(&self) -> Option<(&'static str, DialogValue)> {
         return Some((self.id, DialogValue::Number(self.number())));
+    }
+    fn set_value(&mut self, value: DialogValue) {
+        if let DialogValue::Number(number) = value {
+            self.set(number);
+        }
+    }
+}
+
+/// A row of buttons that Tab moves through. A press doesn't close the dialog; it shows up
+/// in `on_update`, where `DialogResult::pressed` tells which button it was.
+pub struct Buttons {
+    id: &'static str,
+    labels: Vec<String>,
+    focused: Option<usize>,
+    presses: u32,
+    last: usize,
+    keys: Keymap<ButtonsAction>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ButtonsAction {
+    Press,
+}
+
+impl Buttons {
+    pub fn new(id: &'static str, labels: Vec<impl Into<String>>) -> Self {
+        return Self {
+            id,
+            labels: labels.into_iter().map(|l| l.into()).collect(),
+            focused: None,
+            presses: 0,
+            last: 0,
+            keys: Keymap::new().bind(Key::char(' '), ButtonsAction::Press, "Press"),
+        };
+    }
+}
+
+impl KeyActions for Buttons {
+    type Action = ButtonsAction;
+
+    fn keymap(&self) -> &Keymap<ButtonsAction> {
+        return &self.keys;
+    }
+
+    fn perform(&mut self, action: ButtonsAction, _state: &mut AppState) -> Result<()> {
+        match action {
+            ButtonsAction::Press => {
+                if let Some(button) = self.focused {
+                    self.last = button;
+                    self.presses += 1;
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    fn describe(action: ButtonsAction) -> &'static str {
+        return match action {
+            ButtonsAction::Press => "Press a button",
+        };
+    }
+}
+
+impl MtrakWidget for Buttons {
+    fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
+        return self.dispatch(state, event);
+    }
+
+    fn key_hints(&self, _state: &AppState, hints: &mut Vec<KeyHint>) {
+        self.keys.hints(hints);
+    }
+
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
+        let mut spans = Vec::new();
+        for (index, label) in self.labels.iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::raw("  "));
+            }
+            let style = if self.focused == Some(index) {
+                state.theme.selection
+            } else {
+                state.theme.highlight
+            };
+            spans.push(Span::styled(format!("[ {label} ]"), style));
+        }
+        Line::from(spans).render(area, buf);
+    }
+}
+
+impl DialogComponent for Buttons {
+    fn focusable(&self) -> bool {
+        return !self.labels.is_empty();
+    }
+    fn set_focused(&mut self, focused: bool) {
+        self.focused = focused.then_some(0);
+    }
+    fn subcomponents(&self) -> usize {
+        return self.labels.len();
+    }
+    fn focus_subcomponent(&mut self, index: usize) {
+        self.focused = Some(index.min(self.labels.len().saturating_sub(1)));
+    }
+    fn value(&self) -> Option<(&'static str, DialogValue)> {
+        return Some((
+            self.id,
+            DialogValue::Press {
+                button: self.last,
+                count: self.presses,
+            },
+        ));
     }
 }
 
@@ -788,6 +1190,11 @@ impl DialogComponent for Checkbox {
     }
     fn value(&self) -> Option<(&'static str, DialogValue)> {
         return Some((self.id, DialogValue::Bool(self.checked)));
+    }
+    fn set_value(&mut self, value: DialogValue) {
+        if let DialogValue::Bool(checked) = value {
+            self.checked = checked;
+        }
     }
 }
 
@@ -993,6 +1400,11 @@ impl DialogComponent for Select {
         }
         return Some((self.id, DialogValue::Choice(self.selected)));
     }
+    fn set_value(&mut self, value: DialogValue) {
+        if let DialogValue::Choice(index) = value {
+            self.selected = index.min(self.options.len().saturating_sub(1));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1048,6 +1460,23 @@ mod tests {
         assert_eq!(focused(&dialog), None);
         dialog.move_focus(false);
         assert_eq!(focused(&dialog), Some(2));
+    }
+
+    #[test]
+    fn tree_lines_end_where_a_level_does() {
+        let dialog = Dialog::new(
+            "",
+            vec![
+                Label::new("").boxed(),
+                Label::new("").indent(1).boxed(),
+                Label::new("").indent(2).boxed(),
+                Label::new("").indent(1).boxed(),
+                Label::new("").boxed(),
+            ],
+        );
+        assert!(dialog.has_later_sibling(1, 1));
+        assert!(!dialog.has_later_sibling(2, 2));
+        assert!(!dialog.has_later_sibling(3, 1));
     }
 
     #[test]
@@ -1107,6 +1536,59 @@ mod tests {
         assert_eq!(number.clone_with(0).arrows(), "\u{25B2}");
         assert_eq!(number.clone_with(1).arrows(), "\u{2195}");
         assert_eq!(number.clone_with(2).arrows(), "\u{25BC}");
+    }
+
+    #[test]
+    fn on_update_runs_only_when_a_value_changes() {
+        use std::{cell::RefCell, rc::Rc};
+
+        use ratatui::crossterm::event::KeyEvent;
+
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut dialog = Dialog::new("", vec![Select::new("s", vec!["a", "b"]).boxed()])
+            .focus_first()
+            .on_update({
+                let seen = seen.clone();
+                move |_, result| {
+                    seen.borrow_mut().extend(result.choice("s"));
+                    return Ok(());
+                }
+            });
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        dialog.handle_event(&mut state, &press(KeyCode::Down));
+        dialog.handle_event(&mut state, &press(KeyCode::Down));
+        dialog.handle_event(&mut state, &press(KeyCode::Tab));
+        assert_eq!(*seen.borrow(), vec![1]);
+    }
+
+    #[test]
+    fn on_update_can_set_other_fields() {
+        use ratatui::crossterm::event::KeyEvent;
+
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let mut dialog = Dialog::new(
+            "",
+            vec![
+                Select::new("color", vec!["red", "green"]).boxed(),
+                TextPrompt::new("hex", "Hex").initial("#ff0000").boxed(),
+            ],
+        )
+        .focus_first()
+        .on_update(|_, fields| {
+            if fields.changed() == "color" {
+                let hex = ["#ff0000", "#00ff00"][fields.choice("color").unwrap()];
+                fields.set("hex", DialogValue::Text(hex.to_owned()));
+            }
+            assert_eq!(fields.text("hex"), Some("#00ff00"));
+            return Ok(());
+        });
+        dialog.handle_event(&mut state, &Event::Key(KeyEvent::from(KeyCode::Down)));
+        assert_eq!(dialog.result().text("hex"), Some("#00ff00"));
     }
 
     impl NumberBox {
