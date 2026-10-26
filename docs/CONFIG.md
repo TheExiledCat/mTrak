@@ -125,13 +125,15 @@ with a letter often types a symbol instead, so check the key shown after binding
 
 ### keybinds.toml
 
-Lists every action with its default keys, commented out. To rebind one, remove the `#` and
-change the keys:
+Lists every action with its keys, under a comment saying what it does. To rebind one, change
+its keys; a rebound action shows its default keys after it:
 
 ```toml
 # Save project
-global.save = "^W"
+global.save = "^W" # default "^S"
 ```
+
+Deleting an action's line puts back its default keys.
 
 Keys are written the way the ASCII footer shows them:
 
