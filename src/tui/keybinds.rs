@@ -90,6 +90,15 @@ pub fn set_entries(sections: &[HelpSection]) -> Result<()> {
             });
         }
     }
+    // the file lists every action, so most lines are just the defaults
+    let Keybinds {
+        overrides, entries, ..
+    } = &mut *keybinds;
+    overrides.retain(|id, keys| {
+        return !entries
+            .iter()
+            .any(|e| e.binding.id == *id && e.binding.defaults == *keys);
+    });
     let mut unknown: Vec<(usize, &String)> = keybinds
         .overrides
         .keys()
@@ -206,8 +215,8 @@ pub fn save(path: &Path) -> Result<()> {
 fn to_toml() -> String {
     let keybinds = KEYBINDS.read().unwrap_or_else(|e| e.into_inner());
     let mut text = String::from(
-        "# mTrak keybindings. Every action is listed with its default keys; uncomment a line\n\
-         # and change it to rebind the action, or rebind it on the keybindings screen (?).\n\
+        "# mTrak keybindings. Change an action's keys to rebind it, or rebind it on the\n\
+         # keybindings screen (?). A deleted line goes back to its default keys.\n\
          #\n\
          # Keys: letters and symbols as typed (a capital means Shift), Spc, Up, Dn, Lt, Rt,\n\
          # PgUp, PgDn, Home, End, Ins, Del, Bksp, Enter, Esc, Tab and F1-F12, after any of\n\
@@ -218,7 +227,7 @@ fn to_toml() -> String {
     for entry in &keybinds.entries {
         if entry.section != section {
             section = entry.section;
-            text.push_str(&format!("\n# {section}\n"));
+            text.push_str(&format!("\n# == {section} ==\n"));
         }
         let id = &entry.binding.id;
         let keys_text = |keys: &[Key]| {
@@ -236,7 +245,7 @@ fn to_toml() -> String {
                 "{id} = {} # default {defaults}\n",
                 toml::quote(&keys_text(keys))
             )),
-            None => text.push_str(&format!("# {id} = {defaults}\n")),
+            None => text.push_str(&format!("{id} = {defaults}\n")),
         }
     }
     return text;
