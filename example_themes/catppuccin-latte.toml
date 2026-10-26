@@ -1,14 +1,37 @@
-# Catppuccin Latte for mTrak. Copy this file to theme.toml in the mTrak config folder and
-# set theme = "custom" in config.toml (or press Ctrl+P), or start with --color custom.
+# Catppuccin Latte for mTrak. mTrak puts a copy in the themes folder of its config folder;
+# pick it in the Config dialog (Ctrl+P), set theme = "catppuccin-latte" in config.toml or start
+# with --color catppuccin-latte.
 # Colors from Catppuccin (https://github.com/catppuccin/catppuccin), Copyright (c) 2021 Catppuccin, MIT License.
 
+# the app backdrop around the panels, also the cursor row bar and subtle borders
 backdrop     = "#CCD0DA"
+
+# toned-down text and borders, also the fill behind the selection
 muted        = "#1E66F5"
+
+# text and key fills for something unavailable, e.g. undo with nothing to undo
 disabled     = "#9CA0B0"
+
+# the content layer, e.g. the pattern editor, also the text on filled labels
 surface      = "#EFF1F5"
+
+# regular text on the surface
 surface_text = "#5C5F77"
+
+# regular text on the backdrop, also the fill under the cursor
 text         = "#4C4F69"
+
+# text that stands out, e.g. every 4th row number, the logo and section titles
+accent       = "#8839EF"
+
+# errors and edit mode
 danger       = "#D20F39"
+
+# warnings and the playing row while the row is locked
 warning      = "#FE640B"
+
+# success, e.g. the About dialog border
 success      = "#40A02B"
+
+# the fill behind a marked block
 mark         = "#BCC0CC"

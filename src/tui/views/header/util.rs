@@ -13,9 +13,12 @@ use crate::{
             keymap::{Key, KeyActions, Keymap},
             widget::{Collapsible, MtrakWidget},
         },
-        views::header::dialogs::{
-            open_about_dialog, open_clear_dialog, open_config_dialog, open_global_dialog,
-            open_instrument_dialog, open_midi_dialog,
+        views::header::{
+            config_dialog::open_config_dialog,
+            dialogs::{
+                open_about_dialog, open_clear_dialog, open_global_dialog, open_instrument_dialog,
+                open_midi_dialog,
+            },
         },
     },
 };

@@ -1,15 +1,15 @@
-use std::{env, path::Path};
+use std::{env, fs, path::Path};
 
 use ratatui::style::{Color, Style, Stylize};
 
 use crate::{
-    data::config::ThemeChoice,
+    data::config::{ThemeChoice, ThemeSetting},
     error::Result,
     tui::files,
     util::toml::{self, ParseError},
 };
 
-/// The key in theme.toml naming the built-in palette that unset colors come from.
+/// The key in a theme file naming the built-in palette that unset colors come from.
 const BASE_KEY: &str = "base";
 
 // FastTracker 2 palette: blue-grey desktop panels around a black pattern editor
@@ -20,6 +20,7 @@ const FT2_PALETTE: Palette = Palette {
     surface: Color::Rgb(0, 0, 0),
     surface_text: Color::Rgb(196, 214, 236),
     text: Color::Rgb(255, 255, 255),
+    accent: Color::Rgb(255, 255, 255),
     danger: Color::Rgb(214, 82, 82),
     warning: Color::Rgb(230, 190, 80),
     success: Color::Rgb(120, 200, 120),
@@ -33,6 +34,7 @@ const ANSI16_PALETTE: Palette = Palette {
     surface: Color::Black,
     surface_text: Color::Gray,
     text: Color::White,
+    accent: Color::White,
     danger: Color::Red,
     warning: Color::Yellow,
     success: Color::Green,
@@ -41,6 +43,7 @@ const ANSI16_PALETTE: Palette = Palette {
 
 /// The colors a color theme is built from. Each color is used as a fill in some styles and as
 /// text in others, see [`Theme::from_palette`], and what each one is for in [`Palette::entries`].
+#[derive(Clone, PartialEq)]
 pub struct Palette {
     pub backdrop: Color,
     pub muted: Color,
@@ -48,6 +51,7 @@ pub struct Palette {
     pub surface: Color,
     pub surface_text: Color,
     pub text: Color,
+    pub accent: Color,
     pub danger: Color,
     pub warning: Color,
     pub success: Color,
@@ -55,8 +59,8 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// Every color with its key in theme.toml and what it's used for.
-    fn entries(&mut self) -> [(&'static str, &'static str, &mut Color); 10] {
+    /// Every color with its key in a theme file and what it's used for.
+    pub fn entries(&mut self) -> [(&'static str, &'static str, &mut Color); 11] {
         return [
             (
                 "backdrop",
@@ -88,6 +92,11 @@ impl Palette {
                 "regular text on the backdrop, also the fill under the cursor",
                 &mut self.text,
             ),
+            (
+                "accent",
+                "text that stands out, e.g. every 4th row number, the logo and section titles",
+                &mut self.accent,
+            ),
             ("danger", "errors and edit mode", &mut self.danger),
             (
                 "warning",
@@ -101,6 +110,26 @@ impl Palette {
             ),
             ("mark", "the fill behind a marked block", &mut self.mark),
         ];
+    }
+
+    /// The colors a theme is built from, to start editing from. The themes without colors of
+    /// their own start from the FT2 colors, as does a theme file that can't be read.
+    pub fn for_setting(setting: &ThemeSetting) -> Self {
+        return match setting {
+            ThemeSetting::Builtin(ThemeChoice::Ansi16) => ANSI16_PALETTE,
+            ThemeSetting::Named(name) => Self::load_named(name).unwrap_or(FT2_PALETTE),
+            _ => FT2_PALETTE,
+        };
+    }
+
+    /// The colors of a theme in the themes folder.
+    fn load_named(name: &str) -> Result<Self> {
+        return Self::load(&files::get_named_theme_path(name)?);
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        fs::write(path, self.clone().into_toml())?;
+        return Ok(());
     }
 
     pub fn load(path: &Path) -> Result<Self> {
@@ -140,26 +169,22 @@ impl Palette {
 
     pub fn into_toml(mut self) -> String {
         let mut text = String::from(
-            "# mTrak theme, used with --color custom or theme = \"custom\" in config.toml.\n\
+            "# mTrak theme, picked by its file name without .toml: in the Config dialog\n\
+             # (Ctrl+P), with theme = \"name\" in config.toml or with --color name.\n\
              # Colors are hex (\"#49688C\") or ANSI names (\"Red\", \"DarkGray\", ...).\n\
-             # Colors left out come from the palette named by base (\"ft2\" or \"ansi16\").\n\
-             # Delete this file to get the FT2 colors back.\n",
+             # Colors left out come from the palette named by base (\"ft2\" or \"ansi16\").\n",
         );
         for (key, description, color) in self.entries() {
             text.push_str(&format!("\n# {description}\n{key} = \"{color}\"\n"));
         }
         return text;
     }
-
-    /// The theme file written when there isn't one yet.
-    pub fn default_toml() -> String {
-        return FT2_PALETTE.into_toml();
-    }
 }
 
 /// Named styles for everything the views draw, so they never hard-code colors.
 /// The color themes are built from a [`Palette`]; the monochrome variant relies only on text
 /// modifiers, so every state stays visible on terminals without color support.
+#[derive(Clone)]
 pub struct Theme {
     /// the base layer behind every other surface, e.g. the app backdrop around the panels
     pub background: Style,
@@ -209,20 +234,14 @@ pub struct Theme {
 }
 
 impl Theme {
-    pub fn from_choice(choice: Option<ThemeChoice>) -> Result<Self> {
-        return Ok(match choice {
-            Some(ThemeChoice::Mono) => Self::monochrome(),
-            Some(ThemeChoice::Ansi16) => Self::ansi16(),
-            Some(ThemeChoice::Full) => Self::ft2(),
-            Some(ThemeChoice::Custom) => Self::custom()?,
-            None => Self::detect(),
+    pub fn from_setting(setting: &ThemeSetting) -> Result<Self> {
+        return Ok(match setting {
+            ThemeSetting::Auto => Self::detect(),
+            ThemeSetting::Builtin(ThemeChoice::Mono) => Self::monochrome(),
+            ThemeSetting::Builtin(ThemeChoice::Ansi16) => Self::ansi16(),
+            ThemeSetting::Builtin(ThemeChoice::Full) => Self::ft2(),
+            ThemeSetting::Named(name) => Self::from_palette(&Palette::load_named(name)?),
         });
-    }
-
-    /// Built from theme.toml in the config folder.
-    pub fn custom() -> Result<Self> {
-        let palette = Palette::load(&files::get_theme_file_path()?)?;
-        return Ok(Self::from_palette(&palette));
     }
 
     /// Picks the FT2 theme when the terminal advertises 24-bit color, or is a Windows console
@@ -263,7 +282,7 @@ impl Theme {
         return Self {
             background: Style::new().fg(palette.text).bg(palette.backdrop),
             surface: Style::new().fg(palette.surface_text).bg(palette.surface),
-            heading: Style::new().bold().fg(palette.text),
+            heading: Style::new().bold().fg(palette.accent),
             text: Style::new().fg(palette.text),
             text_disabled: Style::new().fg(palette.disabled),
             label: Style::new().fg(palette.backdrop).bg(palette.text),
@@ -319,8 +338,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_file_reads_back_as_ft2() {
-        let palette = Palette::from_toml(&Palette::default_toml()).unwrap();
+    fn a_written_theme_reads_back() {
+        let palette = Palette::from_toml(&FT2_PALETTE.into_toml()).unwrap();
         assert_eq!(palette.backdrop, FT2_PALETTE.backdrop);
         assert_eq!(palette.mark, FT2_PALETTE.mark);
     }

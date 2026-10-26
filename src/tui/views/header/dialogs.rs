@@ -3,13 +3,11 @@ use figlet_rs::FIGlet;
 
 use crate::{
     data::{
-        config::{self, TITLE, ThemeChoice},
+        config::TITLE,
         pattern::{ClearOption, ClearTarget},
     },
-    error::Result,
     tui::{
         app::AppState,
-        files,
         framework::{
             core_extensions::Boxed,
             dialog::{
@@ -18,7 +16,6 @@ use crate::{
             },
         },
         glyphs,
-        theme::Theme,
     },
 };
 
@@ -26,50 +23,6 @@ use crate::{
 const FIRST_YEAR: i32 = 2026;
 
 const REPOSITORY_URL: &str = "https://github.com/TheExiledCat/mTrak";
-
-/// Settings that aren't part of the project, so they're written to config.toml straight away
-/// unless they're only meant for this session.
-pub fn open_config_dialog(state: &mut AppState) {
-    let themes = config::theme_options();
-    let names: Vec<String> = themes.iter().map(|t| config::theme_name(*t)).collect();
-    let current = themes
-        .iter()
-        .position(|t| *t == state.theme_choice)
-        .unwrap_or(0);
-    let dialog = Dialog::new(
-        "Config",
-        vec![
-            Select::new("theme", names)
-                .label("Theme")
-                .selected(current)
-                .boxed(),
-            Checkbox::new("save", "Save to config.toml")
-                .checked(true)
-                .boxed(),
-        ],
-    )
-    .on_submit(move |state, result| {
-        let theme = result
-            .choice("theme")
-            .map_or(state.theme_choice, |choice| themes[choice]);
-        return apply_config(state, theme, result.bool("save").unwrap_or(false));
-    });
-    state.open_dialog(dialog);
-}
-
-/// Switches to `theme`, and makes it the theme to open with when `save` is set. Nothing
-/// changes when the theme can't be built, e.g. a custom theme with a broken theme.toml.
-fn apply_config(state: &mut AppState, theme: Option<ThemeChoice>, save: bool) -> Result<()> {
-    state.theme = Theme::from_choice(theme)?;
-    state.theme_choice = theme;
-    if save {
-        let mut config = state.config.clone();
-        config.theme = theme;
-        config.save(&files::get_config_file_path()?)?;
-        state.config = config;
-    }
-    return Ok(());
-}
 
 pub fn open_midi_dialog(state: &mut AppState) {
     let mut in_names = state.get_midi_in_port_names();
@@ -313,19 +266,4 @@ pub fn open_global_dialog(state: &mut AppState) {
         return Ok(());
     });
     state.open_dialog(dialog);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::data::project::Project;
-
-    #[test]
-    fn a_session_only_config_switches_the_theme() {
-        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
-        apply_config(&mut state, Some(ThemeChoice::Ansi16), false).unwrap();
-        assert_eq!(state.theme_choice, Some(ThemeChoice::Ansi16));
-        assert_eq!(state.config.theme, None);
-        assert_eq!(state.theme.background, Theme::ansi16().background);
-    }
 }
