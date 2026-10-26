@@ -8,6 +8,7 @@ use rand::RngExt;
 use crate::{
     data::{
         effect::{Effect, MidiCommand},
+        instrument::DEFAULT_PITCH_WHEEL_RANGE,
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX},
         note::Note,
     },
@@ -83,6 +84,21 @@ fn bend_value(value: u8) -> u16 {
         offset * 8192 / 128
     } else {
         offset * 8191 / 127
+    };
+    return (BEND_CENTER as i32 + scaled) as u16;
+}
+
+/// Semitones from 80 as a pitch bend over `range` semitones, clamped to a full bend.
+fn interval_bend(value: u8, range: u8) -> u16 {
+    if range == 0 {
+        return BEND_CENTER;
+    }
+    let range = range as i32;
+    let semitones = (value as i32 - 0x80).clamp(-range, range);
+    let scaled = if semitones < 0 {
+        semitones * 8192 / range
+    } else {
+        semitones * 8191 / range
     };
     return (BEND_CENTER as i32 + scaled) as u16;
 }
@@ -176,6 +192,8 @@ pub struct MidiCommandHandler {
     pressed: [bool; MIDI_CHANNEL_COUNT],
     /// Each instrument's default CC, by channel.
     default_controls: [u8; MIDI_CHANNEL_COUNT],
+    /// Each instrument's bend range in semitones, by channel.
+    bend_ranges: [u8; MIDI_CHANNEL_COUNT],
 }
 impl Default for MidiCommandHandler {
     fn default() -> Self {
@@ -190,7 +208,14 @@ impl MidiCommandHandler {
             bent: [false; MIDI_CHANNEL_COUNT],
             pressed: [false; MIDI_CHANNEL_COUNT],
             default_controls: [0; MIDI_CHANNEL_COUNT],
+            bend_ranges: [DEFAULT_PITCH_WHEEL_RANGE; MIDI_CHANNEL_COUNT],
         };
+    }
+
+    pub fn set_bend_range(&mut self, channel: usize, range: u8) {
+        if let Some(bend_range) = self.bend_ranges.get_mut(channel) {
+            *bend_range = range;
+        }
     }
 
     pub fn set_default_control(&mut self, channel: usize, control: u8) {
@@ -289,6 +314,14 @@ impl MidiCommandHandler {
             MidiCommand::PitchBend => {
                 self.bent[channel as usize] = true;
                 events.push(MidiEvent::Message(PitchBend(channel, bend_value(value))));
+            }
+            MidiCommand::Interval => {
+                self.bent[channel as usize] = true;
+                let range = self.bend_ranges[channel as usize];
+                events.push(MidiEvent::Message(PitchBend(
+                    channel,
+                    interval_bend(value, range),
+                )));
             }
         }
     }
@@ -440,7 +473,7 @@ mod tests {
             &note,
             &CommandContext::default(),
         );
-        return events.into_iter().flat_map(|e| e.to_messages()).collect();
+        return events.into_iter().flat_map(|e| e.into_messages()).collect();
     }
 
     #[test]
@@ -542,13 +575,68 @@ mod tests {
     }
 
     #[test]
+    fn interval_bends_by_semitones_within_the_bend_range() {
+        let mut handler = MidiCommandHandler::new();
+        let bend = |handler: &mut MidiCommandHandler, value| {
+            return handle(handler, 0, cc_note(MidiCommand::Interval, value, 1));
+        };
+        assert_eq!(
+            bend(&mut handler, 0x80),
+            vec![Message::PitchBend(Channel::Ch2, 8192)]
+        );
+        assert_eq!(
+            bend(&mut handler, 0x83),
+            vec![Message::PitchBend(Channel::Ch2, 10239)]
+        );
+        assert_eq!(
+            bend(&mut handler, 0x7D),
+            vec![Message::PitchBend(Channel::Ch2, 6144)]
+        );
+        assert_eq!(
+            bend(&mut handler, 0x8C),
+            vec![Message::PitchBend(Channel::Ch2, 16383)]
+        );
+        assert_eq!(
+            bend(&mut handler, 0x74),
+            vec![Message::PitchBend(Channel::Ch2, 0)]
+        );
+        handler.set_bend_range(1, 2);
+        assert_eq!(
+            bend(&mut handler, 0x81),
+            vec![Message::PitchBend(Channel::Ch2, 12287)]
+        );
+    }
+
+    #[test]
+    fn interval_past_the_bend_range_bends_fully() {
+        let mut handler = MidiCommandHandler::new();
+        handler.set_bend_range(1, 2);
+        let bend = |handler: &mut MidiCommandHandler, value| {
+            return handle(handler, 0, cc_note(MidiCommand::Interval, value, 1));
+        };
+        assert_eq!(
+            bend(&mut handler, 0x8F),
+            vec![Message::PitchBend(Channel::Ch2, 16383)]
+        );
+        assert_eq!(
+            bend(&mut handler, 0x00),
+            vec![Message::PitchBend(Channel::Ch2, 0)]
+        );
+        handler.set_bend_range(1, 0);
+        assert_eq!(
+            bend(&mut handler, 0x83),
+            vec![Message::PitchBend(Channel::Ch2, 8192)]
+        );
+    }
+
+    #[test]
     fn reset_undoes_bend_and_pressure_on_used_channels_only() {
         let mut handler = MidiCommandHandler::new();
         handle(&mut handler, 0, cc_note(MidiCommand::PitchBend, 0xFF, 2));
         handle(&mut handler, 1, cc_note(MidiCommand::AfterTouch, 0x40, 5));
         let mut events = vec![];
         handler.reset(&mut events);
-        let messages: Vec<Message> = events.into_iter().flat_map(|e| e.to_messages()).collect();
+        let messages: Vec<Message> = events.into_iter().flat_map(|e| e.into_messages()).collect();
         assert_eq!(
             messages,
             vec![

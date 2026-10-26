@@ -62,6 +62,10 @@ pub enum EngineCommand {
         channel: u8,
         control: u8,
     },
+    SetBendRange {
+        channel: u8,
+        range: u8,
+    },
     SetMidiClock(bool),
     SetClockSource(ClockSource),
     /// A clock pulse from the clock input, with midir's timestamp in microseconds.
@@ -231,6 +235,9 @@ impl EngineHandle {
     }
     pub fn set_default_cc(&self, channel: u8, control: u8) {
         self.send(EngineCommand::SetDefaultCC { channel, control });
+    }
+    pub fn set_bend_range(&self, channel: u8, range: u8) {
+        self.send(EngineCommand::SetBendRange { channel, range });
     }
     pub fn set_transpose(&self, transpose: i8) {
         self.send(EngineCommand::SetTranspose(transpose));

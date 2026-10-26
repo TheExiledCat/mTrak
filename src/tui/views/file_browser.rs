@@ -20,7 +20,7 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, InfoLevel, Select, TextPrompt},
-            keymap::{HelpSection, Key, KeyActions, Keymap},
+            keymap::{Action, HelpSection, Key, KeyActions, Keymap},
             widget::MtrakWidget,
             widgets::footer::Footer,
         },
@@ -30,7 +30,7 @@ use crate::{
 pub const MTRAK_FILE_EXTENSION: &str = ".mtrak";
 const ALL_EXTENSIONS_FILTER: &str = "*";
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FileBrowserAction {
     Down,
     Up,
@@ -39,6 +39,8 @@ pub enum FileBrowserAction {
     NewDirectory,
     Cancel,
 }
+
+impl Action for FileBrowserAction {}
 
 enum FileBrowserMode {
     SaveFile { extensions: Vec<String> },
@@ -81,7 +83,7 @@ impl Default for FileBrowser {
 impl FileBrowser {
     pub fn new() -> Self {
         use FileBrowserAction::*;
-        let keymap = Keymap::new()
+        let keymap = Keymap::new("file_browser")
             .bind(Key::new(KeyCode::Down, KeyModifiers::NONE), Down, "Move")
             .bind(Key::new(KeyCode::Up, KeyModifiers::NONE), Up, "Move")
             .bind(Key::char(' '), Select, "Select")

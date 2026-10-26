@@ -95,16 +95,22 @@ pub enum LineNumbers {
     Left,
     Right,
     Both,
+    None,
 }
 
 impl LineNumbers {
-    pub const ALL: [LineNumbers; 3] = [LineNumbers::Left, LineNumbers::Right, LineNumbers::Both];
+    pub const ALL: [LineNumbers; 4] = [
+        LineNumbers::Left,
+        LineNumbers::Right,
+        LineNumbers::Both,
+        LineNumbers::None,
+    ];
 
     pub fn on_left(self) -> bool {
-        return self != LineNumbers::Right;
+        return matches!(self, LineNumbers::Left | LineNumbers::Both);
     }
     pub fn on_right(self) -> bool {
-        return self != LineNumbers::Left;
+        return matches!(self, LineNumbers::Right | LineNumbers::Both);
     }
     pub fn name(self) -> String {
         return self
@@ -177,7 +183,7 @@ impl Config {
                 }
                 "line_numbers" => {
                     config.line_numbers = LineNumbers::from_str(&entry.value, true)
-                        .map_err(|_| error("must be left, right or both".to_owned()))?;
+                        .map_err(|_| error("must be left, right, both or none".to_owned()))?;
                 }
                 key => return Err(error(format!("unknown setting {key}"))),
             }
@@ -203,8 +209,8 @@ impl Config {
             line_numbers,
         } = self;
         let line_numbers = line_numbers.name();
-        let midi_input = midi_input.as_deref().unwrap_or_default();
-        let midi_output = midi_output.as_deref().unwrap_or_default();
+        let midi_input = toml::quote(midi_input.as_deref().unwrap_or_default());
+        let midi_output = toml::quote(midi_output.as_deref().unwrap_or_default());
         return format!(
             "# mTrak settings. Delete this file to get the defaults back.\n\
              \n\
@@ -221,8 +227,8 @@ impl Config {
              update_check = {update_check}\n\
              \n\
              # The MIDI ports a project connects to when it doesn't name its own, \"\" for none.\n\
-             midi_input = \"{midi_input}\"\n\
-             midi_output = \"{midi_output}\"\n\
+             midi_input = {midi_input}\n\
+             midi_output = {midi_output}\n\
              \n\
              # Pattern editor: row numbers in hex, or in decimal from 00 to 99 when false.\n\
              hex_line_numbers = {hex_line_numbers}\n\
@@ -230,7 +236,7 @@ impl Config {
              show_dashes = {show_dashes}\n\
              # The header with the track numbers above the tracks.\n\
              track_numbers = {track_numbers}\n\
-             # Where the row numbers go: \"left\", \"right\" or \"both\".\n\
+             # Where the row numbers go: \"left\", \"right\", \"both\" or \"none\".\n\
              line_numbers = \"{line_numbers}\"\n"
         );
     }
@@ -264,7 +270,7 @@ mod tests {
                 ascii_mode: true,
                 update_check: false,
                 midi_input: Some("Keys".to_owned()),
-                midi_output: Some("USB MIDI Out".to_owned()),
+                midi_output: Some("USB \\MIDI \"Out\"".to_owned()),
                 hex_line_numbers: false,
                 show_dashes: false,
                 track_numbers: false,

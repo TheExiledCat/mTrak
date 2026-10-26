@@ -10,7 +10,7 @@ use crate::{
     tui::{
         app::AppState,
         framework::{
-            keymap::{Key, KeyActions, Keymap},
+            keymap::{Action, Key, KeyActions, Keymap},
             widget::{Collapsible, MtrakWidget},
         },
         views::header::{
@@ -23,7 +23,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UtilListAction {
     Instruments,
     Global,
@@ -34,6 +34,8 @@ pub enum UtilListAction {
     Extend,
 }
 
+impl Action for UtilListAction {}
+
 pub struct UtilList {
     keymap: Keymap<UtilListAction>,
 }
@@ -41,7 +43,7 @@ pub struct UtilList {
 impl UtilList {
     pub fn new() -> Self {
         use UtilListAction::*;
-        let keymap = Keymap::new()
+        let keymap = Keymap::new("util")
             .bind(Key::ctrl('r'), Instruments, "Instrument")
             .bind(Key::ctrl('e'), Global, "Global")
             .bind(Key::alt('z'), Clear, "Clear")
@@ -53,8 +55,7 @@ impl UtilList {
     }
 
     pub fn extend_hint(&self) -> String {
-        let hint = self.keymap.hint_for(UtilListAction::Extend).unwrap();
-        return format!("{}: {}", hint.key, hint.label);
+        return self.keymap.labelled_key(UtilListAction::Extend);
     }
 
     fn render_notification(

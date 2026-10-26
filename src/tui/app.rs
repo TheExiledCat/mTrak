@@ -36,6 +36,7 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, InfoLevel},
+            keymap::HelpSection,
             widget::MtrakWidget,
             widgets::container::Container,
         },
@@ -174,6 +175,15 @@ impl App {
         ));
         return Ok(());
     }
+    /// Help for every keymap, used by the keybindings screen and keybinds.toml.
+    pub fn help_sections(&self) -> Vec<HelpSection> {
+        let mut sections = Vec::new();
+        self.root.help(&mut sections);
+        self.file_browser.help(&mut sections);
+        Dialog::help(&mut sections);
+        sections.push(keybindings::help_section());
+        return sections;
+    }
     fn table_dialog_height(&self) -> u8 {
         let terminal_height = self.terminal.size().map(|s| s.height).unwrap_or(24);
         return (terminal_height * 3 / 5)
@@ -207,12 +217,8 @@ impl App {
             ));
         }
         if std::mem::take(&mut self.state.help_requested) {
-            let mut sections = Vec::new();
-            self.root.help(&mut sections);
-            self.file_browser.help(&mut sections);
-            Dialog::help(&mut sections);
             self.dialogs.push(keybindings::keybindings_dialog(
-                sections,
+                self.help_sections(),
                 self.table_dialog_height(),
             ));
         }
@@ -440,7 +446,7 @@ pub struct AppState {
     pending_dialogs: Vec<Dialog>,
     help_requested: bool,
     commands_requested: bool,
-    clear_request: Option<(ClearOption, ClearTarget)>,
+    clear_request: Option<(ClearOption, ClearTarget, Option<u8>)>,
     project_load_request: Option<PathBuf>,
     open_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
     save_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
@@ -522,6 +528,9 @@ impl AppState {
             state
                 .engine
                 .set_default_cc(channel as u8, instrument.default_cc);
+            state
+                .engine
+                .set_bend_range(channel as u8, instrument.pitch_wheel_range);
             state
                 .engine
                 .set_channel_transpose(channel as u8, instrument.transpose);
@@ -828,6 +837,13 @@ impl AppState {
     pub fn project(&self) -> &Project {
         return &self.project;
     }
+    pub fn has_changes(&self) -> bool {
+        return self.has_changes;
+    }
+    /// For dialogs that preview changes and undo them on cancel.
+    pub fn restore_has_changes(&mut self, has_changes: bool) {
+        self.has_changes = has_changes;
+    }
     pub fn project_mut(&mut self) -> &mut Project {
         self.has_changes = true;
         return &mut self.project;
@@ -1069,10 +1085,15 @@ impl AppState {
     pub fn decrease_line_add(&mut self) {
         self.line_add = self.line_add.saturating_sub(1);
     }
-    pub fn request_clear(&mut self, option: ClearOption, target: ClearTarget) {
-        self.clear_request = Some((option, target));
+    pub fn request_clear(
+        &mut self,
+        option: ClearOption,
+        target: ClearTarget,
+        instrument: Option<u8>,
+    ) {
+        self.clear_request = Some((option, target, instrument));
     }
-    pub fn take_clear_request(&mut self) -> Option<(ClearOption, ClearTarget)> {
+    pub fn take_clear_request(&mut self) -> Option<(ClearOption, ClearTarget, Option<u8>)> {
         return self.clear_request.take();
     }
     pub fn next_pattern(&mut self) {
@@ -1172,17 +1193,15 @@ impl AppState {
         self.current_octave = octave.clamp(0, 7);
     }
     fn key_to_note_pitch(&self, key: char) -> Option<NotePitch> {
-        let bottom_octave = [
-            'z', 's', 'x', 'd', 'c', 'v', 'g', 'b', 'h', 'n', 'j', 'm', ',',
-        ];
-        let top_octave = [
-            'q', '2', 'w', '3', 'e', 'r', '5', 't', '6', 'y', '7', 'u', 'i',
-        ];
-        let note = bottom_octave
+        let note = constants::PIANO_KEYS_LOWER
             .iter()
             .position(|p| *p == key)
-            .or_else(|| top_octave.iter().position(|p| *p == key).map(|n| n + 12))?
-            as u8;
+            .or_else(|| {
+                constants::PIANO_KEYS_UPPER
+                    .iter()
+                    .position(|p| *p == key)
+                    .map(|n| n + 12)
+            })? as u8;
         return Some(NotePitch::new(note + 12 * (self.current_octave + 1)));
     }
     fn send_all_to_engine(&mut self) {
@@ -1226,7 +1245,7 @@ impl AppState {
     ) {
         self.edit_event(row, track, |note| {
             note.kind = NoteKind::On(pitch);
-            note.instrument_id = note.instrument_id.or(Some(instrument));
+            note.instrument_id = Some(instrument);
             note.velocity = vel.or(note.velocity);
         });
     }
@@ -1336,6 +1355,10 @@ impl AppState {
     pub fn set_default_cc(&mut self, channel: u8, control: u8) {
         self.project_mut().instruments[channel as usize].default_cc = control;
         self.engine.set_default_cc(channel, control);
+    }
+    pub fn set_bend_range(&mut self, channel: u8, range: u8) {
+        self.project_mut().instruments[channel as usize].pitch_wheel_range = range;
+        self.engine.set_bend_range(channel, range);
     }
     pub fn is_saved(&self) -> bool {
         return !self.has_changes && self.saved_position == self.undo_stack.position();

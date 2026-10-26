@@ -16,7 +16,7 @@ use crate::{
     tui::{
         app::AppState,
         framework::{
-            keymap::{Key, KeyActions, Keymap},
+            keymap::{Action, Key, KeyActions, Keymap},
             widget::{Collapsible, MtrakWidget},
         },
     },
@@ -29,7 +29,7 @@ pub struct PatternInfo {
 impl PatternInfo {
     pub fn new() -> Self {
         use PatternInfoAction::*;
-        let keymap = Keymap::new()
+        let keymap = Keymap::new("pattern_info")
             .bind(Key::char('='), BpmUp, "BPM UP")
             .bind(Key::char('-'), BpmDown, "BPM DN")
             .bind(Key::char('+'), SpeedUp, "SPD UP")
@@ -74,14 +74,14 @@ impl PatternInfo {
             format!(
                 "PTN: {:02X} {}/{} DN/UP",
                 state.active_pattern.0,
-                bindings.key_for(PatternDown).unwrap(),
-                bindings.key_for(PatternUp).unwrap(),
+                bindings.key_text(PatternDown),
+                bindings.key_text(PatternUp),
             ),
             format!(
                 "LEN: {:02X} {}/{} DN/UP",
                 state.active_pattern().row_count,
-                bindings.key_for(PatternLengthDown).unwrap(),
-                bindings.key_for(PatternLengthUp).unwrap()
+                bindings.key_text(PatternLengthDown),
+                bindings.key_text(PatternLengthUp)
             ),
         ]
         .into_iter()
@@ -143,20 +143,20 @@ impl Collapsible for PatternInfo {
                     "{} {:03} {}/{}: DN/UP",
                     tempo_label,
                     tempo,
-                    bindings.key_for(BpmDown).unwrap(),
-                    bindings.key_for(BpmUp).unwrap()
+                    bindings.key_text(BpmDown),
+                    bindings.key_text(BpmUp)
                 ),
                 format!(
                     "SPD {:>3} {}/{}: DN/UP",
                     state.project().speed,
-                    bindings.key_for(SpeedDown).unwrap(),
-                    bindings.key_for(SpeedUp).unwrap()
+                    bindings.key_text(SpeedDown),
+                    bindings.key_text(SpeedUp)
                 ),
                 format!(
                     "ADD {:>3} {}/{}: DN/UP",
                     state.line_add,
-                    bindings.key_for(LineAddDown).unwrap(),
-                    bindings.key_for(LineAddUp).unwrap()
+                    bindings.key_text(LineAddDown),
+                    bindings.key_text(LineAddUp)
                 ),
             ]
             .into_iter()
@@ -182,14 +182,12 @@ impl Collapsible for PatternInfo {
 
         let buttons_block = Block::new().style(state.theme.label);
         let buttons_style = state.theme.label;
-        let hint = bindings.hint_for(PatternExpand).unwrap();
-        Paragraph::new(format!("{}: {}", hint.key, hint.label))
+        Paragraph::new(bindings.labelled_key(PatternExpand))
             .style(buttons_style)
             .block(buttons_block.clone())
             .render(buttons_layout[2], buf);
 
-        let hint = bindings.hint_for(PatternShrink).unwrap();
-        Paragraph::new(format!("{}: {}", hint.key, hint.label))
+        Paragraph::new(bindings.labelled_key(PatternShrink))
             .style(buttons_style)
             .block(buttons_block)
             .render(buttons_layout[0], buf);
@@ -208,7 +206,7 @@ impl Collapsible for PatternInfo {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum PatternInfoAction {
     BpmUp,
     BpmDown,
@@ -225,6 +223,8 @@ pub enum PatternInfoAction {
     PatternShrink,
     PatternExpand,
 }
+
+impl Action for PatternInfoAction {}
 
 impl KeyActions for PatternInfo {
     type Action = PatternInfoAction;

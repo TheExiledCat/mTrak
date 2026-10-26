@@ -116,6 +116,7 @@ pub fn open_config_dialog(state: &mut AppState) {
                 .indent(1)
                 .boxed(),
             Label::new("").boxed(),
+            Buttons::new("open_folder", vec!["Open config folder"]).boxed(),
             Checkbox::new("save", "Save to config.toml")
                 .checked(true)
                 .boxed(),
@@ -128,6 +129,11 @@ pub fn open_config_dialog(state: &mut AppState) {
         let original = original.clone();
         let ports = ports.clone();
         move |state, fields| {
+            if fields.changed() == "open_folder" {
+                let folder = files::get_config_directory_root()
+                    .ok_or(MTrakError::MissingDirectory("config"))?;
+                return files::open_in_file_manager(&folder);
+            }
             let config = settings(fields, state.config.theme.clone(), &ports);
             state.apply_config(config);
             let mut edit = edit.borrow_mut();

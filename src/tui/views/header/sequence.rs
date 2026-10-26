@@ -15,7 +15,7 @@ use crate::{
     tui::{
         app::AppState,
         framework::{
-            keymap::{Key, KeyActions, Keymap},
+            keymap::{Action, Key, KeyActions, Keymap},
             widget::{Collapsible, MtrakWidget},
         },
         views::header::sequence::SequenceAction::*,
@@ -23,7 +23,7 @@ use crate::{
     util::time::duration_to_hh_mm_ss_string,
 };
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SequenceAction {
     NextPattern,
     PrevPattern,
@@ -35,6 +35,8 @@ pub enum SequenceAction {
     DecRepeats,
 }
 
+impl Action for SequenceAction {}
+
 const SEQUENCE_LIST_WIDTH: u16 = 9;
 
 pub struct SequenceList {
@@ -43,7 +45,7 @@ pub struct SequenceList {
 
 impl SequenceList {
     pub fn new() -> Self {
-        let keymap = Keymap::new()
+        let keymap = Keymap::new("sequence")
             .bind(
                 Key::new(KeyCode::Left, KeyModifiers::SHIFT),
                 PrevPattern,
@@ -72,7 +74,7 @@ impl SequenceList {
     }
 
     fn keybind_rows(&self, state: &AppState) -> [(String, String); 6] {
-        let key = |action| self.keymap.key_for(action).unwrap();
+        let key = |action| self.keymap.key_text(action);
         return [
             (
                 format!("{}/{}", key(NextPattern), key(PrevPattern)),

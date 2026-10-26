@@ -4,7 +4,7 @@ use MidiCommand::*;
 use serde::{Deserialize, Serialize};
 
 use crate::error::MTrakError;
-pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 9] = [
+pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 10] = [
     ('S', SetCC),
     ('M', ChangeCC),
     ('W', ModWheel),
@@ -14,6 +14,7 @@ pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 9] = [
     ('N', EndSlide),
     ('T', AfterTouch),
     ('P', PitchBend),
+    ('I', Interval),
 ];
 pub const EFFECT_COMMAND_LOOKUP: [(char, EffectCommand); 5] = [
     ('F', EffectCommand::SetTempo),
@@ -57,6 +58,7 @@ pub enum MidiCommand {
     EndSlide, // Lands the track's running slide on this value and stops it, without starting a new one
     AfterTouch, // Sets Channel AfterTouch
     PitchBend, // Sets Pitchbend with low resolution as a single byte
+    Interval, // Bends by whole semitones, scaled to the instrument's bend range
 }
 impl MidiCommand {
     /// Whether this command starts a slide towards the track's next CC or slide command.
@@ -107,6 +109,10 @@ impl MidiCommand {
             PitchBend => &[(
                 "xx",
                 "Pitch bend: bend the channel, 00 down, 80 centre, FF up",
+            )],
+            Interval => &[(
+                "xx",
+                "Interval: bend by semitones from 80 (83 up 3, 7D down 3) in the bend range",
             )],
         };
     }

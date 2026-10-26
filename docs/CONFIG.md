@@ -11,14 +11,15 @@ on startup if it doesn't exist yet:
 
 On Linux it follows `XDG_CONFIG_HOME`, if that's set.
 
-The config folder holds `config.toml` and a `themes` folder. `config.toml` is written with its
-defaults when it's missing, so deleting it resets it. The `themes` folder always holds the
-[example themes](https://github.com/TheExiledCat/mTrak/tree/main/example_themes): any that are missing are written again on startup, so
-deleting one only lasts until the next start, and editing one keeps your changes. A
-`theme.toml` from before v0.4.2 is moved to `themes/custom.toml` on startup, so `theme =
-"custom"` keeps working. The files use a small part of TOML: one `key = "value"` or `key =
-true` per line, with `#` starting a comment. An error in a file is shown when mTrak starts,
-with the line it's on, and the defaults are used instead.
+The config folder holds `config.toml`, `keybinds.toml` and a `themes` folder. `config.toml` and
+`keybinds.toml` are written with their defaults when they're missing, so deleting one resets
+it. The `themes` folder always holds the [example
+themes](https://github.com/TheExiledCat/mTrak/tree/main/example_themes): any that are missing
+are written again on startup, so deleting one only lasts until the next start, and editing one
+keeps your changes. A `theme.toml` from before v0.4.2 is moved to `themes/custom.toml` on
+startup, so `theme = "custom"` keeps working. The files use a small part of TOML: one `key =
+"value"` or `key = true` per line, with `#` starting a comment. An error in a file is shown
+when mTrak starts, with the line it's on, and the defaults are used instead.
 
 ## config.toml
 
@@ -31,7 +32,7 @@ Settings that aren't part of a project.
 | `update_check` | `true` or `false`                                       | `true`  | Look for a new version on startup                               |
 | `midi_input`   | A port name, or `""` for none                           | `""`    | The MIDI input a project connects to when it doesn't name one   |
 | `midi_output`  | A port name, or `""` for none                           | `""`    | The MIDI output a project connects to when it doesn't name one  |
-| `line_numbers` | `left`, `right` or `both`                               | `left`  | Which sides of the pattern editor show the row numbers          |
+| `line_numbers` | `left`, `right`, `both` or `none`                       | `left`  | Which sides of the pattern editor show the row numbers; `none` gives the room to the tracks |
 | `hex_line_numbers` | `true` or `false`                                   | `true`  | Row numbers in hex, or in decimal from `00` to `99` and round again, so they stay two digits |
 | `show_dashes`  | `true` or `false`                                       | `true`  | Dashes in empty instrument and volume columns; blank when `false` |
 | `track_numbers` | `true` or `false`                                      | `true`  | The header with the track numbers above the pattern editor; hiding it gives two more rows |
@@ -56,7 +57,8 @@ or `TERM=dumb` select `mono` when `theme` is `auto`.
 options, and every change previews straight away; `Esc` puts back what was there. Confirm
 with `Save to config.toml` ticked to keep the settings for next time, or unticked to use them
 for this session only. Confirming default MIDI ports also connects them if the open project
-has none. The update check takes effect on the next start.
+has none. The update check takes effect on the next start. `Open config folder` opens the
+config folder in your file manager, to get at the files directly.
 
 The dialog can also edit the colors of the selected theme, previewing every change:
 
@@ -102,3 +104,51 @@ mark = "#44475A"
 The `themes` folder holds ports of Catppuccin, Dracula, Gruvbox, Nord, One Dark, Solarized
 and Tokyo Night, from the [example_themes](https://github.com/TheExiledCat/mTrak/tree/main/example_themes) folder. To get one back as it came,
 delete its file and start mTrak again.
+
+## Keybindings
+
+Every key that does something on its own can be rebound, apart from the piano keys, the octave
+keys (`F1`-`F8`), the hex digits typed into the pattern, `Alt+Q`-`I` to jump to a track and
+`Alt+1`-`9` for the channel grid.
+
+### On the keybindings screen
+
+Press `?` to open it. Select an action with the arrow keys, press `Space`, then press the key
+you want for it; `Esc` keeps the old key. If the key already does something else, a warning
+lists what, and you can bind it anyway or cancel. `Del` puts back the action's default keys.
+Changes are saved to `keybinds.toml` straight away and work immediately. The
+`Reset all keys` button below the list (`Tab`, then `Space`) puts back every default.
+
+The screen shows each key the way mTrak received it. Some terminals can't tell certain keys
+apart, e.g. `Ctrl+I` arrives as `Tab` and `Ctrl+Shift+S` as `Ctrl+S`, and on macOS `Option`
+with a letter often types a symbol instead, so check the key shown after binding it.
+
+### keybinds.toml
+
+Lists every action with its default keys, commented out. To rebind one, remove the `#` and
+change the keys:
+
+```toml
+# Save project
+global.save = "^W"
+```
+
+Keys are written the way the ASCII footer shows them:
+
+| Written as                         | Key                                                          |
+| ---------------------------------- | ------------------------------------------------------------ |
+| `a`, `;`, `?`                      | That key; a capital, like `Z`, means Shift                   |
+| `^S`, `A-O`, `S-Tab`, `^A-Z`       | With Ctrl (`^`), Alt (`A-`) and Shift (`S-`) in front        |
+| `Spc`                              | Space                                                        |
+| `Up`, `Dn`, `Lt`, `Rt`             | The arrow keys                                               |
+| `PgUp`, `PgDn`, `Home`, `End`      | Page up and down, Home and End                               |
+| `Ins`, `Del`, `Bksp`               | Insert, Delete and Backspace                                 |
+| `Enter`, `Esc`, `Tab`              | Enter, Escape and Tab                                        |
+| `F1` to `F12`                      | The function keys                                            |
+
+- Give an action several keys by separating them with spaces: `"Up K"`.
+- `""` unbinds an action.
+- A prefix only counts when a key follows it, so `^` alone is the caret key and `^^` is
+  `Ctrl+^`.
+- An action that's rebound replaces all of its default keys.
+- An action name mTrak doesn't know is shown as an error on startup, with its line.

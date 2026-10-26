@@ -15,7 +15,7 @@ use crate::{
         app::AppState,
         framework::{
             core_extensions::Boxed,
-            keymap::{HelpSection, Key, KeyActions, KeyHint, Keymap},
+            keymap::{Action, HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
             widgets::footer::Footer,
         },
@@ -144,6 +144,14 @@ pub trait DialogComponent: MtrakWidget {
     fn indent_level(&self) -> u8 {
         return 0;
     }
+    /// Lets the component handle keys like Enter before the dialog does.
+    fn takes_keys_first(&self) -> bool {
+        return false;
+    }
+    /// Hides the dialog's own key hints, e.g. while capturing a key.
+    fn takes_all_keys(&self) -> bool {
+        return false;
+    }
     /// Whether Tab can move focus onto this component. Static content should return false.
     fn focusable(&self) -> bool {
         return false;
@@ -170,13 +178,15 @@ type OnSubmit = Box<dyn FnOnce(&mut AppState, DialogResult) -> Result<()>>;
 type OnCancel = Box<dyn FnOnce(&mut AppState)>;
 type OnUpdate = Box<dyn FnMut(&mut AppState, &mut DialogFields) -> Result<()>>;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DialogAction {
     Submit,
     Cancel,
     NextField,
     PrevField,
 }
+
+impl Action for DialogAction {}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum InfoLevel {
@@ -221,7 +231,7 @@ impl Dialog {
             on_update: None,
             closed: false,
             footer: Footer::new(),
-            keys: Keymap::new()
+            keys: Keymap::new("dialog")
                 .bind(Key::plain(KeyCode::Enter), DialogAction::Submit, "OK")
                 .bind(Key::plain(KeyCode::Esc), DialogAction::Cancel, "Cancel")
                 .bind(Key::plain(KeyCode::Tab), DialogAction::NextField, "Field")
@@ -246,14 +256,14 @@ impl Dialog {
     }
     pub fn confirm(level: InfoLevel, title: impl Into<String>, text: impl Into<String>) -> Self {
         let mut dialog = Self::new(title, vec![Label::new(text).boxed()]);
-        dialog.keys = Keymap::new()
+        dialog.keys = Keymap::new("dialog")
             .bind(Key::plain(KeyCode::Enter), DialogAction::Submit, "Confirm")
             .bind(Key::plain(KeyCode::Esc), DialogAction::Cancel, "Cancel");
         dialog.level = level;
         return dialog;
     }
     pub fn popup(level: InfoLevel, title: impl Into<String>, text: impl Into<String>) -> Self {
-        let mut dialog = Dialog::new(title, vec![Label::new(text).boxed()]).is_cancellable(false);
+        let mut dialog = Dialog::new(title, vec![Label::new(text).boxed()]).cancellable(false);
         dialog.level = level;
         return dialog;
     }
@@ -274,7 +284,7 @@ impl Dialog {
         return self;
     }
 
-    pub fn is_cancellable(mut self, is_cancellable: bool) -> Self {
+    pub fn cancellable(mut self, is_cancellable: bool) -> Self {
         self.is_cancellable = is_cancellable;
         return self;
     }
@@ -317,6 +327,10 @@ impl Dialog {
                 .entries(checkbox.keys.help_entries(Checkbox::describe))
                 .entries(buttons.keys.help_entries(Buttons::describe))
                 .entries(number.keys.help_entries(NumberBox::describe))
+                .entry(
+                    "0-9 / A-F",
+                    "Pick the dropdown option at that index, from 0",
+                )
                 .entry("Bksp", "Delete the last character of a text field"),
         );
     }
@@ -467,6 +481,14 @@ impl MtrakWidget for Dialog {
 
     /// Always returns true: a dialog is modal, so nothing beneath it sees input.
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
+        if let Some(index) = self.focus
+            && self.components[index].takes_keys_first()
+        {
+            if !self.components[index].handle_event(state, event) {
+                self.dispatch(state, event);
+            }
+            return true;
+        }
         if self.dispatch(state, event) {
             return true;
         }
@@ -500,7 +522,27 @@ impl MtrakWidget for Dialog {
         if let Some(index) = self.focus {
             self.components[index].key_hints(state, hints);
         }
+        if self
+            .focus
+            .is_some_and(|index| self.components[index].takes_all_keys())
+        {
+            return;
+        }
+        let component_hints = hints.len();
         self.keys.hints(hints);
+        if let Some(index) = self.focus
+            && self.components[index].takes_keys_first()
+        {
+            let taken: Vec<String> = hints[..component_hints]
+                .iter()
+                .map(|h| h.key.clone())
+                .collect();
+            let mut position = 0;
+            hints.retain(|h| {
+                position += 1;
+                return position <= component_hints || !taken.contains(&h.key);
+            });
+        }
         if !self.is_cancellable {
             hints.retain(|h| h.label != "Cancel");
         }
@@ -817,13 +859,15 @@ pub struct NumberBox {
 /// How far Left and Right move a number box with `steps`.
 const BIG_STEP: i32 = 0x10;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NumberBoxAction {
     Increment,
     Decrement,
     StepUp,
     StepDown,
 }
+
+impl Action for NumberBoxAction {}
 
 impl NumberBox {
     pub fn new(id: &'static str, label: impl Into<String>, digits: usize) -> Self {
@@ -837,7 +881,7 @@ impl NumberBox {
             negative: false,
             text: String::new(),
             focused: false,
-            keys: Keymap::new()
+            keys: Keymap::new("dialog")
                 .bind(Key::plain(KeyCode::Up), NumberBoxAction::Increment, "+/-")
                 .bind(Key::plain(KeyCode::Down), NumberBoxAction::Decrement, "+/-"),
         };
@@ -1010,10 +1054,12 @@ pub struct Buttons {
     keys: Keymap<ButtonsAction>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ButtonsAction {
     Press,
 }
+
+impl Action for ButtonsAction {}
 
 impl Buttons {
     pub fn new(id: &'static str, labels: Vec<impl Into<String>>) -> Self {
@@ -1023,7 +1069,7 @@ impl Buttons {
             focused: None,
             presses: 0,
             last: 0,
-            keys: Keymap::new().bind(Key::char(' '), ButtonsAction::Press, "Press"),
+            keys: Keymap::new("dialog").bind(Key::char(' '), ButtonsAction::Press, "Press"),
         };
     }
 }
@@ -1112,10 +1158,12 @@ pub struct Checkbox {
     keys: Keymap<CheckboxAction>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CheckboxAction {
     Toggle,
 }
+
+impl Action for CheckboxAction {}
 
 impl Checkbox {
     pub fn new(id: &'static str, label: impl Into<String>) -> Self {
@@ -1124,7 +1172,7 @@ impl Checkbox {
             label: label.into(),
             checked: false,
             focused: false,
-            keys: Keymap::new().bind(Key::char(' '), CheckboxAction::Toggle, "Toggle"),
+            keys: Keymap::new("dialog").bind(Key::char(' '), CheckboxAction::Toggle, "Toggle"),
         };
     }
 
@@ -1211,11 +1259,13 @@ pub struct Select {
     keys: Keymap<SelectAction>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SelectAction {
     Up,
     Down,
 }
+
+impl Action for SelectAction {}
 
 impl Select {
     pub fn new(id: &'static str, options: Vec<impl Into<String>>) -> Self {
@@ -1228,7 +1278,7 @@ impl Select {
             max_visible: 8,
             focused: false,
             area: Rect::default(),
-            keys: Keymap::new()
+            keys: Keymap::new("dialog")
                 .bind(Key::plain(KeyCode::Up), SelectAction::Up, "Choose")
                 .bind(Key::plain(KeyCode::Down), SelectAction::Down, "Choose"),
         };
@@ -1298,8 +1348,32 @@ impl KeyActions for Select {
 }
 
 impl MtrakWidget for Select {
+    /// A hex digit picks the option at that index.
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
-        return self.dispatch(state, event);
+        if self.dispatch(state, event) {
+            return true;
+        }
+        let Event::Key(key) = event else {
+            return false;
+        };
+        let KeyCode::Char(c) = key.code else {
+            return false;
+        };
+        if key.kind == KeyEventKind::Release
+            || key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return false;
+        }
+        let Some(index) = c.to_digit(16).map(|i| i as usize) else {
+            return false;
+        };
+        if index >= self.options.len() {
+            return false;
+        }
+        self.selected = index;
+        return true;
     }
 
     fn key_hints(&self, _state: &AppState, hints: &mut Vec<KeyHint>) {
@@ -1439,6 +1513,26 @@ mod tests {
 
     fn focused(dialog: &Dialog) -> Option<usize> {
         return dialog.focus;
+    }
+
+    #[test]
+    fn a_hex_digit_picks_that_option() {
+        use ratatui::crossterm::event::KeyEvent;
+
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let mut select = Select::new("s", (0..12).map(|i| i.to_string()).collect());
+        let mut press = |select: &mut Select, c| {
+            let event = Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            return select.handle_event(&mut state, &event);
+        };
+        assert!(press(&mut select, '5'));
+        assert_eq!(select.selected, 5);
+        assert!(press(&mut select, 'b'));
+        assert_eq!(select.selected, 11);
+        assert!(!press(&mut select, 'c'));
+        assert_eq!(select.selected, 11);
     }
 
     #[test]

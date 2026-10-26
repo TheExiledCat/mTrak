@@ -275,6 +275,9 @@ impl MtrakEngine {
             EngineCommand::SetDefaultCC { channel, control } => self
                 .midi_command_handler
                 .set_default_control(channel as usize, control),
+            EngineCommand::SetBendRange { channel, range } => self
+                .midi_command_handler
+                .set_bend_range(channel as usize, range),
             EngineCommand::SetMidiClock(enabled) => self.send_midi_clock = enabled,
             EngineCommand::SetClockSource(source) => self.set_clock_source(source),
             EngineCommand::ExternalClock(timestamp) => self.external_pulse(timestamp),
@@ -842,7 +845,7 @@ impl MtrakEngine {
         self.effect_command_handler.reset();
         return events
             .into_iter()
-            .flat_map(MidiEvent::to_messages)
+            .flat_map(MidiEvent::into_messages)
             .collect();
     }
 
@@ -1204,7 +1207,7 @@ impl MtrakEngine {
         let Some(conn) = &mut self.output_connection else {
             return;
         };
-        for message in event.to_messages() {
+        for message in event.into_messages() {
             let bytes: Vec<u8> = message
                 .to_raw_messages()
                 .into_iter()
@@ -1235,7 +1238,7 @@ impl MtrakEngine {
 fn audible(events: Vec<MidiEvent>, mutes: &[bool; 16]) -> Vec<Message> {
     return events
         .into_iter()
-        .flat_map(MidiEvent::to_messages)
+        .flat_map(MidiEvent::into_messages)
         .filter(|message| !message_channel(message).is_some_and(|c| mutes[c as usize]))
         .collect();
 }
@@ -1301,7 +1304,7 @@ mod tests {
             return self
                 .events
                 .try_iter()
-                .flat_map(MidiEvent::to_messages)
+                .flat_map(MidiEvent::into_messages)
                 .collect();
         }
 

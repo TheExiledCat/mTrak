@@ -15,7 +15,7 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, InfoLevel},
-            keymap::{HelpSection, Key, KeyActions, KeyHint, Keymap},
+            keymap::{Action, HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
             widgets::{container::Container, footer::Footer},
         },
@@ -29,7 +29,7 @@ use crate::{
 };
 
 /// Actions available everywhere in the main view, regardless of which child has focus.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MainAction {
     Quit,
     Save,
@@ -44,6 +44,8 @@ pub enum MainAction {
     File, //Open a file
 }
 
+impl Action for MainAction {}
+
 pub struct MainView {
     header: Header,
     content: Container,
@@ -56,7 +58,7 @@ impl MainView {
             header: Header::new(),
             content: Container::new(TimeLineView::new(state).boxed(), Padding::ZERO),
             footer: Footer::new(),
-            keys: Keymap::new()
+            keys: Keymap::new("global")
                 .bind(Key::plain(KeyCode::Enter), MainAction::PlaySong, "Play SNG")
                 .bind(
                     Key::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
@@ -192,14 +194,12 @@ fn browse_to_open(state: &mut AppState) {
 
 impl MtrakWidget for MainView {
     fn update(&mut self, state: &mut AppState) {
-        let save_key = self.keymap().key_for(MainAction::Save).unwrap();
-        let save_binding = self
-            .keys
-            .bindings_mut()
-            .iter_mut()
-            .find(|b| b.key == save_key)
-            .unwrap();
-        save_binding.label = if state.is_saved() { "Save" } else { "*Save" };
+        let label = if state.is_saved() { "Save" } else { "*Save" };
+        for binding in self.keys.default_bindings_mut() {
+            if binding.action == MainAction::Save {
+                binding.label = label;
+            }
+        }
         self.header.update(state);
         self.content.update(state);
     }
