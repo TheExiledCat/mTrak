@@ -198,11 +198,18 @@ impl Pattern {
         }
     }
     pub fn clear(&mut self, block: Block, target: ClearTarget) {
+        self.clear_instrument(block, target, None);
+    }
+    /// Clears like `clear`, but with an instrument only the cells that play it.
+    pub fn clear_instrument(&mut self, block: Block, target: ClearTarget, instrument: Option<u8>) {
         for row in block.rows() {
             for track in block.tracks() {
                 let Some(&current) = self.get_event(row, track) else {
                     continue;
                 };
+                if instrument.is_some_and(|i| current.instrument_id != Some(i)) {
+                    continue;
+                }
                 let mut note = current;
                 match target {
                     ClearTarget::Note => note.clear_note(),
@@ -372,6 +379,20 @@ mod tests {
         pattern.set_event(0, constants::TRACK_COUNT as usize, note());
         assert_eq!(pattern.get_event(4, 0), None);
         assert_eq!(pattern.get_event(0, constants::TRACK_COUNT as usize), None);
+    }
+
+    #[test]
+    fn clearing_an_instrument_skips_other_cells() {
+        let mut pattern = Pattern::new(3);
+        let mut first = note();
+        first.instrument_id = Some(1);
+        let mut second = note();
+        second.instrument_id = Some(2);
+        pattern.set_event(0, 0, first);
+        pattern.set_event(1, 0, second);
+        pattern.clear_instrument(pattern.block(), ClearTarget::All, Some(2));
+        assert_eq!(pattern.get_event(0, 0), Some(&first));
+        assert_eq!(pattern.get_event(1, 0), Some(&Note::empty()));
     }
 
     #[test]

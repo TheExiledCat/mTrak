@@ -440,7 +440,7 @@ pub struct AppState {
     pending_dialogs: Vec<Dialog>,
     help_requested: bool,
     commands_requested: bool,
-    clear_request: Option<(ClearOption, ClearTarget)>,
+    clear_request: Option<(ClearOption, ClearTarget, Option<u8>)>,
     project_load_request: Option<PathBuf>,
     open_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
     save_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
@@ -1080,10 +1080,17 @@ impl AppState {
     pub fn decrease_line_add(&mut self) {
         self.line_add = self.line_add.saturating_sub(1);
     }
-    pub fn request_clear(&mut self, option: ClearOption, target: ClearTarget) {
-        self.clear_request = Some((option, target));
+    /// Asks the pattern editor to clear `target` in `option`, only in cells playing
+    /// `instrument` if one is given.
+    pub fn request_clear(
+        &mut self,
+        option: ClearOption,
+        target: ClearTarget,
+        instrument: Option<u8>,
+    ) {
+        self.clear_request = Some((option, target, instrument));
     }
-    pub fn take_clear_request(&mut self) -> Option<(ClearOption, ClearTarget)> {
+    pub fn take_clear_request(&mut self) -> Option<(ClearOption, ClearTarget, Option<u8>)> {
         return self.clear_request.take();
     }
     pub fn next_pattern(&mut self) {

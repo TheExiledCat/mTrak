@@ -850,7 +850,13 @@ impl TimeLineView {
             height: 1,
         };
     }
-    fn clear(&mut self, state: &mut AppState, option: ClearOption, target: ClearTarget) {
+    fn clear(
+        &mut self,
+        state: &mut AppState,
+        option: ClearOption,
+        target: ClearTarget,
+        instrument: Option<u8>,
+    ) {
         let pattern = state.active_pattern();
         let marked_block = self.marked_block(state);
         let block = match option {
@@ -858,7 +864,9 @@ impl TimeLineView {
             ClearOption::Track => pattern.track_block(self.track_index),
             ClearOption::Pattern => pattern.block(),
         };
-        state.edit_block(block, |_, pattern| pattern.clear(block, target));
+        state.edit_block(block, |_, pattern| {
+            pattern.clear_instrument(block, target, instrument)
+        });
         if matches!(option, ClearOption::Block) && marked_block.is_some() {
             self.block_anchor = None;
         }
@@ -1221,8 +1229,8 @@ impl MtrakWidget for TimeLineView {
         if !midi_input.is_empty() {
             self.handle_midi_input(state, midi_input);
         }
-        if let Some((option, target)) = state.take_clear_request() {
-            self.clear(state, option, target);
+        if let Some((option, target, instrument)) = state.take_clear_request() {
+            self.clear(state, option, target, instrument);
         }
         self.track_cache
             .borrow_mut()

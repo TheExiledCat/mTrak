@@ -317,6 +317,10 @@ impl Dialog {
                 .entries(checkbox.keys.help_entries(Checkbox::describe))
                 .entries(buttons.keys.help_entries(Buttons::describe))
                 .entries(number.keys.help_entries(NumberBox::describe))
+                .entry(
+                    "0-9 / A-F",
+                    "Pick the dropdown option at that index, from 0",
+                )
                 .entry("Bksp", "Delete the last character of a text field"),
         );
     }
@@ -1298,8 +1302,32 @@ impl KeyActions for Select {
 }
 
 impl MtrakWidget for Select {
+    /// Besides the arrows, a hex digit picks the option at that index, counting from 0.
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
-        return self.dispatch(state, event);
+        if self.dispatch(state, event) {
+            return true;
+        }
+        let Event::Key(key) = event else {
+            return false;
+        };
+        let KeyCode::Char(c) = key.code else {
+            return false;
+        };
+        if key.kind == KeyEventKind::Release
+            || key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return false;
+        }
+        let Some(index) = c.to_digit(16).map(|i| i as usize) else {
+            return false;
+        };
+        if index >= self.options.len() {
+            return false;
+        }
+        self.selected = index;
+        return true;
     }
 
     fn key_hints(&self, _state: &AppState, hints: &mut Vec<KeyHint>) {
@@ -1439,6 +1467,26 @@ mod tests {
 
     fn focused(dialog: &Dialog) -> Option<usize> {
         return dialog.focus;
+    }
+
+    #[test]
+    fn a_hex_digit_picks_that_option() {
+        use ratatui::crossterm::event::KeyEvent;
+
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let mut select = Select::new("s", (0..12).map(|i| i.to_string()).collect());
+        let mut press = |select: &mut Select, c| {
+            let event = Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            return select.handle_event(&mut state, &event);
+        };
+        assert!(press(&mut select, '5'));
+        assert_eq!(select.selected, 5);
+        assert!(press(&mut select, 'b'));
+        assert_eq!(select.selected, 11);
+        assert!(!press(&mut select, 'c'));
+        assert_eq!(select.selected, 11);
     }
 
     #[test]

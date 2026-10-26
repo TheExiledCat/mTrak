@@ -110,14 +110,28 @@ pub fn open_midi_dialog(state: &mut AppState) {
 pub fn open_clear_dialog(state: &mut AppState) {
     let options = vec!["Block", "Track", "Pattern"];
     let targets = vec!["All", "Note", "Vel", "Cmd"];
+    // the instruments first, so a digit picks the instrument with that number
+    let mut instruments: Vec<String> = state
+        .project()
+        .instruments
+        .iter()
+        .enumerate()
+        .map(|(i, instrument)| format!("{i:X} {}", instrument.name).trim_end().to_owned())
+        .collect();
+    let all_instruments = instruments.len();
+    instruments.push("All".to_owned());
     let dialog = Dialog::new(
         "Clear",
         vec![
             Select::new("clear", options).label("Selection").boxed(),
             Select::new("target", targets).label("Target").boxed(),
+            Select::new("instrument", instruments)
+                .label("Instrument")
+                .selected(all_instruments)
+                .boxed(),
         ],
     )
-    .on_submit(|state, result| {
+    .on_submit(move |state, result| {
         use ClearOption::*;
         use ClearTarget::*;
         let option = match result.choice("clear").unwrap_or(0) {
@@ -133,7 +147,11 @@ pub fn open_clear_dialog(state: &mut AppState) {
             3 => Command,
             _ => unreachable!(),
         };
-        state.request_clear(option, target);
+        let instrument = result
+            .choice("instrument")
+            .filter(|&choice| choice != all_instruments)
+            .map(|i| i as u8);
+        state.request_clear(option, target, instrument);
         return Ok(());
     });
 
