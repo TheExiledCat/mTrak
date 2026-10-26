@@ -15,6 +15,7 @@ use ratatui::{
 
 use crate::{
     data::{
+        config::LineNumbers,
         effect::Command,
         midi::{MIDI_CHANNEL_MAX, VELOCITY_MAX, VOLUME_MAX},
         note::{Note, NoteKind, NotePitch},
@@ -28,7 +29,10 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, Label, Select},
-            keymap::{ALT_SYMBOL, ASCII_ALT_SYMBOL, HelpSection, Key, KeyActions, KeyHint, Keymap},
+            keymap::{
+                ALT_SYMBOL, ASCII_ALT_SYMBOL, Action, HelpSection, Key, KeyActions, KeyHint,
+                Keymap, snake_case,
+            },
             widget::MtrakWidget,
         },
         glyphs,
@@ -75,7 +79,7 @@ fn without_dashes(cell: &str) -> String {
         .join("|");
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TimelineAction {
     RowUp,
     RowDown,
@@ -125,7 +129,30 @@ pub enum TimelineAction {
     RowLock,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+impl Action for TimelineAction {
+    fn id(self) -> String {
+        return match self {
+            TimelineAction::JumpToMarker(marker) => format!("jump_to_marker_{}", marker + 1),
+            TimelineAction::Transpose {
+                area,
+                all_instruments,
+                delta,
+            } => {
+                let area = format!("{area:?}").to_lowercase();
+                let all = if all_instruments {
+                    "_all_instruments"
+                } else {
+                    ""
+                };
+                let direction = if delta < 0 { "down" } else { "up" };
+                format!("transpose_{area}{all}_{direction}")
+            }
+            _ => snake_case(&format!("{self:?}")),
+        };
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TransposeArea {
     Track,
     Pattern,
@@ -134,8 +161,6 @@ pub enum TransposeArea {
 
 /// Rows F9..F12 jump to, as in FT2. Clamped to the last row for shorter patterns.
 const JUMP_ROWS: [u8; 4] = [0, 16, 32, 48];
-/// Alt+key jumps to the track at the key's index, as in FT2.
-const TRACK_JUMP_KEYS: [char; 8] = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i'];
 
 /// Cursor movement shared by both modes. As in FT2, left/right move between columns and
 /// run over into the neighbouring track, while Tab/Shift+Tab move a whole track.
@@ -250,7 +275,7 @@ fn clipboard_keys(keymap: Keymap<TimelineAction>) -> Keymap<TimelineAction> {
 fn normal_keymap() -> Keymap<TimelineAction> {
     use TimelineAction::*;
     return transpose_keys(clipboard_keys(movement_keys(
-        Keymap::new()
+        Keymap::new("pattern")
             .bind(Key::char(' '), ToggleEdit, "Edit")
             .bind(Key::ctrl('l'), RowLock, "Lock")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
@@ -261,7 +286,7 @@ fn normal_keymap() -> Keymap<TimelineAction> {
 fn edit_keymap() -> Keymap<TimelineAction> {
     use TimelineAction::*;
     return transpose_keys(clipboard_keys(movement_keys(
-        Keymap::new()
+        Keymap::new("pattern")
             .bind(Key::char(' '), ToggleEdit, "Edit")
             .bind(Key::ctrl('l'), RowLock, "Lock")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
@@ -372,7 +397,7 @@ fn track_jump(key: &KeyEvent) -> Option<u8> {
     let KeyCode::Char(c) = key.code else {
         return None;
     };
-    let index = TRACK_JUMP_KEYS.iter().position(|&k| k == c)? as u8;
+    let index = constants::TRACK_JUMP_KEYS.iter().position(|&k| k == c)? as u8;
     return (index < constants::TRACK_COUNT).then_some(index);
 }
 
@@ -849,7 +874,13 @@ impl TimeLineView {
             height: 1,
         };
     }
-    fn clear(&mut self, state: &mut AppState, option: ClearOption, target: ClearTarget) {
+    fn clear(
+        &mut self,
+        state: &mut AppState,
+        option: ClearOption,
+        target: ClearTarget,
+        instrument: Option<u8>,
+    ) {
         let pattern = state.active_pattern();
         let marked_block = self.marked_block(state);
         let block = match option {
@@ -857,7 +888,9 @@ impl TimeLineView {
             ClearOption::Track => pattern.track_block(self.track_index),
             ClearOption::Pattern => pattern.block(),
         };
-        state.edit_block(block, |_, pattern| pattern.clear(block, target));
+        state.edit_block(block, |_, pattern| {
+            pattern.clear_instrument(block, target, instrument)
+        });
         if matches!(option, ClearOption::Block) && marked_block.is_some() {
             self.block_anchor = None;
         }
@@ -1220,8 +1253,8 @@ impl MtrakWidget for TimeLineView {
         if !midi_input.is_empty() {
             self.handle_midi_input(state, midi_input);
         }
-        if let Some((option, target)) = state.take_clear_request() {
-            self.clear(state, option, target);
+        if let Some((option, target, instrument)) = state.take_clear_request() {
+            self.clear(state, option, target, instrument);
         }
         self.track_cache
             .borrow_mut()
@@ -1348,8 +1381,8 @@ impl MtrakWidget for TimeLineView {
         let track_width = constants::TRACK_WIDTH as u16;
         // neighbouring tracks overlap by one column so they share a single border
         let tracks_width = (track_width - 1) * pattern.track_count as u16 + 1;
-        // a side without line numbers gets a spacer mirroring them, so the tracks themselves
-        // are centered, which gives way first when the area is too narrow
+        // mirror the line numbers on the other side so the tracks stay centered, unless
+        // there are none
         let spacer_width = top_bottom[1]
             .width
             .saturating_sub(2 + 2 * LINE_NUMBERS_WIDTH + tracks_width)
@@ -1358,6 +1391,8 @@ impl MtrakWidget for TimeLineView {
         let side_width = |numbered: bool| {
             return if numbered {
                 LINE_NUMBERS_WIDTH
+            } else if sides == LineNumbers::None {
+                0
             } else {
                 spacer_width
             };
@@ -1567,6 +1602,16 @@ mod tests {
             (view.row_index, view.track_index, view.column_index),
             (0, 0, 0)
         );
+    }
+
+    #[test]
+    fn entering_a_note_over_another_uses_the_active_instrument() {
+        let (mut state, _) = editor();
+        state.enter_note(1, 0, 0, NotePitch::new(60), None);
+        state.enter_note(3, 0, 0, NotePitch::new(62), None);
+        let note = state.active_pattern().get_event(0, 0).unwrap();
+        assert_eq!(note.instrument_id, Some(3));
+        assert_eq!(note.kind, NoteKind::On(NotePitch::new(62)));
     }
 
     #[test]

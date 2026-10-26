@@ -73,7 +73,8 @@ You can also open projects from the built-in file browser with `Alt+O`.
 ### Keybindings
 
 Press `?` to see every key in mTrak, grouped by section. The footer only shows the most
-common ones.
+common ones. Keys can be rebound on that screen or in `keybinds.toml`, see
+[docs/CONFIG.md](docs/CONFIG.md#keybindings).
 
 Press `/` to see every pattern command with a short description. The full guide is
 [docs/COMMANDS.md](docs/COMMANDS.md), which is also included in every release zip.
@@ -152,6 +153,7 @@ Planned features, in no particular order:
     - [X] Note probability (`Y`)
     - [X] Note Cut (`EC`)
     - [X] Legato (overlap notes, `L`)
+    - [X] Pitch bend in semitones, using the instrument's bend range (`I`)
     - [ ] Shorthand commands for common CCs
         - [X] Mod wheel (`W`)
         - [ ] filter cutoff, etc.
@@ -168,7 +170,9 @@ Planned features, in no particular order:
 - [x] **Custom themes**
     - [x] theme files, with ports of popular color schemes
     - [x] editing themes in the Config dialog, with a live preview
-- [ ] **Keyboard remapping**, with default layouts per OS/shell
+- [ ] **Keyboard remapping**
+    - [x] rebinding keys on the keybindings screen and in `keybinds.toml`
+    - [ ] piano key layouts per keyboard (QWERTZ, AZERTY, ...)
 - [x] **Proper CLI argument parsing** and a global app config
 - [ ] ...and more
 

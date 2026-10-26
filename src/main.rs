@@ -14,7 +14,7 @@ use ratatui::{
         execute,
     },
 };
-use tui::{app::App, files, glyphs, theme::Theme};
+use tui::{app::App, files, glyphs, keybinds, theme::Theme};
 use updater::UpdateOutcome;
 
 mod cli;
@@ -108,7 +108,35 @@ fn run(
         Theme::detect()
     });
 
+    if initialized {
+        let loaded = files::get_keybinds_file_path().and_then(|path| {
+            return if path.exists() {
+                keybinds::load(&path)
+            } else {
+                Ok(())
+            };
+        });
+        if let Err(e) = loaded {
+            startup_errors.push(e);
+        }
+    }
+
     let mut app = App::new(terminal, 120, theme, project)?;
+    if let Err(e) = keybinds::set_entries(&app.help_sections()) {
+        startup_errors.push(e);
+    }
+    if initialized {
+        let created = files::get_keybinds_file_path().and_then(|path| {
+            return if path.exists() {
+                Ok(())
+            } else {
+                keybinds::save(&path)
+            };
+        });
+        if let Err(e) = created {
+            startup_errors.push(e);
+        }
+    }
     app.state.project_path = project_path;
     app.state.apply_config(config);
     for error in startup_errors {

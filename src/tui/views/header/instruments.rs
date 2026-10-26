@@ -14,18 +14,20 @@ use crate::{
     tui::{
         app::AppState,
         framework::{
-            keymap::{Key, KeyActions, KeyHint, Keymap},
+            keymap::{Action, Key, KeyActions, KeyHint, Keymap},
             widget::{Collapsible, MtrakWidget, clicked_in},
         },
         views::header::octave_and_globals_text,
     },
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum InstrumentListAction {
     PrevInstrument,
     NextInstrument,
 }
+
+impl Action for InstrumentListAction {}
 
 pub struct InstrumentList {
     keymap: Keymap<InstrumentListAction>,
@@ -42,7 +44,7 @@ impl InstrumentList {
             rows_area: Rect::default(),
             columns: 1,
             scroll: 0,
-            keymap: Keymap::new()
+            keymap: Keymap::new("instruments")
                 .bind(
                     Key::new(KeyCode::Up, KeyModifiers::SHIFT),
                     InstrumentListAction::PrevInstrument,

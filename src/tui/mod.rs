@@ -4,6 +4,7 @@ pub mod copy_buffers;
 pub mod files;
 pub mod framework;
 pub mod glyphs;
+pub mod keybinds;
 pub mod theme;
 pub mod undo;
 pub mod views;

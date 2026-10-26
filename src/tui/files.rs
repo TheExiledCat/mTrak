@@ -1,6 +1,8 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
 };
 
 use crate::{
@@ -10,6 +12,7 @@ use crate::{
 
 const FOLDER_ROOT_NAME: &str = "mtrak";
 const CONFIG_FILE_NAME: &str = "config.toml";
+pub const KEYBINDS_FILE_NAME: &str = "keybinds.toml";
 const THEMES_FOLDER_NAME: &str = "themes";
 /// Where the custom theme was kept before themes got their own folder.
 const OLD_THEME_FILE_NAME: &str = "theme.toml";
@@ -71,6 +74,9 @@ pub fn get_config_directory_root() -> Option<PathBuf> {
 pub fn get_config_file_path() -> Result<PathBuf> {
     return config_file(CONFIG_FILE_NAME);
 }
+pub fn get_keybinds_file_path() -> Result<PathBuf> {
+    return config_file(KEYBINDS_FILE_NAME);
+}
 pub fn get_themes_directory() -> Result<PathBuf> {
     return config_file(THEMES_FOLDER_NAME);
 }
@@ -94,6 +100,48 @@ pub fn list_themes() -> Vec<String> {
         .collect();
     names.sort();
     return names;
+}
+
+/// Opens `folder` in the OS file manager.
+pub fn open_in_file_manager(folder: &Path) -> Result<()> {
+    let mut command = file_manager_command(folder)?;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    // reap it so it doesn't stay a zombie
+    thread::spawn(move || child.wait());
+    return Ok(());
+}
+
+#[cfg(windows)]
+fn file_manager_command(folder: &Path) -> Result<Command> {
+    let mut command = Command::new("explorer");
+    command.arg(folder);
+    return Ok(command);
+}
+
+#[cfg(target_os = "macos")]
+fn file_manager_command(folder: &Path) -> Result<Command> {
+    let mut command = Command::new("open");
+    command.arg(folder);
+    return Ok(command);
+}
+
+/// Uses Explorer on WSL, where xdg-open usually can't open folders.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn file_manager_command(folder: &Path) -> Result<Command> {
+    if std::env::var_os("WSL_DISTRO_NAME").is_none() {
+        let mut command = Command::new("xdg-open");
+        command.arg(folder);
+        return Ok(command);
+    }
+    let output = Command::new("wslpath").arg("-w").arg(folder).output()?;
+    let windows_path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let mut command = Command::new("explorer.exe");
+    command.arg(windows_path);
+    return Ok(command);
 }
 
 fn config_file(name: &str) -> Result<PathBuf> {

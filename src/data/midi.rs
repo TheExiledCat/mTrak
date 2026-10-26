@@ -22,7 +22,7 @@ pub enum MidiEvent {
     Aggregate(Vec<MidiEvent>),
 }
 impl MidiEvent {
-    pub fn to_messages(self) -> Vec<Message> {
+    pub fn into_messages(self) -> Vec<Message> {
         let mut messages: Vec<Message> = vec![];
 
         match self {
@@ -35,7 +35,7 @@ impl MidiEvent {
             MidiEvent::Aggregate(midi_events) => messages.append(
                 &mut midi_events
                     .into_iter()
-                    .flat_map(|e| e.to_messages())
+                    .flat_map(|e| e.into_messages())
                     .collect::<Vec<Message>>(),
             ),
         }
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn notes_off_all_silences_every_channel() {
-        let messages = MidiEvent::NotesOffAll.to_messages();
+        let messages = MidiEvent::NotesOffAll.into_messages();
         assert_eq!(messages.len(), MIDI_CHANNEL_MAX as usize + 1);
         assert_eq!(messages[0], Message::AllSoundOff(Channel::Ch1));
         assert_eq!(messages[15], Message::AllSoundOff(Channel::Ch16));
@@ -160,7 +160,7 @@ mod tests {
             MidiEvent::Message(Message::Start),
             MidiEvent::Aggregate(vec![MidiEvent::Message(Message::Stop)]),
         ]);
-        assert_eq!(event.to_messages(), vec![Message::Start, Message::Stop]);
+        assert_eq!(event.into_messages(), vec![Message::Start, Message::Stop]);
     }
 
     #[test]

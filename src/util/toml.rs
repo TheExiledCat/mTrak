@@ -1,5 +1,5 @@
-//! A parser for the small subset of TOML that mTrak's config files use: `key = "value"` pairs,
-//! bare `true` and `false`, and `#` comments.
+//! A parser for the subset of TOML mTrak's config files use: `key = "value"` with `\\` and
+//! `\"` escapes, bare `true`/`false`, dotted keys read as one name, and `#` comments.
 
 use std::{
     fmt::{self, Display},
@@ -77,7 +77,10 @@ fn is_bare_key(key: &str) -> bool {
     return !key.is_empty()
         && key
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+        && !key.starts_with('.')
+        && !key.ends_with('.')
+        && !key.contains("..");
 }
 
 fn is_comment_or_empty(text: &str) -> bool {
@@ -97,19 +100,34 @@ fn parse_value(text: &str) -> Result<String, &'static str> {
     return parse_string(text);
 }
 
-/// A double-quoted string without escapes, optionally followed by a comment.
+/// A double-quoted string, optionally followed by a comment.
 fn parse_string(text: &str) -> Result<String, &'static str> {
     let rest = text
         .strip_prefix('"')
         .ok_or("values must be in double quotes")?;
-    let (value, after) = rest.split_once('"').ok_or("missing closing quote")?;
-    if value.contains('\\') {
-        return Err("escape sequences are not supported");
+    let mut value = String::new();
+    let mut chars = rest.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '"' => {
+                if !is_comment_or_empty(&rest[i + 1..]) {
+                    return Err("unexpected text after the value");
+                }
+                return Ok(value);
+            }
+            '\\' => match chars.next() {
+                Some((_, escaped @ ('\\' | '"'))) => value.push(escaped),
+                _ => return Err("only \\\\ and \\\" escapes are supported, e.g. \"\\\\\" for \\"),
+            },
+            c => value.push(c),
+        }
     }
-    if !is_comment_or_empty(after) {
-        return Err("unexpected text after the value");
-    }
-    return Ok(value.to_owned());
+    return Err("missing closing quote");
+}
+
+/// Quotes `text` so `parse` reads it back unchanged.
+pub fn quote(text: &str) -> String {
+    return format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""));
 }
 
 #[cfg(test)]
@@ -158,6 +176,16 @@ mod tests {
             ]
         );
         assert_eq!(error_line("a = truest"), 1);
+    }
+
+    #[test]
+    fn reads_escaped_backslashes_and_quotes() {
+        for text in ["\\", "\"", "a\\b \"c\"", "#"] {
+            let line = format!("a = {} # comment", quote(text));
+            assert_eq!(pairs(&line), vec![("a".to_owned(), text.to_owned())]);
+        }
+        assert_eq!(error_line("a = \"\\\""), 1);
+        assert_eq!(error_line("a = \"\\n\""), 1);
     }
 
     #[test]
