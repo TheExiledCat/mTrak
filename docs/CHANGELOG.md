@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.4.2 - 2026-10-26
+
+### Added
+
+- **Theme editor in the Config dialog (`Ctrl+P`):** pick one of the theme's colors with
+  `Color`, then change it with the red, green and blue values below it (`Up`/`Down` by 1,
+  `Left`/`Right` by 16) or by typing a hex value like `#49688C`. Every change previews straight
+  away. `Reset color` and `Reset all` put back the theme's own colors, and `Save theme as` saves
+  them under a name. Editing a built-in theme saves it as `custom` unless you name it something
+  else.
+- **Themes folder:** themes are files in a `themes` folder in the config folder, and every one
+  of them can be picked in the Config dialog, with `theme = "dracula"` in `config.toml` or with
+  `--color dracula` (`--theme` works too). The example themes are put there for you, and any
+  that are missing come back on the next start.
+- **Accent color:** a new `accent` theme color for text that stands out: every 4th row number,
+  the logo, the channel numbers and the section titles in the help. Each example theme has its
+  own; the built-in themes keep white.
+- **Pattern editor settings**, in the Config dialog and `config.toml`:
+  - `line_numbers`: show the row numbers on the `left`, `right` or `both` sides.
+  - `hex_line_numbers`: turn off for decimal row numbers, `00` to `99` and round again, so they
+    stay two digits.
+  - `show_dashes`: turn off to leave empty instrument and volume columns blank
+    (`---| |  |000`).
+  - `track_numbers`: turn off to hide the track header and gain two rows.
+- **Default MIDI ports:** `Default MIDI in` and `Default MIDI out` in the Config dialog
+  (`midi_input` and `midi_output` in `config.toml`). A project that doesn't name its own ports
+  connects to these. A default port that isn't plugged in stays in the list as
+  `(not connected)`, so it isn't lost when you confirm the dialog.
+- **ASCII mode and the update check** can now be set in the Config dialog and `config.toml`
+  (`ascii_mode`, `update_check`). `--ascii-mode` and `--no-update-check` still override them
+  for one session.
+- [docs/CONFIG.md](docs/CONFIG.md) explains every setting and theme color, and is included in
+  the release zip.
+
+### Changed
+
+- **The Config dialog previews everything live** and shows the settings in use, including
+  command line options. `Esc` puts back what was there. With `Save to config.toml` unticked,
+  all the settings are kept for this session only, not just the theme.
+- **`theme.toml` is replaced by the themes folder.** An existing `theme.toml` is moved to
+  `themes/custom.toml` on startup, so `theme = "custom"` and `--color custom` keep working.
+  mTrak no longer creates a default theme file.
+- Themes have eleven colors now. A theme file without `accent` takes it from its `base`.
+- The example themes describe what each color is used for in a comment above it.
+- `config.toml` takes `true` and `false` without quotes.
+- Projects saved with v0.4.1 open in v0.4.2.
+
+### Fixed
+
+- After opening a project, the Config dialog showed the theme as `auto` instead of the theme
+  in use.
+
 ## v0.4.1 - 2026-10-25
 
 ### Added
