@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.5.0 - 2026-10-27
+
+### Changed
+
+- **Projects saved with v0.4.3 or earlier can't be opened.** The project file format changed.
+  Opening an older project now says it was made with an older mTrak instead of showing a
+  read error. Until v1.0.0 mTrak only opens projects saved with the same version.
+- **Project files now start with their format version and size.** mTrak reads the version
+  before anything else. This lays the groundwork for opening projects from older versions,
+  planned for v1.0.0. A damaged or cut-short file is reported as cut short.
+- **Uses less memory.** The pattern editor keeps only the open pattern's notes as display
+  text instead of every pattern's, and playback shares the patterns with the editor instead
+  of keeping its own copy. This matters most in large projects.
+- **The pattern editor and header do less work each frame.** The pattern's rows are no longer
+  copied on every redraw, and the mTrak title in the header is drawn once instead of every
+  frame.
+
 ## v0.4.3 - 2026-10-26
 
 ### Added
