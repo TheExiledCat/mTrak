@@ -44,6 +44,8 @@ impl SequenceRow {
         return self.pattern_id;
     }
 }
+/// Fields are saved in the order they're declared here. `patterns` stays last, so a program
+/// can read everything else without going through the patterns.
 #[derive(Serialize, Deserialize)]
 pub struct Project {
     pub name: Option<String>,
@@ -53,14 +55,14 @@ pub struct Project {
     pub global_velocity: u8,
     /// Semitones added to every note.
     pub transpose: i8,
-    pub sequence: Vec<SequenceRow>,
-    pub patterns: PatternStore,
-    pub instruments: [Instrument; MIDI_CHANNEL_MAX as usize + 1],
     pub midi_input: Option<String>,
     pub clock_input: Option<String>,
     pub record_input_velocity: bool,
     pub midi_output: Option<String>,
     pub send_midi_clock: bool,
+    pub sequence: Vec<SequenceRow>,
+    pub instruments: [Instrument; MIDI_CHANNEL_MAX as usize + 1],
+    pub patterns: PatternStore,
 }
 impl Project {
     pub fn empty() -> Self {
@@ -230,6 +232,19 @@ mod tests {
         assert_eq!(pattern.get_event(1, 7), Some(&off));
         assert!(pattern.channel_mutes[2]);
         assert_eq!(loaded.instruments[3].name, "Bass");
+    }
+
+    #[test]
+    fn patterns_are_the_last_field() {
+        let bytes = Project::empty().encode().unwrap();
+        let payload = rmpv::decode::read_value(&mut &bytes[LENGTH_END..]).unwrap();
+        let keys: Vec<&str> = payload
+            .as_map()
+            .unwrap()
+            .iter()
+            .map(|(key, _)| key.as_str().unwrap())
+            .collect();
+        assert_eq!(keys.last(), Some(&"patterns"));
     }
 
     #[test]

@@ -21,8 +21,9 @@ version at a time. Files of versions 1 and 2, from v0.5.0 and earlier, can't be 
 
 ## Payload
 
-The payload is a map with these fields. mTrak ignores fields it doesn't know, so other programs
-can add their own.
+The payload is a map with these fields, in this order. `patterns` is always last, so a program
+that only needs the song's settings can stop reading before it. mTrak ignores fields it
+doesn't know, so other programs can add their own.
 
 | Field                   | Type             | Contents                                                     |
 | ----------------------- | ---------------- | ------------------------------------------------------------ |
@@ -31,14 +32,14 @@ can add their own.
 | `speed`                 | int              | Ticks per row; 6 plays 4 rows per beat                       |
 | `global_velocity`       | int              | Scales every note's velocity, `0`-`255`                      |
 | `transpose`             | int              | Semitones added to every note, can be negative              |
-| `sequence`              | array of maps    | The song's order of patterns, see below                      |
-| `patterns`              | array of maps    | Every pattern; a pattern's number is its index, see below    |
-| `instruments`           | array of 16 maps | One instrument per MIDI channel, see below                   |
 | `midi_input`            | string or nil    | The name of the MIDI input port to record from               |
 | `clock_input`           | string or nil    | The name of the MIDI port to sync to                         |
 | `record_input_velocity` | bool             | Whether recording keeps the velocity of incoming notes       |
 | `midi_output`           | string or nil    | The name of the MIDI output port                             |
 | `send_midi_clock`       | bool             | Whether mTrak sends MIDI clock to the output                 |
+| `sequence`              | array of maps    | The song's order of patterns, see below                      |
+| `instruments`           | array of 16 maps | One instrument per MIDI channel, see below                   |
+| `patterns`              | array of maps    | Every pattern; a pattern's number is its index, see below    |
 
 ### Sequence
 
