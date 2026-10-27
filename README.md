@@ -174,6 +174,16 @@ Planned features, in no particular order:
     - [x] rebinding keys on the keybindings screen and in `keybinds.toml`
     - [ ] piano key layouts per keyboard (QWERTZ, AZERTY, ...)
 - [x] **Proper CLI argument parsing** and a global app config
+- [ ] **Instrument Live Midi Effects**
+    - [ ] Auto arp
+    - [ ] Midi EQ
+    - [ ] Chord mode / Harmonizer
+    - [ ] Delay
+    - [ ] Randomizer
+    - [ ] Scale mode
+    - [ ] Note to CC
+    - [ ] Global Probability
+    - [ ] CC LFO
 - [ ] ...and more
 
 Have an idea? Feel free to open an issue.
