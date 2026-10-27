@@ -53,8 +53,6 @@ pub struct Pattern {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PatternRow {
     pub tracks: Vec<Note>,
-    /// Unused, kept so saved projects keep their layout.
-    dirty: bool,
 }
 impl Default for PatternRow {
     fn default() -> Self {
@@ -66,13 +64,11 @@ impl PatternRow {
     pub fn new() -> Self {
         return Self {
             tracks: std::iter::repeat_n(Note::empty(), constants::TRACK_COUNT as usize).collect(),
-            dirty: false,
         };
     }
     pub fn with_tracks(track_cells: Vec<Note>) -> Self {
         return Self {
             tracks: track_cells,
-            dirty: false,
         };
     }
 }
