@@ -50,8 +50,9 @@ let note = self.key_to_note_pitch(c)?;
 
 Items are either `pub` or private. Don't use `pub(crate)` or `pub(super)`.
 
-In an `impl` block, associated consts and types come first, then the public methods, then the
-private ones. Trait impls follow the trait's order.
+In an `impl` block, a public `new` is always the first item. Associated consts and types come
+next, then the other public methods, then the private ones. Trait impls follow the trait's
+order.
 
 ## Naming
 

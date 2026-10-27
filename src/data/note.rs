@@ -186,14 +186,14 @@ impl Display for Note {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NotePitch(pub u8);
 impl NotePitch {
-    /// C-0; lower pitches would need octave -1, which doesn't fit the note column.
-    pub const MIN: u8 = 12;
-    pub const MAX: u8 = 127;
-
     pub fn new(pitch: u8) -> Self {
         let pitch = pitch.clamp(Self::MIN, Self::MAX);
         return Self(pitch);
     }
+
+    /// C-0; lower pitches would need octave -1, which doesn't fit the note column.
+    pub const MIN: u8 = 12;
+    pub const MAX: u8 = 127;
 }
 
 impl Display for NotePitch {
