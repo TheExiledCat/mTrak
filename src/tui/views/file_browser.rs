@@ -113,27 +113,6 @@ impl FileBrowser {
             current_folder_contents: vec![],
         };
     }
-
-    fn open(
-        &mut self,
-        mode: FileBrowserMode,
-        on_submit: Box<Submit>,
-        start_directory: PathBuf,
-        title: impl Into<String>,
-    ) {
-        self.mode = mode;
-        self.is_open = true;
-        self.submit_handler = Some(on_submit);
-        self.title = title.into();
-        let _ = fs::create_dir_all(&start_directory);
-        self.current_folder = start_directory;
-        self.selected_index = 0;
-        self.scroll_offset = 0;
-        self.selected_file = None;
-        self.pending_input.replace(None);
-
-        self.load_contents();
-    }
     //opens a save file picker, picks a directory to save the file in and a name for the file.
     pub fn save_file(
         &mut self,
@@ -155,6 +134,27 @@ impl FileBrowser {
     }
     pub fn is_open(&self) -> bool {
         return self.is_open;
+    }
+
+    fn open(
+        &mut self,
+        mode: FileBrowserMode,
+        on_submit: Box<Submit>,
+        start_directory: PathBuf,
+        title: impl Into<String>,
+    ) {
+        self.mode = mode;
+        self.is_open = true;
+        self.submit_handler = Some(on_submit);
+        self.title = title.into();
+        let _ = fs::create_dir_all(&start_directory);
+        self.current_folder = start_directory;
+        self.selected_index = 0;
+        self.scroll_offset = 0;
+        self.selected_file = None;
+        self.pending_input.replace(None);
+
+        self.load_contents();
     }
     fn load_contents(&mut self) {
         let mut entries: Vec<DirEntry> = fs::read_dir(&self.current_folder)

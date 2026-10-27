@@ -73,6 +73,11 @@ impl SequenceList {
         return Self { keymap };
     }
 
+    pub fn width(&self, state: &AppState) -> u16 {
+        let (key_width, label_width) = Self::keybind_widths(&self.keybind_rows(state));
+        return SEQUENCE_LIST_WIDTH + key_width + 1 + label_width;
+    }
+
     fn keybind_rows(&self, state: &AppState) -> [(String, String); 6] {
         let key = |action| self.keymap.key_text(action);
         return [
@@ -151,11 +156,6 @@ impl SequenceList {
         Paragraph::new(keys).right_aligned().render(keys_area, buf);
         Paragraph::new(colons).render(colon_area, buf);
         Paragraph::new(labels).render(labels_area, buf);
-    }
-
-    pub fn width(&self, state: &AppState) -> u16 {
-        let (key_width, label_width) = Self::keybind_widths(&self.keybind_rows(state));
-        return SEQUENCE_LIST_WIDTH + key_width + 1 + label_width;
     }
 }
 

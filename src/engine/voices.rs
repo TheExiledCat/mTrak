@@ -100,39 +100,6 @@ impl Voices {
         });
     }
 
-    fn start(
-        &mut self,
-        track: usize,
-        channel: u8,
-        pitch: u8,
-        velocity: u8,
-        out: &mut Vec<Message>,
-    ) {
-        let channel = channel.min(MIDI_CHANNEL_MAX);
-        let played = pitch;
-        // a note transposed out of MIDI's range isn't played
-        let transposed =
-            pitch as i32 + self.transpose as i32 + self.channel_transposes[channel as usize] as i32;
-        let Ok(pitch) = u8::try_from(transposed) else {
-            return;
-        };
-        if pitch as usize >= PITCH_COUNT {
-            return;
-        }
-        let velocity = (velocity as f32
-            * (self.channel_volumes[channel as usize] as f32 / u8::MAX as f32)
-            * (self.velocity as f32 / u8::MAX as f32))
-            .ceil() as u8; // global volume and velocity work as velocity multipliers.
-        let held = &mut self.held[channel as usize][pitch as usize];
-        *held = held.saturating_add(1);
-        self.tracks[track] = Some(Voice {
-            channel,
-            pitch,
-            played,
-        });
-        out.push(Message::NoteOn(to_channel(channel), pitch, velocity));
-    }
-
     /// Stops the track's note; the note off is only sent once no other track holds that pitch.
     pub fn release(&mut self, track: usize, out: &mut Vec<Message>) {
         if let Some(voice) = self.tracks.get_mut(track).and_then(Option::take) {
@@ -147,15 +114,6 @@ impl Voices {
         }
         if let Some(lingering) = self.lingering.get_mut(track).and_then(Option::take) {
             self.note_off(lingering.voice, out);
-        }
-    }
-
-    /// The note off is only sent once no other track holds that pitch.
-    fn note_off(&mut self, voice: Voice, out: &mut Vec<Message>) {
-        let held = &mut self.held[voice.channel as usize][voice.pitch as usize];
-        *held = held.saturating_sub(1);
-        if *held == 0 {
-            out.push(Message::NoteOff(to_channel(voice.channel), voice.pitch, 0));
         }
     }
 
@@ -227,6 +185,48 @@ impl Voices {
 
     pub fn set_channel_transpose(&mut self, channel: usize, transpose: i8) {
         self.channel_transposes[channel.min(MIDI_CHANNEL_MAX as usize)] = transpose;
+    }
+
+    fn start(
+        &mut self,
+        track: usize,
+        channel: u8,
+        pitch: u8,
+        velocity: u8,
+        out: &mut Vec<Message>,
+    ) {
+        let channel = channel.min(MIDI_CHANNEL_MAX);
+        let played = pitch;
+        // a note transposed out of MIDI's range isn't played
+        let transposed =
+            pitch as i32 + self.transpose as i32 + self.channel_transposes[channel as usize] as i32;
+        let Ok(pitch) = u8::try_from(transposed) else {
+            return;
+        };
+        if pitch as usize >= PITCH_COUNT {
+            return;
+        }
+        let velocity = (velocity as f32
+            * (self.channel_volumes[channel as usize] as f32 / u8::MAX as f32)
+            * (self.velocity as f32 / u8::MAX as f32))
+            .ceil() as u8; // global volume and velocity work as velocity multipliers.
+        let held = &mut self.held[channel as usize][pitch as usize];
+        *held = held.saturating_add(1);
+        self.tracks[track] = Some(Voice {
+            channel,
+            pitch,
+            played,
+        });
+        out.push(Message::NoteOn(to_channel(channel), pitch, velocity));
+    }
+
+    /// The note off is only sent once no other track holds that pitch.
+    fn note_off(&mut self, voice: Voice, out: &mut Vec<Message>) {
+        let held = &mut self.held[voice.channel as usize][voice.pitch as usize];
+        *held = held.saturating_sub(1);
+        if *held == 0 {
+            out.push(Message::NoteOff(to_channel(voice.channel), voice.pitch, 0));
+        }
     }
 }
 

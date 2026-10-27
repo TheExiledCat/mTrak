@@ -85,6 +85,30 @@ impl Project {
     pub fn load(project_file_path: PathBuf) -> Result<Self> {
         return Self::decode(&std::fs::read(project_file_path)?);
     }
+    pub fn song_length(&self) -> usize {
+        return self.sequence.iter().map(|s| s.repeats as usize).sum();
+    }
+    pub fn insert_sequence(&mut self, index: usize, pattern_id: PatternId) {
+        self.sequence.insert(
+            index,
+            SequenceRow {
+                pattern_id,
+                repeats: 1,
+            },
+        );
+    }
+    pub fn save(&mut self, file_path: PathBuf) -> Result<()> {
+        std::fs::write(file_path, self.encode()?)?;
+        return Ok(());
+    }
+
+    pub fn delete_sequence(&mut self, sequence_index: usize) -> usize {
+        if self.sequence.len() <= 1 {
+            return self.sequence.len();
+        };
+        self.sequence.remove(sequence_index);
+        return self.sequence.len();
+    }
     fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.is_empty() {
             return Err(MTrakError::InvalidProject("the file is empty".into()));
@@ -120,22 +144,6 @@ impl Project {
             .map_err(|e| MTrakError::InvalidProject(e.to_string()))?;
         return Ok(rmp_serde::from_slice(&bytes)?);
     }
-    pub fn song_length(&self) -> usize {
-        return self.sequence.iter().map(|s| s.repeats as usize).sum();
-    }
-    pub fn insert_sequence(&mut self, index: usize, pattern_id: PatternId) {
-        self.sequence.insert(
-            index,
-            SequenceRow {
-                pattern_id,
-                repeats: 1,
-            },
-        );
-    }
-    pub fn save(&mut self, file_path: PathBuf) -> Result<()> {
-        std::fs::write(file_path, self.encode()?)?;
-        return Ok(());
-    }
     fn encode(&self) -> Result<Vec<u8>> {
         let payload = rmp_serde::to_vec_named(self)?;
         let mut bytes = Vec::with_capacity(LENGTH_END + payload.len());
@@ -145,14 +153,6 @@ impl Project {
         bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&payload);
         return Ok(bytes);
-    }
-
-    pub fn delete_sequence(&mut self, sequence_index: usize) -> usize {
-        if self.sequence.len() <= 1 {
-            return self.sequence.len();
-        };
-        self.sequence.remove(sequence_index);
-        return self.sequence.len();
     }
 }
 

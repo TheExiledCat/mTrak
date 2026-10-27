@@ -154,6 +154,15 @@ impl App {
         })?;
         return Ok(!self.state.exit_requested);
     }
+    /// Help for every keymap, used by the keybindings screen and keybinds.toml.
+    pub fn help_sections(&self) -> Vec<HelpSection> {
+        let mut sections = Vec::new();
+        self.root.help(&mut sections);
+        self.file_browser.help(&mut sections);
+        Dialog::help(&mut sections);
+        sections.push(keybindings::help_section());
+        return sections;
+    }
 
     fn load_project(&mut self, path: PathBuf) -> Result<()> {
         let project = match Project::load(path.clone()) {
@@ -178,15 +187,6 @@ impl App {
             format!("Opened {}", name),
         ));
         return Ok(());
-    }
-    /// Help for every keymap, used by the keybindings screen and keybinds.toml.
-    pub fn help_sections(&self) -> Vec<HelpSection> {
-        let mut sections = Vec::new();
-        self.root.help(&mut sections);
-        self.file_browser.help(&mut sections);
-        Dialog::help(&mut sections);
-        sections.push(keybindings::help_section());
-        return sections;
     }
     fn table_dialog_height(&self) -> u8 {
         let terminal_height = self.terminal.size().map(|s| s.height).unwrap_or(24);
@@ -585,29 +585,6 @@ impl AppState {
             self.active_pattern.0 = status.pattern() as u8;
         }
     }
-    fn record_hits(&mut self, event: &MidiEvent, at: Instant) {
-        match event {
-            MidiEvent::Message(Message::NoteOn(channel, _, velocity)) if *velocity > 0 => {
-                self.channel_hits[*channel as usize] = Some(ChannelHit {
-                    at,
-                    velocity: *velocity,
-                });
-            }
-            MidiEvent::Aggregate(events) => {
-                for event in events {
-                    self.record_hits(event, at);
-                }
-            }
-            _ => {}
-        }
-    }
-    fn input_port_by_name(&self, name: &str) -> Option<MidiInputPort> {
-        let client = self.midi_in_client.as_ref()?;
-        return client
-            .ports()
-            .into_iter()
-            .find(|p| client.port_name(p).is_ok_and(|n| n == name));
-    }
     /// The input port for a choice in a port list that starts with a "none" entry.
     pub fn input_port_for_choice(&self, choice: usize) -> Option<MidiInputPort> {
         let index = choice.checked_sub(1)?;
@@ -636,46 +613,6 @@ impl AppState {
             self.restore_midi_input();
         }
     }
-
-    fn restore_midi_input(&mut self) {
-        let Some(name) = self.project.midi_input.clone() else {
-            return;
-        };
-        let port = self.input_port_by_name(&name);
-        if port.is_none() {
-            self.project.midi_input = None;
-        }
-        if let Err(e) = self.set_midi_input(port) {
-            self.report_error(e);
-        }
-    }
-    fn restore_clock_input(&mut self) {
-        let Some(name) = self.project.clock_input.clone() else {
-            return;
-        };
-        let port = self.input_port_by_name(&name);
-        if port.is_none() {
-            self.project.clock_input = None;
-        }
-        if let Err(e) = self.set_clock_input(port) {
-            self.report_error(e);
-        }
-    }
-    fn restore_midi_output(&mut self) {
-        let Some(name) = self.project.midi_output.clone() else {
-            return;
-        };
-        let port = self.midi_out_client.as_ref().and_then(|client| {
-            client
-                .ports()
-                .into_iter()
-                .find(|p| client.port_name(p).is_ok_and(|n| n == name))
-        });
-        if port.is_none() {
-            self.project.midi_output = None;
-        }
-        self.set_midi_output(port);
-    }
     pub fn set_midi_input(&mut self, port: Option<MidiInputPort>) -> Result<()> {
         let name = self
             .midi_in_client
@@ -691,102 +628,6 @@ impl AppState {
         }
         self.active_in_port = port;
         return self.reconnect_inputs();
-    }
-    fn set_clock_input(&mut self, port: Option<MidiInputPort>) -> Result<()> {
-        let name = self
-            .midi_in_client
-            .as_ref()
-            .map(|client| port.as_ref().and_then(|p| client.port_name(p).ok()));
-        if let Some(name) = name
-            && name != self.project.clock_input
-        {
-            self.project_mut().clock_input = name;
-        }
-        self.engine.set_clock_source(match port {
-            Some(_) => ClockSource::External,
-            None => ClockSource::Internal,
-        });
-        if port == self.active_clock_port {
-            return Ok(());
-        }
-        self.active_clock_port = port;
-        return self.reconnect_inputs();
-    }
-    /// Reopens the input connections, sharing one when notes and clock use the same port.
-    fn reconnect_inputs(&mut self) -> Result<()> {
-        for connection in self.midi_in_connections.drain(..) {
-            connection.close();
-        }
-        let shared = self.active_in_port.is_some() && self.active_in_port == self.active_clock_port;
-        let mut ports = Vec::new();
-        if let Some(port) = &self.active_in_port {
-            ports.push((port.clone(), true, shared));
-        }
-        if let Some(port) = &self.active_clock_port
-            && !shared
-        {
-            ports.push((port.clone(), false, true));
-        }
-        let mut result = Ok(());
-        for (port, notes, clock) in ports {
-            let route = InputRoute {
-                notes: notes.then(|| self.midi_in_sender.clone()),
-                clock: clock.then(|| self.engine.clock_sender()).flatten(),
-            };
-            match self.connect_input_port(&port, route) {
-                Ok(connection) => self.midi_in_connections.push(connection),
-                Err(e) => {
-                    if notes {
-                        self.active_in_port = None;
-                        self.project_mut().midi_input = None;
-                    }
-                    if clock {
-                        self.active_clock_port = None;
-                        self.project_mut().clock_input = None;
-                        self.engine.set_clock_source(ClockSource::Internal);
-                    }
-                    result = Err(e);
-                }
-            }
-        }
-        return result;
-    }
-    /// Connects to an input port; notes go to the UI, clock and transport to the engine.
-    fn connect_input_port(
-        &self,
-        port: &MidiInputPort,
-        route: InputRoute,
-    ) -> Result<MidiInputConnection<InputRoute>> {
-        return MidiInput::new(TITLE)?
-            .connect(
-                port,
-                TITLE,
-                |timestamp, bytes, route| {
-                    let command = match *bytes {
-                        [0xF8, ..] => EngineCommand::ExternalClock(timestamp),
-                        [0xFA, ..] => EngineCommand::ExternalStart,
-                        [0xFB, ..] => EngineCommand::ExternalContinue,
-                        [0xFC, ..] => EngineCommand::ExternalStop,
-                        [0xF2, lsb, msb, ..] => {
-                            EngineCommand::ExternalSongPosition(lsb as u16 | (msb as u16) << 7)
-                        }
-                        [0xF2, ..] | [0xF9..=0xFF, ..] => return,
-                        _ => {
-                            if let Some(notes) = &route.notes
-                                && let Some(message) = bytes_to_message(bytes)
-                            {
-                                let _ = notes.send(message);
-                            }
-                            return;
-                        }
-                    };
-                    if let Some(clock) = &route.clock {
-                        let _ = clock.send(command);
-                    }
-                },
-                route,
-            )
-            .map_err(|e| MTrakError::Midi(e.to_string()));
     }
     pub fn set_midi_output(&mut self, port: Option<MidiOutputPort>) {
         let name = self
@@ -863,10 +704,6 @@ impl AppState {
         self.has_changes = true;
         return self.pattern_mut(self.active_pattern);
     }
-    fn pattern_mut(&mut self, id: PatternId) -> &mut Pattern {
-        self.changed_patterns.insert(id);
-        return self.project.patterns.get_pattern_by_id_mut(id).unwrap();
-    }
     pub fn copy_buffers_and_active_pattern(&mut self) -> (&mut CopyBuffers, &Pattern) {
         let pattern = self
             .project
@@ -874,30 +711,6 @@ impl AppState {
             .get_pattern_by_id(self.active_pattern)
             .unwrap();
         return (&mut self.copy_buffers, pattern);
-    }
-    fn copy_buffers_and_active_pattern_mut(&mut self) -> (&mut CopyBuffers, &mut Pattern) {
-        self.changed_patterns.insert(self.active_pattern);
-        let pattern = self
-            .project
-            .patterns
-            .get_pattern_by_id_mut(self.active_pattern)
-            .unwrap();
-        return (&mut self.copy_buffers, pattern);
-    }
-    fn with_history<R>(
-        &mut self,
-        f: impl FnOnce(&mut UndoStack<AppStateAction>, &mut Self) -> R,
-    ) -> R {
-        let mut history = std::mem::take(&mut self.undo_stack);
-        let result = f(&mut history, self);
-        self.undo_stack = history;
-        return result;
-    }
-    fn track_and_do(&mut self, action: AppStateAction) {
-        self.with_history(|history, state| history.track_and_do(state, action));
-    }
-    fn track(&mut self, action: AppStateAction) {
-        self.undo_stack.track(action);
     }
     pub fn can_undo(&self) -> bool {
         return self.undo_stack.can_undo();
@@ -987,16 +800,6 @@ impl AppState {
             });
         }
     }
-    fn edit_sequence<R>(&mut self, edit: impl FnOnce(&mut Project) -> R) -> R {
-        let previous = self.project.sequence.clone();
-        let result = edit(&mut self.project);
-        if self.project.sequence != previous {
-            self.sequence_changed = true;
-            let new = self.project.sequence.clone();
-            self.track(AppStateAction::EditSequence { previous, new });
-        }
-        return result;
-    }
     pub fn open_dialog(&mut self, dialog: Dialog) {
         self.pending_dialogs.push(dialog);
     }
@@ -1045,14 +848,6 @@ impl AppState {
     }
     pub fn request_project_load(&mut self, path: PathBuf) {
         self.project_load_request = Some(path);
-    }
-    fn shut_down(&mut self) {
-        // the clock input holds an engine sender, so it closes first
-        for connection in self.midi_in_connections.drain(..) {
-            connection.close();
-        }
-        self.engine.stop();
-        self.engine.shut_down();
     }
     /// Hands an error to the app, which shows it in a warning dialog.
     pub fn report_error(&mut self, error: MTrakError) {
@@ -1107,24 +902,6 @@ impl AppState {
         self.active_pattern.0 = self.active_pattern.0.saturating_sub(1);
         self.ensure_pattern(self.active_pattern);
         self.switch_playing_pattern();
-    }
-
-    /// While a pattern plays, carries playback on in the active pattern, as in FT2.
-    fn switch_playing_pattern(&mut self) {
-        if matches!(
-            self.engine.status().play_mode(),
-            PlayMode::PatternLoop | PlayMode::Pattern
-        ) {
-            self.send_changes_to_engine();
-            self.engine.switch_pattern(self.active_pattern);
-        }
-    }
-
-    fn ensure_pattern(&mut self, id: PatternId) {
-        self.project_mut()
-            .patterns
-            .create_pattern_id_if_not_exists(id);
-        self.changed_patterns.insert(id);
     }
 
     /// Moves the sequence cursor and shows the pattern at that position.
@@ -1192,39 +969,6 @@ impl AppState {
     }
     pub fn set_octave(&mut self, octave: u8) {
         self.current_octave = octave.clamp(0, 7);
-    }
-    fn key_to_note_pitch(&self, key: char) -> Option<NotePitch> {
-        let note = constants::PIANO_KEYS_LOWER
-            .iter()
-            .position(|p| *p == key)
-            .or_else(|| {
-                constants::PIANO_KEYS_UPPER
-                    .iter()
-                    .position(|p| *p == key)
-                    .map(|n| n + 12)
-            })? as u8;
-        return Some(NotePitch::new(note + 12 * (self.current_octave + 1)));
-    }
-    fn send_all_to_engine(&mut self) {
-        self.changed_patterns.clear();
-        self.sequence_changed = false;
-        for (i, pattern) in self.project.patterns.get_patterns().iter().enumerate() {
-            self.engine
-                .set_pattern(PatternId(i as u8), Arc::clone(pattern));
-        }
-        self.engine.set_sequence(self.project.sequence.clone());
-    }
-
-    fn send_changes_to_engine(&mut self) {
-        for id in self.changed_patterns.drain() {
-            if let Some(pattern) = self.project.patterns.get_shared_pattern(id) {
-                self.engine.set_pattern(id, pattern);
-            }
-        }
-        if self.sequence_changed {
-            self.sequence_changed = false;
-            self.engine.set_sequence(self.project.sequence.clone());
-        }
     }
     pub fn enter_key(
         &mut self,
@@ -1327,16 +1071,6 @@ impl AppState {
         self.set_bpm(self.project.bpm.saturating_sub(1).max(1));
     }
 
-    fn set_bpm(&mut self, bpm: u8) {
-        if bpm == self.project.bpm {
-            return;
-        }
-        self.track_and_do(AppStateAction::SetBpm {
-            previous: self.project.bpm,
-            new: bpm,
-        });
-    }
-
     pub fn set_global_velocity(&mut self, velocity: u8) {
         self.project_mut().global_velocity = velocity;
         self.engine.set_global_velocity(velocity);
@@ -1368,6 +1102,272 @@ impl AppState {
 
     pub fn drain_midi_input(&mut self) -> Vec<Message> {
         return std::mem::take(&mut self.pending_midi_input);
+    }
+    fn record_hits(&mut self, event: &MidiEvent, at: Instant) {
+        match event {
+            MidiEvent::Message(Message::NoteOn(channel, _, velocity)) if *velocity > 0 => {
+                self.channel_hits[*channel as usize] = Some(ChannelHit {
+                    at,
+                    velocity: *velocity,
+                });
+            }
+            MidiEvent::Aggregate(events) => {
+                for event in events {
+                    self.record_hits(event, at);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn input_port_by_name(&self, name: &str) -> Option<MidiInputPort> {
+        let client = self.midi_in_client.as_ref()?;
+        return client
+            .ports()
+            .into_iter()
+            .find(|p| client.port_name(p).is_ok_and(|n| n == name));
+    }
+
+    fn restore_midi_input(&mut self) {
+        let Some(name) = self.project.midi_input.clone() else {
+            return;
+        };
+        let port = self.input_port_by_name(&name);
+        if port.is_none() {
+            self.project.midi_input = None;
+        }
+        if let Err(e) = self.set_midi_input(port) {
+            self.report_error(e);
+        }
+    }
+    fn restore_clock_input(&mut self) {
+        let Some(name) = self.project.clock_input.clone() else {
+            return;
+        };
+        let port = self.input_port_by_name(&name);
+        if port.is_none() {
+            self.project.clock_input = None;
+        }
+        if let Err(e) = self.set_clock_input(port) {
+            self.report_error(e);
+        }
+    }
+    fn restore_midi_output(&mut self) {
+        let Some(name) = self.project.midi_output.clone() else {
+            return;
+        };
+        let port = self.midi_out_client.as_ref().and_then(|client| {
+            client
+                .ports()
+                .into_iter()
+                .find(|p| client.port_name(p).is_ok_and(|n| n == name))
+        });
+        if port.is_none() {
+            self.project.midi_output = None;
+        }
+        self.set_midi_output(port);
+    }
+    fn set_clock_input(&mut self, port: Option<MidiInputPort>) -> Result<()> {
+        let name = self
+            .midi_in_client
+            .as_ref()
+            .map(|client| port.as_ref().and_then(|p| client.port_name(p).ok()));
+        if let Some(name) = name
+            && name != self.project.clock_input
+        {
+            self.project_mut().clock_input = name;
+        }
+        self.engine.set_clock_source(match port {
+            Some(_) => ClockSource::External,
+            None => ClockSource::Internal,
+        });
+        if port == self.active_clock_port {
+            return Ok(());
+        }
+        self.active_clock_port = port;
+        return self.reconnect_inputs();
+    }
+    /// Reopens the input connections, sharing one when notes and clock use the same port.
+    fn reconnect_inputs(&mut self) -> Result<()> {
+        for connection in self.midi_in_connections.drain(..) {
+            connection.close();
+        }
+        let shared = self.active_in_port.is_some() && self.active_in_port == self.active_clock_port;
+        let mut ports = Vec::new();
+        if let Some(port) = &self.active_in_port {
+            ports.push((port.clone(), true, shared));
+        }
+        if let Some(port) = &self.active_clock_port
+            && !shared
+        {
+            ports.push((port.clone(), false, true));
+        }
+        let mut result = Ok(());
+        for (port, notes, clock) in ports {
+            let route = InputRoute {
+                notes: notes.then(|| self.midi_in_sender.clone()),
+                clock: clock.then(|| self.engine.clock_sender()).flatten(),
+            };
+            match self.connect_input_port(&port, route) {
+                Ok(connection) => self.midi_in_connections.push(connection),
+                Err(e) => {
+                    if notes {
+                        self.active_in_port = None;
+                        self.project_mut().midi_input = None;
+                    }
+                    if clock {
+                        self.active_clock_port = None;
+                        self.project_mut().clock_input = None;
+                        self.engine.set_clock_source(ClockSource::Internal);
+                    }
+                    result = Err(e);
+                }
+            }
+        }
+        return result;
+    }
+    /// Connects to an input port; notes go to the UI, clock and transport to the engine.
+    fn connect_input_port(
+        &self,
+        port: &MidiInputPort,
+        route: InputRoute,
+    ) -> Result<MidiInputConnection<InputRoute>> {
+        return MidiInput::new(TITLE)?
+            .connect(
+                port,
+                TITLE,
+                |timestamp, bytes, route| {
+                    let command = match *bytes {
+                        [0xF8, ..] => EngineCommand::ExternalClock(timestamp),
+                        [0xFA, ..] => EngineCommand::ExternalStart,
+                        [0xFB, ..] => EngineCommand::ExternalContinue,
+                        [0xFC, ..] => EngineCommand::ExternalStop,
+                        [0xF2, lsb, msb, ..] => {
+                            EngineCommand::ExternalSongPosition(lsb as u16 | (msb as u16) << 7)
+                        }
+                        [0xF2, ..] | [0xF9..=0xFF, ..] => return,
+                        _ => {
+                            if let Some(notes) = &route.notes
+                                && let Some(message) = bytes_to_message(bytes)
+                            {
+                                let _ = notes.send(message);
+                            }
+                            return;
+                        }
+                    };
+                    if let Some(clock) = &route.clock {
+                        let _ = clock.send(command);
+                    }
+                },
+                route,
+            )
+            .map_err(|e| MTrakError::Midi(e.to_string()));
+    }
+    fn pattern_mut(&mut self, id: PatternId) -> &mut Pattern {
+        self.changed_patterns.insert(id);
+        return self.project.patterns.get_pattern_by_id_mut(id).unwrap();
+    }
+    fn copy_buffers_and_active_pattern_mut(&mut self) -> (&mut CopyBuffers, &mut Pattern) {
+        self.changed_patterns.insert(self.active_pattern);
+        let pattern = self
+            .project
+            .patterns
+            .get_pattern_by_id_mut(self.active_pattern)
+            .unwrap();
+        return (&mut self.copy_buffers, pattern);
+    }
+    fn with_history<R>(
+        &mut self,
+        f: impl FnOnce(&mut UndoStack<AppStateAction>, &mut Self) -> R,
+    ) -> R {
+        let mut history = std::mem::take(&mut self.undo_stack);
+        let result = f(&mut history, self);
+        self.undo_stack = history;
+        return result;
+    }
+    fn track_and_do(&mut self, action: AppStateAction) {
+        self.with_history(|history, state| history.track_and_do(state, action));
+    }
+    fn track(&mut self, action: AppStateAction) {
+        self.undo_stack.track(action);
+    }
+    fn edit_sequence<R>(&mut self, edit: impl FnOnce(&mut Project) -> R) -> R {
+        let previous = self.project.sequence.clone();
+        let result = edit(&mut self.project);
+        if self.project.sequence != previous {
+            self.sequence_changed = true;
+            let new = self.project.sequence.clone();
+            self.track(AppStateAction::EditSequence { previous, new });
+        }
+        return result;
+    }
+    fn shut_down(&mut self) {
+        // the clock input holds an engine sender, so it closes first
+        for connection in self.midi_in_connections.drain(..) {
+            connection.close();
+        }
+        self.engine.stop();
+        self.engine.shut_down();
+    }
+
+    /// While a pattern plays, carries playback on in the active pattern, as in FT2.
+    fn switch_playing_pattern(&mut self) {
+        if matches!(
+            self.engine.status().play_mode(),
+            PlayMode::PatternLoop | PlayMode::Pattern
+        ) {
+            self.send_changes_to_engine();
+            self.engine.switch_pattern(self.active_pattern);
+        }
+    }
+
+    fn ensure_pattern(&mut self, id: PatternId) {
+        self.project_mut()
+            .patterns
+            .create_pattern_id_if_not_exists(id);
+        self.changed_patterns.insert(id);
+    }
+    fn key_to_note_pitch(&self, key: char) -> Option<NotePitch> {
+        let note = constants::PIANO_KEYS_LOWER
+            .iter()
+            .position(|p| *p == key)
+            .or_else(|| {
+                constants::PIANO_KEYS_UPPER
+                    .iter()
+                    .position(|p| *p == key)
+                    .map(|n| n + 12)
+            })? as u8;
+        return Some(NotePitch::new(note + 12 * (self.current_octave + 1)));
+    }
+    fn send_all_to_engine(&mut self) {
+        self.changed_patterns.clear();
+        self.sequence_changed = false;
+        for (i, pattern) in self.project.patterns.get_patterns().iter().enumerate() {
+            self.engine
+                .set_pattern(PatternId(i as u8), Arc::clone(pattern));
+        }
+        self.engine.set_sequence(self.project.sequence.clone());
+    }
+
+    fn send_changes_to_engine(&mut self) {
+        for id in self.changed_patterns.drain() {
+            if let Some(pattern) = self.project.patterns.get_shared_pattern(id) {
+                self.engine.set_pattern(id, pattern);
+            }
+        }
+        if self.sequence_changed {
+            self.sequence_changed = false;
+            self.engine.set_sequence(self.project.sequence.clone());
+        }
+    }
+
+    fn set_bpm(&mut self, bpm: u8) {
+        if bpm == self.project.bpm {
+            return;
+        }
+        self.track_and_do(AppStateAction::SetBpm {
+            previous: self.project.bpm,
+            new: bpm,
+        });
     }
 }
 /// The active pattern's cells as text, so rendering doesn't format every note each frame.

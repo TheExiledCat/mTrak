@@ -122,11 +122,6 @@ impl Palette {
         };
     }
 
-    /// The colors of a theme in the themes folder.
-    fn load_named(name: &str) -> Result<Self> {
-        return Self::load(&files::get_named_theme_path(name)?);
-    }
-
     pub fn save(&self, path: &Path) -> Result<()> {
         fs::write(path, self.clone().into_toml())?;
         return Ok(());
@@ -178,6 +173,11 @@ impl Palette {
             text.push_str(&format!("\n# {description}\n{key} = \"{color}\"\n"));
         }
         return text;
+    }
+
+    /// The colors of a theme in the themes folder.
+    fn load_named(name: &str) -> Result<Self> {
+        return Self::load(&files::get_named_theme_path(name)?);
     }
 }
 

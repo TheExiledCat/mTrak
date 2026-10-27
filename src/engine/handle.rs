@@ -206,12 +206,6 @@ impl EngineHandle {
         return self.events.try_iter();
     }
 
-    fn send(&self, command: EngineCommand) {
-        if let Some(commands) = &self.commands {
-            let _ = commands.send(command);
-        }
-    }
-
     pub fn play_note(&self, track: usize, channel: u8, note: NotePitch, velocity: u8) {
         self.send(EngineCommand::PlayNote {
             track,
@@ -247,6 +241,12 @@ impl EngineHandle {
     }
     pub fn set_global_velocity(&self, velocity: u8) {
         self.send(EngineCommand::SetGlobalVelocity(velocity));
+    }
+
+    fn send(&self, command: EngineCommand) {
+        if let Some(commands) = &self.commands {
+            let _ = commands.send(command);
+        }
     }
 }
 
