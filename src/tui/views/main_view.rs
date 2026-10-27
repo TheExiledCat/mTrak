@@ -53,10 +53,10 @@ pub struct MainView {
     keys: Keymap<MainAction>,
 }
 impl MainView {
-    pub fn new(state: &AppState) -> Self {
+    pub fn new() -> Self {
         return Self {
             header: Header::new(),
-            content: Container::new(TimeLineView::new(state).boxed(), Padding::ZERO),
+            content: Container::new(TimeLineView::new().boxed(), Padding::ZERO),
             footer: Footer::new(),
             keys: Keymap::new("global")
                 .bind(Key::plain(KeyCode::Enter), MainAction::PlaySong, "Play SNG")

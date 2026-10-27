@@ -11,7 +11,7 @@ path = "src/main.rs"
 clap_derive = { version = "4.0.0-rc.1" }
 bincode = { version = "2.0.1", features = ["serde"] }
 ratatui = "0.29.0"
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive", "rc"] }
 clap = "4.5.45"
 dirs = "6.0.0"
 figlet-rs = "1.0.0"

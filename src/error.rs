@@ -63,9 +63,16 @@ impl Display for MTrakError {
             MTrakError::Midi(message) => write!(f, "{}", message),
             MTrakError::Parse(text) => write!(f, "Could not parse: {}", text),
             MTrakError::InvalidProject(reason) => write!(f, "Not a valid project: {}", reason),
+            MTrakError::UnsupportedProjectVersion { found, supported } if found > supported => {
+                write!(
+                    f,
+                    "This project was made with a newer mTrak (file version {}, this version reads {})",
+                    found, supported
+                )
+            }
             MTrakError::UnsupportedProjectVersion { found, supported } => write!(
                 f,
-                "This project was made with a newer mTrak (file version {}, supported up to {})",
+                "This project was made with an older mTrak that this version can't read (file version {}, this version reads {})",
                 found, supported
             ),
             MTrakError::InvalidConfig(reason) => write!(f, "Invalid config file {}", reason),
