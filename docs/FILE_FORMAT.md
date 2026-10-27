@@ -1,7 +1,7 @@
 # Project file format
 
 This page describes how mTrak saves a project (`.mtrak`), so other programs can read and write
-it. It describes file version 4, written by the first mTrak release after v0.6.0 and later.
+it. It describes file version 4, written by mTrak v0.7.0 and later.
 
 A project file is a short header followed by a [MessagePack](https://msgpack.org) payload.
 Everything in the payload is a map with named fields, except the notes in a pattern, which are
