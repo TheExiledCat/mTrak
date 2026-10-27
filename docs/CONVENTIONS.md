@@ -21,7 +21,8 @@ fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 This includes constructors (`return Self { .. };`), `Display` impls and one-line getters.
 Clippy's `needless_return` lint is disabled in `Cargo.toml` for this reason.
 
-Closures and `match` arms are the exception: they stay plain expressions.
+This applies to named functions and methods only. Closures can use `return` or end with a
+plain expression, whichever reads better, and `match` arms stay plain expressions.
 
 ```rust
 let lines = bindings.iter().map(|b| Line::raw(format!("{}: {}", b.key, b.label)));
@@ -48,6 +49,9 @@ let note = self.key_to_note_pitch(c)?;
 ## Visibility
 
 Items are either `pub` or private. Don't use `pub(crate)` or `pub(super)`.
+
+In an `impl` block, associated consts and types come first, then the public methods, then the
+private ones. Trait impls follow the trait's order.
 
 ## Naming
 
