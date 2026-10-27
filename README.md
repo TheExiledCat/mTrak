@@ -112,10 +112,13 @@ included in every release zip. Press `Ctrl+P` to change them in the Config dialo
 
 ### Project files
 
-**Note:** the project file format is still changing between releases. Until v1.0.0, mTrak
-can only open projects saved with the same version of mTrak; opening a project from another
-version shows an error and starts an empty project instead. From v1.0.0 the format will be
-stable and newer versions will open older projects.
+Projects saved with v0.6.0 or later open in every later version of mTrak: each project file
+records its format version, and when the format changes, newer versions upgrade older projects
+as they open them.
+
+Projects saved with v0.5.0 or earlier can't be opened. mTrak shows an error instead; from the
+file browser the current project stays open, and from the command line mTrak starts with an
+empty project.
 
 To read or write projects from other programs, see [docs/FILE_FORMAT.md](docs/FILE_FORMAT.md).
 
