@@ -117,6 +117,8 @@ can only open projects saved with the same version of mTrak; opening a project f
 version shows an error and starts an empty project instead. From v1.0.0 the format will be
 stable and newer versions will open older projects.
 
+To read or write projects from other programs, see [docs/FILE_FORMAT.md](docs/FILE_FORMAT.md).
+
 ## Roadmap
 
 Planned features, in no particular order:

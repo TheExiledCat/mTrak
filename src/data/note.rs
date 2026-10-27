@@ -1,13 +1,27 @@
 use std::fmt::{self, Display};
 
-use serde::{Deserialize, Serialize};
-
 use crate::{
-    data::effect::Command,
+    data::{
+        effect::{Command, CommandKind},
+        midi::{MIDI_CHANNEL_MAX, VOLUME_MAX},
+    },
+    error::{MTrakError, Result},
     tui::constants::{self},
 };
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+/// A saved cell starts with a flag byte: the top bit is always set, and each of the low bits
+/// says that a field follows, in this order. A cell with no fields is empty.
+const CELL: u8 = 0x80;
+const CELL_NOTE: u8 = 0x01;
+const CELL_INSTRUMENT: u8 = 0x02;
+const CELL_VOLUME: u8 = 0x04;
+const CELL_COMMAND: u8 = 0x08;
+const CELL_VALUE: u8 = 0x10;
+const CELL_FLAGS: u8 = CELL | CELL_NOTE | CELL_INSTRUMENT | CELL_VOLUME | CELL_COMMAND | CELL_VALUE;
+/// The note field of a note off; other note fields are MIDI pitches.
+const CELL_NOTE_OFF: u8 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NoteKind {
     Empty,
     On(NotePitch),
@@ -24,7 +38,7 @@ impl Display for NoteKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Note {
     pub kind: NoteKind,
     pub instrument_id: Option<u8>,
@@ -66,6 +80,84 @@ impl Note {
         }
         return self;
     }
+
+    /// Appends the note as a saved cell: a flag byte, then the fields it names.
+    pub fn write_cell(&self, bytes: &mut Vec<u8>) {
+        let note = match self.kind {
+            NoteKind::Empty => None,
+            NoteKind::Off => Some(CELL_NOTE_OFF),
+            NoteKind::On(pitch) => Some(pitch.0),
+        };
+        let command = self.command.kind;
+        let fields = [
+            (CELL_NOTE, note),
+            (CELL_INSTRUMENT, self.instrument_id),
+            (CELL_VOLUME, self.velocity),
+            (
+                CELL_COMMAND,
+                (command != CommandKind::None).then(|| command.letter() as u8),
+            ),
+            (
+                CELL_VALUE,
+                (self.command.value != 0).then_some(self.command.value),
+            ),
+        ];
+        let flags = fields
+            .iter()
+            .filter(|(_, field)| field.is_some())
+            .fold(CELL, |flags, (flag, _)| flags | flag);
+        bytes.push(flags);
+        bytes.extend(fields.iter().filter_map(|(_, field)| *field));
+    }
+
+    /// Reads a cell written by [`Note::write_cell`] off the front of `bytes`.
+    pub fn read_cell(bytes: &mut &[u8]) -> Result<Note> {
+        let flags = take_byte(bytes)?;
+        if flags & CELL == 0 || flags & !CELL_FLAGS != 0 {
+            return Err(invalid_cell(format!("an unknown flag byte {flags:02X}")));
+        }
+        let mut field = |flag: u8| -> Result<Option<u8>> {
+            return (flags & flag != 0).then(|| take_byte(bytes)).transpose();
+        };
+        let kind = match field(CELL_NOTE)? {
+            None => NoteKind::Empty,
+            Some(CELL_NOTE_OFF) => NoteKind::Off,
+            Some(pitch @ NotePitch::MIN..=NotePitch::MAX) => NoteKind::On(NotePitch(pitch)),
+            Some(note) => return Err(invalid_cell(format!("note {note}"))),
+        };
+        let instrument_id = field(CELL_INSTRUMENT)?;
+        if let Some(instrument) = instrument_id.filter(|&i| i > MIDI_CHANNEL_MAX) {
+            return Err(invalid_cell(format!("instrument {instrument}")));
+        }
+        let velocity = field(CELL_VOLUME)?;
+        if let Some(volume) = velocity.filter(|&v| v > VOLUME_MAX) {
+            return Err(invalid_cell(format!("volume {volume}")));
+        }
+        let command = match field(CELL_COMMAND)? {
+            None => CommandKind::None,
+            Some(letter) => CommandKind::from_char(letter as char)
+                .map_err(|_| invalid_cell(format!("command {:?}", letter as char)))?,
+        };
+        let value = field(CELL_VALUE)?.unwrap_or(0);
+        return Ok(Note::new(
+            kind,
+            instrument_id,
+            velocity,
+            Command::new(command, value),
+        ));
+    }
+}
+
+fn take_byte(bytes: &mut &[u8]) -> Result<u8> {
+    let (&byte, rest) = bytes
+        .split_first()
+        .ok_or_else(|| invalid_cell("cells that are cut short".into()))?;
+    *bytes = rest;
+    return Ok(byte);
+}
+
+fn invalid_cell(what: String) -> MTrakError {
+    return MTrakError::InvalidProject(format!("a pattern has {what}"));
 }
 
 impl Display for Note {
@@ -86,7 +178,7 @@ impl Display for Note {
 }
 
 /// A MIDI pitch, displayed in scientific notation where C-4 is middle C (60).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NotePitch(pub u8);
 impl NotePitch {
     /// C-0; lower pitches would need octave -1, which doesn't fit the note column.
@@ -112,6 +204,86 @@ impl Display for NotePitch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cell(note: Note) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        note.write_cell(&mut bytes);
+        return bytes;
+    }
+
+    fn read(bytes: &[u8]) -> Result<Note> {
+        let mut bytes = bytes;
+        let note = Note::read_cell(&mut bytes)?;
+        assert!(
+            bytes.is_empty(),
+            "the cell left {} bytes unread",
+            bytes.len()
+        );
+        return Ok(note);
+    }
+
+    #[test]
+    fn cells_hold_only_the_fields_that_are_set() {
+        assert_eq!(cell(Note::empty()), [0x80]);
+        let off = Note::new(NoteKind::Off, None, None, Command::default());
+        assert_eq!(cell(off), [0x81, 1]);
+        let full = Note::new(
+            NoteKind::On(NotePitch(60)),
+            Some(3),
+            Some(0x40),
+            "F8C".parse().unwrap(),
+        );
+        assert_eq!(cell(full), [0x9F, 60, 3, 0x40, b'F', 0x8C]);
+        let command_only = Note::new(NoteKind::Empty, None, None, "S10".parse().unwrap());
+        assert_eq!(cell(command_only), [0x98, b'S', 0x10]);
+    }
+
+    #[test]
+    fn cells_round_trip() {
+        let notes = [
+            Note::empty(),
+            Note::new(NoteKind::Off, Some(15), None, Command::default()),
+            Note::new(
+                NoteKind::On(NotePitch(127)),
+                None,
+                Some(0),
+                "I7D".parse().unwrap(),
+            ),
+            Note::new(
+                NoteKind::On(NotePitch(12)),
+                Some(0),
+                Some(0x80),
+                "Y00".parse().unwrap(),
+            ),
+            // a value without a command is kept too
+            Note::new(NoteKind::Empty, None, None, "012".parse().unwrap()),
+        ];
+        for note in notes {
+            assert_eq!(read(&cell(note)).unwrap(), note);
+        }
+    }
+
+    #[test]
+    fn invalid_cells_are_rejected() {
+        let invalid: [&[u8]; 8] = [
+            &[],
+            &[0x00],
+            &[0xA0],
+            &[0x81, 5],
+            &[0x81, 128],
+            &[0x82, 16],
+            &[0x84, 0x81],
+            &[0x88, b'Z'],
+        ];
+        for bytes in invalid {
+            assert!(
+                matches!(read(bytes), Err(MTrakError::InvalidProject(_))),
+                "{bytes:02X?} should be rejected"
+            );
+        }
+        // a flag without its field
+        assert!(read(&[0x83, 60]).is_err());
+    }
     #[test]
     fn empty_and_off_round_trip() {
         assert_eq!(Note::empty().to_string(), constants::EMPTY_NOTE);
