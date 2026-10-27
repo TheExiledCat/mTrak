@@ -4,7 +4,7 @@ use std::{
     io,
 };
 
-use bincode::error::{DecodeError, EncodeError};
+use rmp_serde::{decode::Error as DecodeError, encode::Error as EncodeError};
 
 /// Everything in mTrak that can fail returns this, so errors can be passed up with `?` and
 /// shown to the user in one place.

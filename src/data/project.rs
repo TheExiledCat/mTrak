@@ -9,15 +9,16 @@ use super::{
 use crate::{
     data::{
         midi::{DEFAULT_BPM, DEFAULT_SPEED, MIDI_CHANNEL_MAX},
+        migration::{self, FIRST_MESSAGEPACK_VERSION, PROJECT_VERSION},
         pattern::PatternId,
     },
     error::{MTrakError, Result},
 };
 /// A project file starts with these bytes, then the format version as a little-endian u16,
-/// then the payload's length in bytes as a little-endian u32, then the payload itself.
-/// Reading the version before the payload lets a later version pick how to decode it.
+/// then the payload's length in bytes as a little-endian u32, then the payload itself: the
+/// project as MessagePack, with structs written as maps of field names. Files of an older
+/// version are upgraded by [`migration`] before they're read.
 const PROJECT_HEADER: [u8; 4] = *b"MTRK";
-const PROJECT_VERSION: u16 = 2;
 const VERSION_END: usize = PROJECT_HEADER.len() + 2;
 const LENGTH_END: usize = VERSION_END + 4;
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
@@ -98,7 +99,7 @@ impl Project {
             return Err(MTrakError::InvalidProject("the file is cut short".into()));
         };
         let version = u16::from_le_bytes([header[4], header[5]]);
-        if version != PROJECT_VERSION {
+        if !(FIRST_MESSAGEPACK_VERSION..=PROJECT_VERSION).contains(&version) {
             return Err(MTrakError::UnsupportedProjectVersion {
                 found: version,
                 supported: PROJECT_VERSION,
@@ -108,9 +109,14 @@ impl Project {
         let Some(payload) = bytes[LENGTH_END..].get(..length as usize) else {
             return Err(MTrakError::InvalidProject("the file is cut short".into()));
         };
-        let (project, _): (Project, usize) =
-            bincode::serde::decode_from_slice(payload, bincode::config::standard())?;
-        return Ok(project);
+        let payload = rmpv::decode::read_value(&mut &payload[..])
+            .map_err(|e| MTrakError::InvalidProject(e.to_string()))?;
+        let payload = migration::migrate(payload, version)?;
+        // read the migrated payload back as bytes, so it's decoded exactly like it was encoded
+        let mut bytes = Vec::new();
+        rmpv::encode::write_value(&mut bytes, &payload)
+            .map_err(|e| MTrakError::InvalidProject(e.to_string()))?;
+        return Ok(rmp_serde::from_slice(&bytes)?);
     }
     pub fn song_length(&self) -> usize {
         return self.sequence.iter().map(|s| s.repeats as usize).sum();
@@ -129,7 +135,7 @@ impl Project {
         return Ok(());
     }
     fn encode(&self) -> Result<Vec<u8>> {
-        let payload = bincode::serde::encode_to_vec(self, bincode::config::standard())?;
+        let payload = rmp_serde::to_vec_named(self)?;
         let mut bytes = Vec::with_capacity(LENGTH_END + payload.len());
         bytes.extend_from_slice(&PROJECT_HEADER);
         bytes.extend_from_slice(&PROJECT_VERSION.to_le_bytes());
@@ -199,6 +205,34 @@ mod tests {
     }
 
     #[test]
+    fn notes_and_commands_round_trip() {
+        use crate::data::note::{Note, NoteKind, NotePitch};
+        let note = Note::new(
+            NoteKind::On(NotePitch(60)),
+            Some(3),
+            Some(0x40),
+            "F8C".parse().unwrap(),
+        );
+        let off = Note::new(NoteKind::Off, None, None, Default::default());
+        let mut project = Project::empty();
+        let pattern = project
+            .patterns
+            .get_pattern_by_id_mut(PatternId(0))
+            .unwrap();
+        pattern.set_event(0, 0, note);
+        pattern.set_event(1, 7, off);
+        pattern.channel_mutes[2] = true;
+        project.instruments[3].name = "Bass".into();
+
+        let loaded = Project::decode(&project.encode().unwrap()).unwrap();
+        let pattern = loaded.patterns.get_pattern_by_id(PatternId(0)).unwrap();
+        assert_eq!(pattern.get_event(0, 0), Some(&note));
+        assert_eq!(pattern.get_event(1, 7), Some(&off));
+        assert!(pattern.channel_mutes[2]);
+        assert_eq!(loaded.instruments[3].name, "Bass");
+    }
+
+    #[test]
     fn file_starts_with_header_version_and_payload_length() {
         let bytes = Project::empty().encode().unwrap();
         assert_eq!(&bytes[..4], b"MTRK");
@@ -208,8 +242,9 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_other_versions() {
-        for version in [PROJECT_VERSION - 1, PROJECT_VERSION + 1] {
+    fn decode_rejects_bincode_and_newer_versions() {
+        let bincode_versions = 1..FIRST_MESSAGEPACK_VERSION;
+        for version in bincode_versions.chain([PROJECT_VERSION + 1]) {
             let mut bytes = Project::empty().encode().unwrap();
             bytes[4..6].copy_from_slice(&version.to_le_bytes());
             assert!(matches!(
