@@ -45,7 +45,6 @@ pub enum ClearTarget {
 }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Pattern {
-    pub row_count: u16,
     pub track_count: u8,
     pub rows: Vec<PatternRow>,
     pub channel_mutes: [bool; 16],
@@ -75,24 +74,19 @@ impl PatternRow {
 
 impl Pattern {
     pub fn new(row_count: u16) -> Self {
-        let mut pattern = Pattern {
-            row_count,
+        return Pattern {
             track_count: constants::TRACK_COUNT,
-            rows: Vec::new(),
+            rows: (0..row_count).map(|_| PatternRow::new()).collect(),
             channel_mutes: [false; MIDI_CHANNEL_MAX as usize + 1],
         };
-        pattern.initialize_rows();
-        return pattern;
+    }
+
+    pub fn row_count(&self) -> u16 {
+        return self.rows.len() as u16;
     }
 
     pub fn last_row(&self) -> u8 {
-        return self.row_count.saturating_sub(1) as u8;
-    }
-
-    fn initialize_rows(&mut self) {
-        for _r in 0..self.row_count {
-            self.rows.push(PatternRow::new());
-        }
+        return self.row_count().saturating_sub(1) as u8;
     }
     pub fn get_event(&self, row: usize, track: usize) -> Option<&Note> {
         return self.rows.get(row)?.tracks.get(track);
@@ -122,7 +116,7 @@ impl Pattern {
             track: 0,
             width: self.track_count,
             row: 0,
-            height: self.row_count,
+            height: self.row_count(),
         };
     }
     pub fn track_block(&self, track: u8) -> Block {
@@ -161,12 +155,11 @@ impl Pattern {
 
     /// checks if 2 patterns are equal, that is, they have the same length and notes
     pub fn same_content(&self, other: &Pattern) -> bool {
-        return self.row_count == other.row_count && same_cells(&self.rows, &other.rows);
+        return self.rows.len() == other.rows.len() && same_cells(&self.rows, &other.rows);
     }
 
     // swaps this pattern's length and notes with another pattern's
     pub fn swap_content(&mut self, other: &mut Pattern) {
-        std::mem::swap(&mut self.row_count, &mut other.row_count);
         std::mem::swap(&mut self.rows, &mut other.rows);
     }
     pub fn swap_block(&mut self, block: Block, rows: &mut Vec<PatternRow>) {
@@ -248,24 +241,21 @@ impl Pattern {
     }
 
     pub fn increase_length(&mut self) {
-        self.row_count = (self.row_count + 1).min(MAX_ROWS);
-        self.rows
-            .resize_with(self.row_count as usize, PatternRow::new);
+        self.set_length(self.row_count() + 1);
     }
 
     pub fn set_length(&mut self, row_count: u16) {
-        self.row_count = row_count.clamp(1, MAX_ROWS);
-        self.rows
-            .resize_with(self.row_count as usize, PatternRow::new);
+        let row_count = row_count.clamp(1, MAX_ROWS);
+        self.rows.resize_with(row_count as usize, PatternRow::new);
     }
 
     pub fn decrease_length(&mut self) -> Vec<PatternRow> {
-        self.row_count = self.row_count.saturating_sub(1).max(1);
-        return self.rows.split_off(self.row_count as usize);
+        let row_count = self.row_count().saturating_sub(1).max(1);
+        return self.rows.split_off(row_count as usize);
     }
 
     pub fn shrink(&mut self) -> bool {
-        if self.row_count < 2 {
+        if self.row_count() < 2 {
             return false;
         }
         let mut i = 0;
@@ -279,17 +269,15 @@ impl Pattern {
     }
 
     pub fn expand(&mut self) -> bool {
-        if self.row_count > 0x80 {
+        if self.row_count() > 0x80 {
             return false;
         }
-        let row_count = self.row_count * 2;
-        let mut rows = Vec::with_capacity(row_count as usize);
+        let mut rows = Vec::with_capacity(self.rows.len() * 2);
         for row in self.rows.drain(..) {
             rows.push(row);
             rows.push(PatternRow::new());
         }
         self.rows = rows;
-        self.row_count = row_count;
         return true;
     }
 }
@@ -473,7 +461,7 @@ mod tests {
         pattern.decrease_length();
         pattern.decrease_length();
         pattern.decrease_length();
-        assert_eq!(pattern.row_count, 1);
+        assert_eq!(pattern.row_count(), 1);
         assert_eq!(pattern.rows.len(), 1);
     }
 
@@ -507,7 +495,7 @@ mod tests {
         let mut pattern = Pattern::new(0x80);
         pattern.set_event(0x7F, 0, note());
         assert!(pattern.expand());
-        assert_eq!(pattern.row_count, MAX_ROWS);
+        assert_eq!(pattern.row_count(), MAX_ROWS);
         assert_eq!(pattern.rows.len(), MAX_ROWS as usize);
         assert_eq!(pattern.get_event(0xFE, 0), Some(&note()));
         assert_eq!(pattern.last_row(), 0xFF);
@@ -519,7 +507,7 @@ mod tests {
         let mut pattern = Pattern::new(MAX_ROWS);
         pattern.set_event(0xFE, 0, note());
         assert!(pattern.shrink());
-        assert_eq!(pattern.row_count, 0x80);
+        assert_eq!(pattern.row_count(), 0x80);
         assert_eq!(pattern.rows.len(), 0x80);
         assert_eq!(pattern.get_event(0x7F, 0), Some(&note()));
         let mut single = Pattern::new(1);
@@ -530,7 +518,7 @@ mod tests {
     fn length_is_capped_at_max_rows() {
         let mut pattern = Pattern::new(MAX_ROWS);
         pattern.increase_length();
-        assert_eq!(pattern.row_count, MAX_ROWS);
+        assert_eq!(pattern.row_count(), MAX_ROWS);
         pattern.set_length(0x200);
         assert_eq!(pattern.rows.len(), MAX_ROWS as usize);
     }
@@ -623,7 +611,7 @@ mod tests {
         let expected = other.clone();
         pattern.swap_content(&mut other);
         assert!(pattern.same_content(&expected));
-        assert_eq!(other.row_count, 4);
+        assert_eq!(other.row_count(), 4);
         assert!(pattern.channel_mutes[0]);
         assert!(!other.channel_mutes[0]);
     }

@@ -24,7 +24,7 @@ impl CopyBuffers {
             return;
         }
         let width = 1;
-        let height = pattern.row_count;
+        let height = pattern.row_count();
         let rows: Vec<PatternRow> = pattern
             .rows
             .iter()
@@ -34,7 +34,7 @@ impl CopyBuffers {
     }
     pub fn copy_pattern(&mut self, pattern: &Pattern) {
         let width = pattern.track_count;
-        let height = pattern.row_count;
+        let height = pattern.row_count();
         let rows = pattern.rows.clone();
         self.pattern_buffer = Some(CopyBuffer::new(width, height, rows))
     }
@@ -43,7 +43,7 @@ impl CopyBuffers {
         if rows.is_empty()
             || tracks.is_empty()
             || tracks.end > pattern.track_count as usize
-            || rows.end > pattern.row_count as usize
+            || rows.end > pattern.row_count() as usize
         {
             return;
         }
@@ -77,7 +77,7 @@ impl CopyBuffers {
         let Some(buf) = &self.track_buffer else {
             return;
         };
-        let row_count = pattern.row_count as usize;
+        let row_count = pattern.row_count() as usize;
         buf.rows
             .iter()
             .take(buf.height as usize)
@@ -92,7 +92,7 @@ impl CopyBuffers {
         let Some(buf) = &self.pattern_buffer else {
             return Ok(());
         };
-        if buf.height != pattern.row_count {
+        if buf.height != pattern.row_count() {
             return Err(crate::error::MTrakError::PatternPasteLength {
                 copied_length: buf.height,
             });
@@ -107,7 +107,7 @@ impl CopyBuffers {
             return;
         };
         let track_count = pattern.track_count as usize;
-        for row in 0..pattern.row_count as usize {
+        for row in 0..pattern.row_count() as usize {
             for track in 0..track_count {
                 let event = buf
                     .rows
@@ -125,7 +125,7 @@ impl CopyBuffers {
             return;
         };
 
-        let row_count = pattern.row_count as usize;
+        let row_count = pattern.row_count() as usize;
         let track_count = pattern.track_count as usize;
         let start_row = start_row as usize;
         let start_track = start_track as usize;

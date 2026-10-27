@@ -970,14 +970,14 @@ impl AppState {
     }
     pub fn change_length(&mut self, increase: bool) {
         let (_, pattern) = self.copy_buffers_and_active_pattern_mut();
-        let previous = pattern.row_count;
+        let previous = pattern.row_count();
         let removed_rows = if increase {
             pattern.increase_length();
             Vec::new()
         } else {
             pattern.decrease_length()
         };
-        let new = pattern.row_count;
+        let new = pattern.row_count();
         if new != previous {
             self.track(AppStateAction::ChangeLength {
                 pattern: self.active_pattern,

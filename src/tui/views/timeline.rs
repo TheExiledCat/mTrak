@@ -378,7 +378,7 @@ fn rows_from(state: &AppState, track: u8, width: u8, row: u8) -> pattern::Block 
         track,
         width,
         row,
-        height: state.active_pattern().row_count - row as u16,
+        height: state.active_pattern().row_count() - row as u16,
     };
 }
 
@@ -574,11 +574,11 @@ impl KeyActions for TimeLineView {
     fn perform(&mut self, action: TimelineAction, state: &mut AppState) -> Result<()> {
         match action {
             TimelineAction::RowUp => {
-                let row_count = state.active_pattern().row_count;
+                let row_count = state.active_pattern().row_count();
                 self.row_index = wrap_step(self.row_index, -1, row_count);
             }
             TimelineAction::RowDown => {
-                let row_count = state.active_pattern().row_count;
+                let row_count = state.active_pattern().row_count();
                 self.row_index = wrap_step(self.row_index, 1, row_count);
             }
             TimelineAction::PrevTrack => {
@@ -894,7 +894,7 @@ impl TimeLineView {
         });
     }
     fn advance(&mut self, state: &AppState) {
-        let row_count = state.active_pattern().row_count;
+        let row_count = state.active_pattern().row_count();
         self.row_index = wrap_step(self.row_index, state.line_add as i32, row_count);
     }
     /// Edits the event under the cursor, then moves down by the line add like entering a note.
@@ -1377,10 +1377,10 @@ impl MtrakWidget for TimeLineView {
         let rows_height = layout[0].height.saturating_sub(rows_top_offset(state));
 
         if sides.on_left() {
-            self.render_line_numbers(state, pattern.row_count, rows_height, layout[1], buf);
+            self.render_line_numbers(state, pattern.row_count(), rows_height, layout[1], buf);
         }
         if sides.on_right() {
-            self.render_line_numbers(state, pattern.row_count, rows_height, layout[3], buf);
+            self.render_line_numbers(state, pattern.row_count(), rows_height, layout[3], buf);
         }
         for track_index in 0..pattern.track_count as usize {
             self.render_track(
@@ -1394,7 +1394,7 @@ impl MtrakWidget for TimeLineView {
         if let Some(y) = self.pattern_start_y(rows_top, rows_height) {
             self.render_pattern_boundary_line(state, area.width, y, buf);
         }
-        if let Some(y) = self.pattern_end_y(pattern.row_count, rows_top, rows_height) {
+        if let Some(y) = self.pattern_end_y(pattern.row_count(), rows_top, rows_height) {
             self.render_pattern_boundary_line(state, area.width, y, buf);
         }
     }
@@ -1527,10 +1527,10 @@ mod tests {
         state.edit_pattern(|_, pattern| pattern.set_length(32));
         for _ in 0..2 {
             undo(&mut state, &mut view);
-            assert_eq!(state.active_pattern().row_count, 64);
+            assert_eq!(state.active_pattern().row_count(), 64);
             assert!(has_note(&state, 0, 0));
             redo(&mut state, &mut view);
-            assert_eq!(state.active_pattern().row_count, 32);
+            assert_eq!(state.active_pattern().row_count(), 32);
             assert!(has_note(&state, 0, 0));
         }
     }

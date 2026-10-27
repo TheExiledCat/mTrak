@@ -85,7 +85,7 @@ impl PatternInfo {
             ),
             format!(
                 "LEN: {:02X} {}/{} DN/UP",
-                state.active_pattern().row_count,
+                state.active_pattern().row_count(),
                 bindings.key_text(PatternLengthDown),
                 bindings.key_text(PatternLengthUp)
             ),

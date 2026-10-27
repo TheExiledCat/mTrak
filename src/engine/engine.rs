@@ -455,7 +455,7 @@ impl MtrakEngine {
         let row_count = |id: PatternId| {
             self.patterns
                 .get(id.0 as usize)
-                .map_or(0, |p| p.row_count as usize)
+                .map_or(0, |p| p.row_count() as usize)
         };
         let total: usize = self
             .sequence
@@ -527,7 +527,7 @@ impl MtrakEngine {
         let rows = self
             .patterns
             .get(id.0 as usize)
-            .map_or(0, |p| p.row_count as usize);
+            .map_or(0, |p| p.row_count() as usize);
         if rows == 0 {
             return;
         }
@@ -746,7 +746,7 @@ impl MtrakEngine {
         let row_count = self
             .patterns
             .get(next.pattern.0 as usize)
-            .map_or(0, |p| p.row_count as usize);
+            .map_or(0, |p| p.row_count() as usize);
         if next.row < row_count {
             return Some(next);
         }
@@ -782,7 +782,7 @@ impl MtrakEngine {
         let rows = |id: PatternId| {
             self.patterns
                 .get(id.0 as usize)
-                .map_or(0, |p| p.row_count as usize)
+                .map_or(0, |p| p.row_count() as usize)
         };
         if matches!(self.mode, PlayMode::PatternLoop | PlayMode::Pattern) {
             return rows(self.position.pattern);
