@@ -1,8 +1,4 @@
-use std::{
-    fs::File,
-    io::{Read, Write},
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -17,8 +13,13 @@ use crate::{
     },
     error::{MTrakError, Result},
 };
+/// A project file starts with these bytes, then the format version as a little-endian u16,
+/// then the payload's length in bytes as a little-endian u32, then the payload itself.
+/// Reading the version before the payload lets a later version pick how to decode it.
 const PROJECT_HEADER: [u8; 4] = *b"MTRK";
-const PROJECT_VERSION: u16 = 1;
+const PROJECT_VERSION: u16 = 2;
+const VERSION_END: usize = PROJECT_HEADER.len() + 2;
+const LENGTH_END: usize = VERSION_END + 4;
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct SequenceRow {
     pub pattern_id: PatternId,
@@ -44,7 +45,6 @@ impl SequenceRow {
 }
 #[derive(Serialize, Deserialize)]
 pub struct Project {
-    pub version: u16,
     pub name: Option<String>,
     pub bpm: u8,
     /// Ticks per row, so how many rows play per beat: 6 is 4 rows per beat.
@@ -64,7 +64,6 @@ pub struct Project {
 impl Project {
     pub fn empty() -> Self {
         return Project {
-            version: PROJECT_VERSION,
             name: None,
             bpm: DEFAULT_BPM,
             speed: DEFAULT_SPEED,
@@ -84,28 +83,33 @@ impl Project {
         };
     }
     pub fn load(project_file_path: PathBuf) -> Result<Self> {
-        let mut file = File::open(&project_file_path)?;
-        if file.metadata()?.len() < PROJECT_HEADER.len() as u64 {
+        return Self::decode(&std::fs::read(project_file_path)?);
+    }
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.is_empty() {
             return Err(MTrakError::InvalidProject("the file is empty".into()));
         }
-        let mut magic = [0u8; 4];
-        file.read_exact(&mut magic)?;
-        if magic != PROJECT_HEADER {
+        if !bytes.starts_with(&PROJECT_HEADER) {
             return Err(MTrakError::InvalidProject(
                 "the file has no mTrak header".into(),
             ));
         }
-
-        let mut project_content: Vec<u8> = Vec::new();
-        file.read_to_end(&mut project_content)?;
-        let (project, _): (Project, usize) =
-            bincode::serde::decode_from_slice(&project_content, bincode::config::standard())?;
-        if project.version > PROJECT_VERSION {
+        let Some(header) = bytes.get(..LENGTH_END) else {
+            return Err(MTrakError::InvalidProject("the file is cut short".into()));
+        };
+        let version = u16::from_le_bytes([header[4], header[5]]);
+        if version != PROJECT_VERSION {
             return Err(MTrakError::UnsupportedProjectVersion {
-                found: project.version,
+                found: version,
                 supported: PROJECT_VERSION,
             });
         }
+        let length = u32::from_le_bytes(header[VERSION_END..LENGTH_END].try_into().unwrap());
+        let Some(payload) = bytes[LENGTH_END..].get(..length as usize) else {
+            return Err(MTrakError::InvalidProject("the file is cut short".into()));
+        };
+        let (project, _): (Project, usize) =
+            bincode::serde::decode_from_slice(payload, bincode::config::standard())?;
         return Ok(project);
     }
     pub fn song_length(&self) -> usize {
@@ -121,10 +125,18 @@ impl Project {
         );
     }
     pub fn save(&mut self, file_path: PathBuf) -> Result<()> {
-        let mut file = File::create(file_path)?;
-        file.write_all(&PROJECT_HEADER)?;
-        bincode::serde::encode_into_std_write(self, &mut file, bincode::config::standard())?;
+        std::fs::write(file_path, self.encode()?)?;
         return Ok(());
+    }
+    fn encode(&self) -> Result<Vec<u8>> {
+        let payload = bincode::serde::encode_to_vec(self, bincode::config::standard())?;
+        let mut bytes = Vec::with_capacity(LENGTH_END + payload.len());
+        bytes.extend_from_slice(&PROJECT_HEADER);
+        bytes.extend_from_slice(&PROJECT_VERSION.to_le_bytes());
+        // a project is a few MB at most, far below u32::MAX
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&payload);
+        return Ok(bytes);
     }
 
     pub fn delete_sequence(&mut self, sequence_index: usize) -> usize {
@@ -183,7 +195,38 @@ mod tests {
         }
         assert!(matches!(results[0], Err(MTrakError::InvalidProject(_))));
         assert!(matches!(results[1], Err(MTrakError::InvalidProject(_))));
-        assert!(matches!(results[2], Err(MTrakError::Decode(_))));
+        assert!(matches!(results[2], Err(MTrakError::InvalidProject(_))));
+    }
+
+    #[test]
+    fn file_starts_with_header_version_and_payload_length() {
+        let bytes = Project::empty().encode().unwrap();
+        assert_eq!(&bytes[..4], b"MTRK");
+        assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), PROJECT_VERSION);
+        let length = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
+        assert_eq!(length as usize, bytes.len() - LENGTH_END);
+    }
+
+    #[test]
+    fn decode_rejects_other_versions() {
+        for version in [PROJECT_VERSION - 1, PROJECT_VERSION + 1] {
+            let mut bytes = Project::empty().encode().unwrap();
+            bytes[4..6].copy_from_slice(&version.to_le_bytes());
+            assert!(matches!(
+                Project::decode(&bytes),
+                Err(MTrakError::UnsupportedProjectVersion { found, .. }) if found == version
+            ));
+        }
+    }
+
+    #[test]
+    fn decode_rejects_a_payload_shorter_than_its_length() {
+        let mut bytes = Project::empty().encode().unwrap();
+        bytes.pop();
+        assert!(matches!(
+            Project::decode(&bytes),
+            Err(MTrakError::InvalidProject(_))
+        ));
     }
 
     #[test]
