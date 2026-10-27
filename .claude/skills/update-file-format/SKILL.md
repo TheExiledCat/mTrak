@@ -95,7 +95,8 @@ Match the existing doc:
   them, don't copy old ones.
 - Every link must resolve, including those in archived copies.
 - Run `cargo test` if the change touched code, and mention any failures rather than editing
-  the doc around them.
+  the doc around them. A format change also needs the test projects updated: run the
+  `update-test-projects` skill.
 
 Finish with a short summary of what changed in the doc, whether a version was archived, and
 anything in the code that looked inconsistent, such as a saved field changed without a
