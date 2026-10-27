@@ -2,15 +2,12 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::{
-    instrument::Instrument,
-    pattern::{Pattern, PatternStore},
-};
 use crate::{
     data::{
+        instrument::Instrument,
         midi::{DEFAULT_BPM, DEFAULT_SPEED, MIDI_CHANNEL_MAX},
         migration::{self, FIRST_MESSAGEPACK_VERSION, PROJECT_VERSION},
-        pattern::PatternId,
+        pattern::{Pattern, PatternId, PatternStore},
     },
     error::{MTrakError, Result},
 };
@@ -113,10 +110,13 @@ impl Project {
         };
         let payload = rmpv::decode::read_value(&mut &payload[..])
             .map_err(|e| MTrakError::InvalidProject(e.to_string()))?;
-        let payload = migration::migrate(payload, version)?;
-        // read the migrated payload back as bytes, so it's decoded exactly like it was encoded
+        return Self::from_payload(&migration::migrate(payload, version)?);
+    }
+    /// Reads a migrated payload into a project. It's written back to bytes first, so it's read
+    /// by the same code that writes projects.
+    fn from_payload(payload: &rmpv::Value) -> Result<Self> {
         let mut bytes = Vec::new();
-        rmpv::encode::write_value(&mut bytes, &payload)
+        rmpv::encode::write_value(&mut bytes, payload)
             .map_err(|e| MTrakError::InvalidProject(e.to_string()))?;
         return Ok(rmp_serde::from_slice(&bytes)?);
     }

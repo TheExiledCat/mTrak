@@ -2,15 +2,22 @@ use std::{ops::Range, sync::Arc};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
-use super::note::Note;
 use crate::{
-    data::{midi::MIDI_CHANNEL_MAX, note::NoteKind},
+    data::{
+        midi::MIDI_CHANNEL_MAX,
+        note::{Note, NoteKind},
+    },
     error::{MTrakError, Result},
     tui::constants,
 };
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PatternId(pub u8);
 pub const MAX_ROWS: u16 = 0x100;
+
+/// The error for a saved pattern that can't be read.
+pub fn invalid_pattern(what: String) -> MTrakError {
+    return MTrakError::InvalidProject(format!("a pattern has {what}"));
+}
 
 pub fn same_cells(a: &[PatternRow], b: &[PatternRow]) -> bool {
     return a.iter().map(|r| &r.tracks).eq(b.iter().map(|r| &r.tracks));
@@ -311,24 +318,25 @@ impl TryFrom<SavedPattern> for Pattern {
     type Error = MTrakError;
 
     fn try_from(saved: SavedPattern) -> Result<Self> {
-        let invalid = |what: String| MTrakError::InvalidProject(format!("a pattern has {what}"));
         if saved.track_count != constants::TRACK_COUNT {
-            return Err(invalid(format!("{} tracks", saved.track_count)));
+            return Err(invalid_pattern(format!("{} tracks", saved.track_count)));
         }
         if !(1..=MAX_ROWS).contains(&saved.row_count) {
-            return Err(invalid(format!("{} rows", saved.row_count)));
+            return Err(invalid_pattern(format!("{} rows", saved.row_count)));
         }
         let mut cells = &saved.cells[..];
-        let rows = (0..saved.row_count)
-            .map(|_| {
-                let tracks = (0..saved.track_count)
-                    .map(|_| Note::read_cell(&mut cells))
-                    .collect::<Result<Vec<Note>>>()?;
-                return Ok(PatternRow::with_tracks(tracks));
-            })
-            .collect::<Result<Vec<PatternRow>>>()?;
+        let mut rows = Vec::with_capacity(saved.row_count as usize);
+        for _ in 0..saved.row_count {
+            let mut tracks = Vec::with_capacity(saved.track_count as usize);
+            for _ in 0..saved.track_count {
+                tracks.push(Note::read_cell(&mut cells)?);
+            }
+            rows.push(PatternRow::with_tracks(tracks));
+        }
         if !cells.is_empty() {
-            return Err(invalid("more cells than its rows and tracks hold".into()));
+            return Err(invalid_pattern(
+                "more cells than its rows and tracks hold".into(),
+            ));
         }
         return Ok(Pattern {
             track_count: saved.track_count,

@@ -4,8 +4,9 @@ use crate::{
     data::{
         effect::{Command, CommandKind},
         midi::{MIDI_CHANNEL_MAX, VOLUME_MAX},
+        pattern::invalid_pattern,
     },
-    error::{MTrakError, Result},
+    error::Result,
     tui::constants::{self},
 };
 
@@ -102,43 +103,43 @@ impl Note {
                 (self.command.value != 0).then_some(self.command.value),
             ),
         ];
-        let flags = fields
-            .iter()
-            .filter(|(_, field)| field.is_some())
-            .fold(CELL, |flags, (flag, _)| flags | flag);
-        bytes.push(flags);
-        bytes.extend(fields.iter().filter_map(|(_, field)| *field));
+        let flags_index = bytes.len();
+        bytes.push(CELL);
+        for (flag, field) in fields {
+            let Some(field) = field else {
+                continue;
+            };
+            bytes[flags_index] |= flag;
+            bytes.push(field);
+        }
     }
 
     /// Reads a cell written by [`Note::write_cell`] off the front of `bytes`.
     pub fn read_cell(bytes: &mut &[u8]) -> Result<Note> {
         let flags = take_byte(bytes)?;
         if flags & CELL == 0 || flags & !CELL_FLAGS != 0 {
-            return Err(invalid_cell(format!("an unknown flag byte {flags:02X}")));
+            return Err(invalid_pattern(format!("an unknown flag byte {flags:02X}")));
         }
-        let mut field = |flag: u8| -> Result<Option<u8>> {
-            return (flags & flag != 0).then(|| take_byte(bytes)).transpose();
-        };
-        let kind = match field(CELL_NOTE)? {
+        let kind = match take_field(bytes, flags, CELL_NOTE)? {
             None => NoteKind::Empty,
             Some(CELL_NOTE_OFF) => NoteKind::Off,
             Some(pitch @ NotePitch::MIN..=NotePitch::MAX) => NoteKind::On(NotePitch(pitch)),
-            Some(note) => return Err(invalid_cell(format!("note {note}"))),
+            Some(note) => return Err(invalid_pattern(format!("note {note}"))),
         };
-        let instrument_id = field(CELL_INSTRUMENT)?;
+        let instrument_id = take_field(bytes, flags, CELL_INSTRUMENT)?;
         if let Some(instrument) = instrument_id.filter(|&i| i > MIDI_CHANNEL_MAX) {
-            return Err(invalid_cell(format!("instrument {instrument}")));
+            return Err(invalid_pattern(format!("instrument {instrument}")));
         }
-        let velocity = field(CELL_VOLUME)?;
+        let velocity = take_field(bytes, flags, CELL_VOLUME)?;
         if let Some(volume) = velocity.filter(|&v| v > VOLUME_MAX) {
-            return Err(invalid_cell(format!("volume {volume}")));
+            return Err(invalid_pattern(format!("volume {volume}")));
         }
-        let command = match field(CELL_COMMAND)? {
+        let command = match take_field(bytes, flags, CELL_COMMAND)? {
             None => CommandKind::None,
             Some(letter) => CommandKind::from_char(letter as char)
-                .map_err(|_| invalid_cell(format!("command {:?}", letter as char)))?,
+                .map_err(|_| invalid_pattern(format!("command {:?}", letter as char)))?,
         };
-        let value = field(CELL_VALUE)?.unwrap_or(0);
+        let value = take_field(bytes, flags, CELL_VALUE)?.unwrap_or(0);
         return Ok(Note::new(
             kind,
             instrument_id,
@@ -149,15 +150,19 @@ impl Note {
 }
 
 fn take_byte(bytes: &mut &[u8]) -> Result<u8> {
-    let (&byte, rest) = bytes
-        .split_first()
-        .ok_or_else(|| invalid_cell("cells that are cut short".into()))?;
+    let Some((&byte, rest)) = bytes.split_first() else {
+        return Err(invalid_pattern("cells that are cut short".into()));
+    };
     *bytes = rest;
     return Ok(byte);
 }
 
-fn invalid_cell(what: String) -> MTrakError {
-    return MTrakError::InvalidProject(format!("a pattern has {what}"));
+/// Takes a cell's field off the front of `bytes` if its flag is set.
+fn take_field(bytes: &mut &[u8], flags: u8, flag: u8) -> Result<Option<u8>> {
+    if flags & flag == 0 {
+        return Ok(None);
+    }
+    return take_byte(bytes).map(Some);
 }
 
 impl Display for Note {
@@ -204,6 +209,7 @@ impl Display for NotePitch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::MTrakError;
 
     fn cell(note: Note) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -265,8 +271,9 @@ mod tests {
 
     #[test]
     fn invalid_cells_are_rejected() {
-        let invalid: [&[u8]; 8] = [
+        let invalid: [&[u8]; 9] = [
             &[],
+            &[0x83, 60],
             &[0x00],
             &[0xA0],
             &[0x81, 5],
@@ -281,8 +288,6 @@ mod tests {
                 "{bytes:02X?} should be rejected"
             );
         }
-        // a flag without its field
-        assert!(read(&[0x83, 60]).is_err());
     }
     #[test]
     fn empty_and_off_round_trip() {

@@ -32,19 +32,20 @@ pub fn migrate(payload: Value, version: u16) -> Result<Value> {
 }
 
 fn migrate_with(
-    payload: Value,
+    mut payload: Value,
     version: u16,
     current: u16,
     migrations: &[(u16, Migration)],
 ) -> Result<Value> {
-    return (version..current).try_fold(payload, |payload, version| {
+    for version in version..current {
         let Some((_, migration)) = migrations.iter().find(|(from, _)| *from == version) else {
             return Err(MTrakError::InvalidProject(format!(
                 "there's no way to upgrade a version {version} project"
             )));
         };
-        return migration(payload);
-    });
+        payload = migration(payload)?;
+    }
+    return Ok(payload);
 }
 
 #[cfg(test)]
@@ -94,6 +95,10 @@ mod tests {
     const TEST_MIGRATIONS: &[(u16, Migration)] = &[(V, rename_tempo_to_bpm), (V + 1, add_speed)];
 
     #[test]
+    #[allow(
+        clippy::reversed_empty_ranges,
+        reason = "empty until the first migration"
+    )]
     fn every_version_before_the_current_one_has_a_migration() {
         for version in FIRST_MESSAGEPACK_VERSION..PROJECT_VERSION {
             let count = MIGRATIONS
