@@ -24,6 +24,8 @@ use crate::{
 
 pub struct PatternInfo {
     keymap: Keymap<PatternInfoAction>,
+    /// The FIGlet title, rendered once since parsing the font is costly.
+    title: String,
 }
 
 impl PatternInfo {
@@ -58,7 +60,11 @@ impl PatternInfo {
                 PatternLengthDown,
                 "LEN DN",
             );
-        return Self { keymap };
+        let title = FIGlet::small()
+            .ok()
+            .and_then(|font| font.convert(TITLE).map(|figure| figure.to_string()))
+            .unwrap_or_else(|| TITLE.to_owned());
+        return Self { keymap, title };
     }
 
     /// The pattern lines plus their left padding.
@@ -116,11 +122,7 @@ impl Collapsible for PatternInfo {
         let vertical_layout =
             Layout::vertical([Constraint::Fill(1), Constraint::Max(3)]).split(area);
 
-        let title = FIGlet::small()
-            .ok()
-            .and_then(|font| font.convert(TITLE).map(|figure| figure.to_string()))
-            .unwrap_or_else(|| TITLE.to_owned());
-        Paragraph::new(title)
+        Paragraph::new(self.title.as_str())
             .centered()
             .style(state.theme.heading)
             .block(

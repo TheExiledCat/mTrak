@@ -53,7 +53,8 @@ pub struct Pattern {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PatternRow {
     pub tracks: Vec<Note>,
-    pub dirty: bool,
+    /// Unused, kept so saved projects keep their layout.
+    dirty: bool,
 }
 impl Default for PatternRow {
     fn default() -> Self {
@@ -65,7 +66,7 @@ impl PatternRow {
     pub fn new() -> Self {
         return Self {
             tracks: std::iter::repeat_n(Note::empty(), constants::TRACK_COUNT as usize).collect(),
-            dirty: true,
+            dirty: false,
         };
     }
     pub fn with_tracks(track_cells: Vec<Note>) -> Self {
@@ -105,7 +106,6 @@ impl Pattern {
         if let Some(row_data) = self.rows.get_mut(row) {
             if track < row_data.tracks.len() {
                 row_data.tracks[track] = event;
-                row_data.dirty = true;
             }
         }
     }
@@ -118,7 +118,6 @@ impl Pattern {
         }
         for r in (row + 1..self.rows.len()).rev() {
             self.rows[r].tracks[track] = self.rows[r - 1].tracks[track];
-            self.rows[r].dirty = true;
         }
         self.set_event(row, track, Note::empty());
     }
@@ -173,9 +172,6 @@ impl Pattern {
     pub fn swap_content(&mut self, other: &mut Pattern) {
         std::mem::swap(&mut self.row_count, &mut other.row_count);
         std::mem::swap(&mut self.rows, &mut other.rows);
-        for row in &mut self.rows {
-            row.dirty = true;
-        }
     }
     pub fn swap_block(&mut self, block: Block, rows: &mut Vec<PatternRow>) {
         let current = self.read_block(block);
@@ -231,9 +227,6 @@ impl Pattern {
         }
         self.rows.pop();
         self.rows.insert(row, PatternRow::new());
-        for r in &mut self.rows[row..] {
-            r.dirty = true;
-        }
     }
 
     /// Removes the event at `row` in `track`, pulling the rest of the track up one row.
@@ -244,7 +237,6 @@ impl Pattern {
         }
         for r in row..self.rows.len() - 1 {
             self.rows[r].tracks[track] = self.rows[r + 1].tracks[track];
-            self.rows[r].dirty = true;
         }
         self.set_event(self.rows.len() - 1, track, Note::empty());
     }
@@ -257,9 +249,6 @@ impl Pattern {
         }
         self.rows.remove(row);
         self.rows.push(PatternRow::new());
-        for r in &mut self.rows[row..] {
-            r.dirty = true;
-        }
     }
 
     pub fn increase_length(&mut self) {
@@ -364,12 +353,10 @@ mod tests {
     }
 
     #[test]
-    fn set_event_marks_row_dirty() {
+    fn set_event_writes_the_cell() {
         let mut pattern = Pattern::new(4);
-        pattern.rows[2].dirty = false;
         pattern.set_event(2, 1, note());
         assert_eq!(pattern.get_event(2, 1), Some(&note()));
-        assert!(pattern.rows[2].dirty);
     }
 
     #[test]
@@ -426,16 +413,12 @@ mod tests {
         pattern.set_event(0, 0, note());
         pattern.set_event(2, 0, note());
         pattern.set_event(0, 1, note());
-        for row in &mut pattern.rows {
-            row.dirty = false;
-        }
         pattern.insert_event(0, 0);
         assert_eq!(pattern.get_event(0, 0), Some(&Note::empty()));
         assert_eq!(pattern.get_event(1, 0), Some(&note()));
         // the event on the last row is pushed out
         assert_eq!(pattern.get_event(2, 0), Some(&Note::empty()));
         assert_eq!(pattern.get_event(0, 1), Some(&note()));
-        assert!(pattern.rows.iter().all(|row| row.dirty));
     }
 
     #[test]
@@ -458,15 +441,11 @@ mod tests {
         pattern.set_event(1, 0, note());
         pattern.set_event(2, 0, note());
         pattern.set_event(2, 1, note());
-        for row in &mut pattern.rows {
-            row.dirty = false;
-        }
         pattern.delete_event(0, 0);
         assert_eq!(pattern.get_event(0, 0), Some(&note()));
         assert_eq!(pattern.get_event(1, 0), Some(&note()));
         assert_eq!(pattern.get_event(2, 0), Some(&Note::empty()));
         assert_eq!(pattern.get_event(2, 1), Some(&note()));
-        assert!(pattern.rows.iter().all(|row| row.dirty));
     }
 
     #[test]

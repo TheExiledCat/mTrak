@@ -1,7 +1,4 @@
-use std::{
-    cell::RefCell,
-    iter::{self, repeat_n},
-};
+use std::iter::{self, repeat_n};
 
 use ratatui::{
     buffer::Buffer,
@@ -444,8 +441,8 @@ impl TimelineColumnLocation {
     }
 }
 pub struct TimeLineView {
-    /// render cache for storing pattern tracks efficiently, maps pattern IDs to tracks
-    track_cache: RefCell<TrackCache>,
+    /// the active pattern's cells as text, so rendering doesn't format every note each frame
+    track_cache: TrackCache,
     row_index: u8,
     column_index: u8,
     track_index: u8,
@@ -456,11 +453,9 @@ pub struct TimeLineView {
     row_lock: bool,
 }
 impl TimeLineView {
-    pub fn new(state: &AppState) -> Self {
-        let patterns = &state.project().patterns;
-        let track_cache = TrackCache::new(patterns.get_patterns());
+    pub fn new() -> Self {
         return Self {
-            track_cache: RefCell::new(track_cache),
+            track_cache: TrackCache::new(),
             row_index: 0,
             track_index: 0,
             column_index: 0,
@@ -508,9 +503,6 @@ impl TimeLineView {
         state.edit_block(block, |_, pattern| {
             pattern.transpose(block, instrument, delta)
         });
-        for row in block.rows() {
-            self.refresh_row(state, row);
-        }
         if cell_only {
             self.play_cell(state, instrument);
         }
@@ -556,7 +548,7 @@ impl TimeLineView {
                             NotePitch::new(note),
                             vel,
                         );
-                        self.refresh_row_and_advance(state, self.row_index as usize);
+                        self.advance(state);
                     }
                 }
                 midi::Message::NoteOff(_, note, _) | midi::Message::NoteOn(_, note, 0) => {
@@ -686,7 +678,6 @@ impl KeyActions for TimeLineView {
                 state.edit_block(rows_from(state, track, 1, row), |_, pattern| {
                     pattern.delete_event(row as usize, track as usize)
                 });
-                self.refresh_rows_from(state, row as usize);
                 self.row_index = row;
             }
             TimelineAction::DeletePreviousLine => {
@@ -696,7 +687,6 @@ impl KeyActions for TimeLineView {
                 state.edit_block(all_tracks_from(state, row), |_, pattern| {
                     pattern.delete_line(row as usize)
                 });
-                self.refresh_rows_from(state, row as usize);
                 self.row_index = row;
             }
             TimelineAction::InsertNote => {
@@ -704,20 +694,17 @@ impl KeyActions for TimeLineView {
                 state.edit_block(rows_from(state, track, 1, row), |_, pattern| {
                     pattern.insert_event(row as usize, track as usize)
                 });
-                self.refresh_rows_from(state, row as usize);
             }
             TimelineAction::InsertLine => {
                 let row = self.row_index;
                 state.edit_block(all_tracks_from(state, row), |_, pattern| {
                     pattern.insert_line(row as usize)
                 });
-                self.refresh_rows_from(state, row as usize);
             }
             TimelineAction::CutTrack => {
                 let track = self.track_index;
                 let block = state.active_pattern().track_block(track);
                 state.edit_block(block, |buffers, pattern| buffers.cut_track(pattern, track));
-                self.refresh_rows_from(state, 0);
                 state.notify("TRCK CUT");
             }
             TimelineAction::CopyTrack => {
@@ -731,13 +718,11 @@ impl KeyActions for TimeLineView {
                 state.edit_block(block, |buffers, pattern| {
                     buffers.paste_track(pattern, track)
                 });
-                self.refresh_rows_from(state, 0);
                 state.notify("TRCK PASTE");
             }
             TimelineAction::CutPattern => {
                 let block = state.active_pattern().block();
                 state.edit_block(block, |buffers, pattern| buffers.cut_pattern(pattern));
-                self.refresh_rows_from(state, 0);
                 state.notify("PTN CUT");
             }
             TimelineAction::CopyPattern => {
@@ -753,7 +738,6 @@ impl KeyActions for TimeLineView {
                         open_paste_length_dialog(state, row_count, copied_length);
                     }
                     result => {
-                        self.refresh_rows_from(state, 0);
                         state.notify("PTN PASTE");
                         result?;
                     }
@@ -771,7 +755,6 @@ impl KeyActions for TimeLineView {
                 };
                 state.edit_block(block, |buffers, pattern| buffers.cut_block(pattern, block));
                 self.block_anchor = None;
-                self.refresh_rows_from(state, 0);
 
                 state.notify("BLCK CUT");
             }
@@ -790,7 +773,6 @@ impl KeyActions for TimeLineView {
                     buffers.paste_block(pattern, track, row)
                 });
                 self.block_anchor = None;
-                self.refresh_rows_from(state, 0);
                 state.notify("BLCK PASTE");
             }
             TimelineAction::Transpose {
@@ -911,8 +893,7 @@ impl TimeLineView {
             height: anchor_row.abs_diff(cursor_row) as u16 + 1,
         });
     }
-    fn refresh_row_and_advance(&mut self, state: &mut AppState, row: usize) {
-        self.refresh_row(state, row);
+    fn advance(&mut self, state: &AppState) {
         let row_count = state.active_pattern().row_count;
         self.row_index = wrap_step(self.row_index, state.line_add as i32, row_count);
     }
@@ -920,15 +901,7 @@ impl TimeLineView {
     fn edit_and_advance(&mut self, state: &mut AppState, edit: impl FnOnce(&mut Note)) {
         let row = self.row_index as usize;
         state.edit_event(row, self.track_index as usize, edit);
-        self.refresh_row_and_advance(state, row);
-    }
-    fn refresh_rows_from(&mut self, state: &mut AppState, row: usize) {
-        for row in row..state.active_pattern().row_count as usize {
-            self.refresh_row(state, row);
-        }
-    }
-    fn refresh_row(&mut self, state: &mut AppState, row: usize) {
-        state.refresh_track_cache_row(&mut self.track_cache.borrow_mut(), row);
+        self.advance(state);
     }
 
     fn enter_note(&mut self, state: &mut AppState, key: KeyEvent) -> bool {
@@ -939,7 +912,7 @@ impl TimeLineView {
         {
             return false;
         }
-        self.refresh_row_and_advance(state, row);
+        self.advance(state);
         return true;
     }
     fn enter_instrument(&mut self, state: &mut AppState, instrument: u8) -> bool {
@@ -951,7 +924,7 @@ impl TimeLineView {
             self.row_index as usize,
             instrument,
         );
-        self.refresh_row_and_advance(state, self.row_index as usize);
+        self.advance(state);
         return true;
     }
     fn enter_volume(&mut self, state: &mut AppState, digits: [char; 2]) -> bool {
@@ -965,7 +938,7 @@ impl TimeLineView {
         let (track, row) = (self.track_index as usize, self.row_index as usize);
         state.enter_volume(track, row, volume.min(VOLUME_MAX));
         self.preview_cell(state, track, row);
-        self.refresh_row_and_advance(state, row);
+        self.advance(state);
         return true;
     }
     /// Plays the cell's note at its volume, unless playback is running.
@@ -993,20 +966,17 @@ impl TimeLineView {
         };
 
         state.enter_command(self.track_index as usize, self.row_index as usize, command);
-        self.refresh_row_and_advance(state, self.row_index as usize);
+        self.advance(state);
         return true;
     }
     /// In edit mode, a hex digit replaces the column under the cursor in the selected cell.
     fn enter_note_digit(&mut self, state: &mut AppState, digit: char) -> bool {
-        let line = &self
-            .track_cache
-            .borrow()
-            .get_row(state.active_pattern, self.row_index as usize)
-            .tracks[self.track_index as usize]
-            .spans[0]
-            .content
-            .as_ref()
-            .to_owned();
+        let line = state
+            .active_pattern()
+            .get_event(self.row_index as usize, self.track_index as usize)
+            .copied()
+            .unwrap_or_else(Note::empty)
+            .to_string();
         let digit = digit.to_ascii_uppercase();
         let char_index = column_index_to_note_string_index(self.column_index as usize);
         let mut chars: Vec<char> = line.chars().map(|c| c.to_ascii_uppercase()).collect();
@@ -1145,8 +1115,7 @@ impl TimeLineView {
                 .render(track_layout[0], buf);
         }
 
-        let cache = self.track_cache.borrow();
-        let mut rows = cache.get_all_rows_for_track(state.active_pattern, track_index as usize);
+        let mut rows = self.track_cache.track_lines(track_index as usize);
         if !state.config.show_dashes {
             for row in rows.iter_mut() {
                 *row = Line::from(without_dashes(&row.to_string()));
@@ -1256,10 +1225,6 @@ impl MtrakWidget for TimeLineView {
         if let Some((option, target, instrument)) = state.take_clear_request() {
             self.clear(state, option, target, instrument);
         }
-        self.track_cache
-            .borrow_mut()
-            .sync_pattern(state.active_pattern, state.active_pattern());
-        self.refresh_rows_from(state, 0);
         let jump = state.take_cursor_jump();
         let status = state.engine.status();
         let mode = status.play_mode();
@@ -1370,9 +1335,7 @@ impl MtrakWidget for TimeLineView {
         let pattern = pattern_store
             .get_pattern_by_id(state.active_pattern)
             .unwrap();
-        self.track_cache
-            .borrow_mut()
-            .sync_pattern(state.active_pattern, pattern);
+        self.track_cache.sync(state.active_pattern, pattern);
         self.row_index = self.row_index.min(pattern.last_row());
         buf.set_style(area, state.theme.surface);
         let top_bottom = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
@@ -1444,7 +1407,7 @@ mod tests {
 
     fn editor() -> (AppState, TimeLineView) {
         let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
-        let mut view = TimeLineView::new(&state);
+        let mut view = TimeLineView::new();
         view.is_editing = true;
         return (state, view);
     }
