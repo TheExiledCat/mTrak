@@ -31,7 +31,7 @@ pub enum EngineCommand {
     /// While playing the song, jumps to the start of a sequence position on the next row.
     JumpToSequence(usize),
     Stop,
-    SetPattern(PatternId, Pattern),
+    SetPattern(PatternId, Arc<Pattern>),
     SetSequence(Vec<SequenceRow>),
     SetBpm(u8),
     SetSpeed(u8),
@@ -187,7 +187,7 @@ impl EngineHandle {
     pub fn stop(&self) {
         self.send(EngineCommand::Stop);
     }
-    pub fn set_pattern(&self, id: PatternId, pattern: Pattern) {
+    pub fn set_pattern(&self, id: PatternId, pattern: Arc<Pattern>) {
         self.send(EngineCommand::SetPattern(id, pattern));
     }
     pub fn set_sequence(&self, sequence: Vec<SequenceRow>) {

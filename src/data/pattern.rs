@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 
@@ -303,27 +303,34 @@ impl Default for Pattern {
         return Self::new(64);
     }
 }
+/// The patterns are shared with the engine, which gets a reference to each change instead of a
+/// copy. Editing a pattern the engine still holds copies it first.
 #[derive(Serialize, Deserialize)]
 pub struct PatternStore {
-    patterns: Vec<Pattern>,
+    patterns: Vec<Arc<Pattern>>,
 }
 impl PatternStore {
     pub fn new(patterns: Vec<Pattern>) -> Self {
-        return PatternStore { patterns };
+        return PatternStore {
+            patterns: patterns.into_iter().map(Arc::new).collect(),
+        };
     }
     pub fn get_pattern_by_id(&self, id: PatternId) -> Option<&Pattern> {
-        return self.patterns.get(id.0 as usize);
+        return self.patterns.get(id.0 as usize).map(Arc::as_ref);
     }
-    pub fn get_patterns(&self) -> &[Pattern] {
+    pub fn get_shared_pattern(&self, id: PatternId) -> Option<Arc<Pattern>> {
+        return self.patterns.get(id.0 as usize).cloned();
+    }
+    pub fn get_patterns(&self) -> &[Arc<Pattern>] {
         return &self.patterns;
     }
     pub fn get_pattern_by_id_mut(&mut self, id: PatternId) -> Option<&mut Pattern> {
-        return self.patterns.get_mut(id.0 as usize);
+        return self.patterns.get_mut(id.0 as usize).map(Arc::make_mut);
     }
     pub fn create_pattern_id_if_not_exists(&mut self, pattern: PatternId) {
         let pattern = pattern.0 as usize;
         if pattern >= self.patterns.len() {
-            self.patterns.resize_with(pattern + 1, Pattern::default);
+            self.patterns.resize_with(pattern + 1, Default::default);
         }
     }
 }
@@ -481,6 +488,22 @@ mod tests {
         assert_eq!(store.get_patterns().len(), 4);
         store.create_pattern_id_if_not_exists(PatternId(1));
         assert_eq!(store.get_patterns().len(), 4);
+    }
+
+    #[test]
+    fn editing_a_shared_pattern_leaves_the_shared_copy_alone() {
+        let mut store = PatternStore::new(vec![Pattern::new(4)]);
+        let shared = store.get_shared_pattern(PatternId(0)).unwrap();
+        let pattern = store.get_pattern_by_id_mut(PatternId(0)).unwrap();
+        pattern.set_event(0, 0, note());
+        assert_eq!(shared.get_event(0, 0), Some(&Note::empty()));
+        assert_eq!(
+            store
+                .get_pattern_by_id(PatternId(0))
+                .unwrap()
+                .get_event(0, 0),
+            Some(&note())
+        );
     }
 
     #[test]

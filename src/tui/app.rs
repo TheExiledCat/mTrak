@@ -2,7 +2,10 @@ use std::{
     collections::{HashSet, VecDeque},
     fmt::Write,
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, Sender},
+    },
     time::{Duration, Instant},
 };
 
@@ -1206,15 +1209,16 @@ impl AppState {
         self.changed_patterns.clear();
         self.sequence_changed = false;
         for (i, pattern) in self.project.patterns.get_patterns().iter().enumerate() {
-            self.engine.set_pattern(PatternId(i as u8), pattern.clone());
+            self.engine
+                .set_pattern(PatternId(i as u8), Arc::clone(pattern));
         }
         self.engine.set_sequence(self.project.sequence.clone());
     }
 
     fn send_changes_to_engine(&mut self) {
         for id in self.changed_patterns.drain() {
-            if let Some(pattern) = self.project.patterns.get_pattern_by_id(id) {
-                self.engine.set_pattern(id, pattern.clone());
+            if let Some(pattern) = self.project.patterns.get_shared_pattern(id) {
+                self.engine.set_pattern(id, pattern);
             }
         }
         if self.sequence_changed {
