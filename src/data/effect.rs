@@ -1,9 +1,7 @@
 use std::{fmt::Display, str::FromStr};
 
-use MidiCommand::*;
-use serde::{Deserialize, Serialize};
-
 use crate::error::MTrakError;
+use MidiCommand::*;
 pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 10] = [
     ('S', SetCC),
     ('M', ChangeCC),
@@ -26,14 +24,34 @@ pub const EFFECT_COMMAND_LOOKUP: [(char, EffectCommand); 5] = [
 /// A way to write a command's value, e.g. `xy`, and what it does.
 pub type CommandForm = (&'static str, &'static str);
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum CommandKind {
     None,
     MidiCommand(MidiCommand),
     Effect(EffectCommand),
 }
 impl CommandKind {
-    fn from_char(char: char) -> Result<Self, MTrakError> {
+    /// The letter for this command in the pattern's command column, `0` for none.
+    pub fn letter(&self) -> char {
+        return match self {
+            CommandKind::None => '0',
+            CommandKind::MidiCommand(command) => {
+                MIDI_COMMAND_LOOKUP
+                    .iter()
+                    .find(|c| c.1 == *command)
+                    .unwrap()
+                    .0
+            }
+            CommandKind::Effect(command) => {
+                EFFECT_COMMAND_LOOKUP
+                    .iter()
+                    .find(|c| c.1 == *command)
+                    .unwrap()
+                    .0
+            }
+        };
+    }
+    pub fn from_char(char: char) -> Result<Self, MTrakError> {
         return Ok(match char {
             '0' => CommandKind::None,
 
@@ -47,7 +65,7 @@ impl CommandKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum MidiCommand {
     SetCC,           // Sets the CC to change with the ChangeCC command
     ChangeCC,        // Changes the CC set by SetCC
@@ -141,7 +159,7 @@ impl Display for MidiCommand {
         );
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum EffectCommand {
     SetTempo, // Sets the BPM from 20 up, the speed below that, and 00 goes back to the song's own
     Probability, // Decides whether or not this note plays based on a chance from 0 to FF
@@ -259,7 +277,7 @@ impl EffectCommand {
         return CommandKind::Effect(*self);
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 
 pub struct Command {
     pub kind: CommandKind,

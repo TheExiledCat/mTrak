@@ -1,15 +1,23 @@
 use std::{ops::Range, sync::Arc};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
-use super::note::Note;
 use crate::{
-    data::{midi::MIDI_CHANNEL_MAX, note::NoteKind},
+    data::{
+        midi::MIDI_CHANNEL_MAX,
+        note::{Note, NoteKind},
+    },
+    error::{MTrakError, Result},
     tui::constants,
 };
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PatternId(pub u8);
 pub const MAX_ROWS: u16 = 0x100;
+
+/// The error for a saved pattern that can't be read.
+pub fn invalid_pattern(what: String) -> MTrakError {
+    return MTrakError::InvalidProject(format!("a pattern has {what}"));
+}
 
 pub fn same_cells(a: &[PatternRow], b: &[PatternRow]) -> bool {
     return a.iter().map(|r| &r.tracks).eq(b.iter().map(|r| &r.tracks));
@@ -43,13 +51,13 @@ pub enum ClearTarget {
     Command,
     All,
 }
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Clone)]
 pub struct Pattern {
     pub track_count: u8,
     pub rows: Vec<PatternRow>,
     pub channel_mutes: [bool; 16],
 }
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct PatternRow {
     pub tracks: Vec<Note>,
 }
@@ -282,6 +290,73 @@ impl Pattern {
     }
 }
 
+/// How a pattern is saved: its cells packed into bytes, row by row and track by track, each
+/// written with [`Note::write_cell`], and everything else as named fields.
+#[derive(Serialize, Deserialize)]
+struct SavedPattern {
+    row_count: u16,
+    track_count: u8,
+    #[serde(with = "serde_bytes")]
+    cells: Vec<u8>,
+    channel_mutes: [bool; MIDI_CHANNEL_MAX as usize + 1],
+}
+impl From<&Pattern> for SavedPattern {
+    fn from(pattern: &Pattern) -> Self {
+        let mut cells = Vec::new();
+        for note in pattern.rows.iter().flat_map(|row| &row.tracks) {
+            note.write_cell(&mut cells);
+        }
+        return Self {
+            row_count: pattern.row_count(),
+            track_count: pattern.track_count,
+            cells,
+            channel_mutes: pattern.channel_mutes,
+        };
+    }
+}
+impl TryFrom<SavedPattern> for Pattern {
+    type Error = MTrakError;
+
+    fn try_from(saved: SavedPattern) -> Result<Self> {
+        if saved.track_count != constants::TRACK_COUNT {
+            return Err(invalid_pattern(format!("{} tracks", saved.track_count)));
+        }
+        if !(1..=MAX_ROWS).contains(&saved.row_count) {
+            return Err(invalid_pattern(format!("{} rows", saved.row_count)));
+        }
+        let mut cells = &saved.cells[..];
+        let mut rows = Vec::with_capacity(saved.row_count as usize);
+        for _ in 0..saved.row_count {
+            let mut tracks = Vec::with_capacity(saved.track_count as usize);
+            for _ in 0..saved.track_count {
+                tracks.push(Note::read_cell(&mut cells)?);
+            }
+            rows.push(PatternRow::with_tracks(tracks));
+        }
+        if !cells.is_empty() {
+            return Err(invalid_pattern(
+                "more cells than its rows and tracks hold".into(),
+            ));
+        }
+        return Ok(Pattern {
+            track_count: saved.track_count,
+            rows,
+            channel_mutes: saved.channel_mutes,
+        });
+    }
+}
+impl Serialize for Pattern {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        return SavedPattern::from(self).serialize(serializer);
+    }
+}
+impl<'de> Deserialize<'de> for Pattern {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        return Pattern::try_from(SavedPattern::deserialize(deserializer)?)
+            .map_err(D::Error::custom);
+    }
+}
+
 impl Default for Pattern {
     fn default() -> Self {
         return Self::new(64);
@@ -290,6 +365,7 @@ impl Default for Pattern {
 /// The patterns are shared with the engine, which gets a reference to each change instead of a
 /// copy. Editing a pattern the engine still holds copies it first.
 #[derive(Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct PatternStore {
     patterns: Vec<Arc<Pattern>>,
 }
@@ -472,6 +548,40 @@ mod tests {
         assert_eq!(store.get_patterns().len(), 4);
         store.create_pattern_id_if_not_exists(PatternId(1));
         assert_eq!(store.get_patterns().len(), 4);
+    }
+
+    #[test]
+    fn saved_patterns_round_trip() {
+        let mut pattern = Pattern::new(3);
+        pattern.set_event(0, 0, note());
+        pattern.set_event(2, 7, note());
+        pattern.channel_mutes[5] = true;
+        let saved = SavedPattern::from(&pattern);
+        // 24 cells, two of them with a note
+        assert_eq!(saved.cells.len(), 24 + 2);
+        let loaded = Pattern::try_from(saved).unwrap();
+        assert!(loaded.same_content(&pattern));
+        assert!(loaded.channel_mutes[5]);
+    }
+
+    #[test]
+    fn saved_patterns_must_match_their_cells() {
+        let saved = || SavedPattern::from(&Pattern::new(2));
+        let mut extra = saved();
+        extra.cells.push(0x80);
+        let mut missing = saved();
+        missing.cells.pop();
+        let mut tracks = saved();
+        tracks.track_count = 4;
+        let mut no_rows = saved();
+        no_rows.row_count = 0;
+        no_rows.cells.clear();
+        for saved in [extra, missing, tracks, no_rows] {
+            assert!(matches!(
+                Pattern::try_from(saved),
+                Err(MTrakError::InvalidProject(_))
+            ));
+        }
     }
 
     #[test]

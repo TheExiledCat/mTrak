@@ -73,14 +73,6 @@ impl Key {
         return Self::new(KeyCode::Char(c), KeyModifiers::CONTROL);
     }
 
-    /// The number of an unmodified function key, e.g. 9 for F9.
-    fn function_number(&self) -> Option<u8> {
-        return match self.code {
-            KeyCode::F(n) if self.modifiers.is_empty() => Some(n),
-            _ => None,
-        };
-    }
-
     pub fn matches(&self, event: &KeyEvent) -> bool {
         // some platforms (e.g. Windows) also report key releases, which should not trigger actions
         if event.kind == KeyEventKind::Release {
@@ -88,48 +80,17 @@ impl Key {
         }
         return *self == Key::new(event.code, event.modifiers);
     }
+
+    /// The number of an unmodified function key, e.g. 9 for F9.
+    fn function_number(&self) -> Option<u8> {
+        return match self.code {
+            KeyCode::F(n) if self.modifiers.is_empty() => Some(n),
+            _ => None,
+        };
+    }
 }
 
 impl Key {
-    fn write(&self, f: &mut impl Write, ascii: bool) -> fmt::Result {
-        let pick = |unicode, plain| {
-            if ascii {
-                plain
-            } else {
-                glyphs::pick(unicode, plain)
-            }
-        };
-        if self.modifiers.contains(KeyModifiers::CONTROL) {
-            write!(f, "{}", pick(CONTROL_SYMBOL, ASCII_CONTROL_SYMBOL))?;
-        }
-        if self.modifiers.contains(KeyModifiers::ALT) {
-            write!(f, "{}", pick(ALT_SYMBOL, ASCII_ALT_SYMBOL))?;
-        }
-        if self.modifiers.contains(KeyModifiers::SHIFT) {
-            write!(f, "{}", pick(SHIFT_SYMBOL, ASCII_SHIFT_SYMBOL))?;
-        }
-        let has_modifier = self
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
-        return match self.code {
-            KeyCode::Char(' ') => write!(f, "Spc"),
-            KeyCode::Char(c) if has_modifier => write!(f, "{}", c.to_ascii_uppercase()),
-            KeyCode::Char(c) => write!(f, "{c}"),
-            KeyCode::Up => write!(f, "{}", pick("↑", "Up")),
-            KeyCode::Down => write!(f, "{}", pick("↓", "Dn")),
-            KeyCode::Left => write!(f, "{}", pick("←", "Lt")),
-            KeyCode::Right => write!(f, "{}", pick("→", "Rt")),
-            KeyCode::F(n) => write!(f, "F{n}"),
-            KeyCode::BackTab => write!(f, "{}Tab", pick(SHIFT_SYMBOL, ASCII_SHIFT_SYMBOL)),
-            KeyCode::PageUp => write!(f, "PgUp"),
-            KeyCode::PageDown => write!(f, "PgDn"),
-            KeyCode::Insert => write!(f, "Ins"),
-            KeyCode::Delete => write!(f, "Del"),
-            KeyCode::Backspace => write!(f, "Bksp"),
-            other => write!(f, "{other:?}"),
-        };
-    }
-
     /// The key as written in keybinds.toml, e.g. `Z`, `^S`, `A-O` or `S-Tab`.
     pub fn to_text(self) -> String {
         if self.modifiers == KeyModifiers::SHIFT
@@ -192,6 +153,45 @@ impl Key {
             }
         };
         return Some(Self::new(code, modifiers));
+    }
+
+    fn write(&self, f: &mut impl Write, ascii: bool) -> fmt::Result {
+        let pick = |unicode, plain| {
+            if ascii {
+                plain
+            } else {
+                glyphs::pick(unicode, plain)
+            }
+        };
+        if self.modifiers.contains(KeyModifiers::CONTROL) {
+            write!(f, "{}", pick(CONTROL_SYMBOL, ASCII_CONTROL_SYMBOL))?;
+        }
+        if self.modifiers.contains(KeyModifiers::ALT) {
+            write!(f, "{}", pick(ALT_SYMBOL, ASCII_ALT_SYMBOL))?;
+        }
+        if self.modifiers.contains(KeyModifiers::SHIFT) {
+            write!(f, "{}", pick(SHIFT_SYMBOL, ASCII_SHIFT_SYMBOL))?;
+        }
+        let has_modifier = self
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
+        return match self.code {
+            KeyCode::Char(' ') => write!(f, "Spc"),
+            KeyCode::Char(c) if has_modifier => write!(f, "{}", c.to_ascii_uppercase()),
+            KeyCode::Char(c) => write!(f, "{c}"),
+            KeyCode::Up => write!(f, "{}", pick("↑", "Up")),
+            KeyCode::Down => write!(f, "{}", pick("↓", "Dn")),
+            KeyCode::Left => write!(f, "{}", pick("←", "Lt")),
+            KeyCode::Right => write!(f, "{}", pick("→", "Rt")),
+            KeyCode::F(n) => write!(f, "F{n}"),
+            KeyCode::BackTab => write!(f, "{}Tab", pick(SHIFT_SYMBOL, ASCII_SHIFT_SYMBOL)),
+            KeyCode::PageUp => write!(f, "PgUp"),
+            KeyCode::PageDown => write!(f, "PgDn"),
+            KeyCode::Insert => write!(f, "Ins"),
+            KeyCode::Delete => write!(f, "Del"),
+            KeyCode::Backspace => write!(f, "Bksp"),
+            other => write!(f, "{other:?}"),
+        };
     }
 }
 
@@ -316,25 +316,6 @@ impl<A: Action> Keymap<A> {
         return keybinds::with_overrides(|overrides| self.bindings_with(overrides));
     }
 
-    fn bindings_with(&self, overrides: &HashMap<String, Vec<Key>>) -> Cow<'_, [Binding<A>]> {
-        if overrides.is_empty() {
-            return Cow::Borrowed(self.bindings.as_slice());
-        }
-        let mut bindings = Vec::new();
-        let mut overridden: Vec<A> = Vec::new();
-        for binding in &self.bindings {
-            let Some(keys) = overrides.get(&self.id(binding.action)) else {
-                bindings.push(*binding);
-                continue;
-            };
-            if !overridden.contains(&binding.action) {
-                overridden.push(binding.action);
-                bindings.extend(keys.iter().map(|&key| Binding { key, ..*binding }));
-            }
-        }
-        return Cow::Owned(bindings);
-    }
-
     /// The defaults, e.g. to change a label.
     pub fn default_bindings_mut(&mut self) -> &mut [Binding<A>] {
         return &mut self.bindings;
@@ -401,6 +382,25 @@ impl<A: Action> Keymap<A> {
             label,
             enabled: true,
         }));
+    }
+
+    fn bindings_with(&self, overrides: &HashMap<String, Vec<Key>>) -> Cow<'_, [Binding<A>]> {
+        if overrides.is_empty() {
+            return Cow::Borrowed(self.bindings.as_slice());
+        }
+        let mut bindings = Vec::new();
+        let mut overridden: Vec<A> = Vec::new();
+        for binding in &self.bindings {
+            let Some(keys) = overrides.get(&self.id(binding.action)) else {
+                bindings.push(*binding);
+                continue;
+            };
+            if !overridden.contains(&binding.action) {
+                overridden.push(binding.action);
+                bindings.extend(keys.iter().map(|&key| Binding { key, ..*binding }));
+            }
+        }
+        return Cow::Owned(bindings);
     }
 }
 

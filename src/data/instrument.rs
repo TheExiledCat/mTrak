@@ -7,7 +7,7 @@ pub struct Instrument {
     pub name: String,
     pub volume: u8,
     pub pitch_wheel_range: u8,
-    /// The CC that `C`, `G` and `H` commands change on a track without an `S`.
+    /// The CC that CC commands change on a track without an `S`.
     pub default_cc: u8,
     /// Semitones added to every note the instrument plays, on top of the song's transpose.
     pub transpose: i8,
