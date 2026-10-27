@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.6.0 - 2026-10-27
+
+### Added
+
+- **Projects keep opening in later versions.** From this version on, each project file records
+  its format version, and when the format changes, newer versions of mTrak upgrade older
+  projects as they open them.
+- **The project file format is documented** in [docs/FILE_FORMAT.md](docs/FILE_FORMAT.md), for
+  reading or writing projects from other programs. Projects are
+  [MessagePack](https://msgpack.org) with named fields, and each pattern's notes are packed into
+  bytes, so an empty cell takes one byte.
+
+### Changed
+
+- **Projects saved with v0.5.0 or earlier can't be opened.** The project file format changed to
+  MessagePack. Opening an older project says it was made with an older mTrak.
+
 ## v0.5.0 - 2026-10-27
 
 ### Changed
