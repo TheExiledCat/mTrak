@@ -158,12 +158,230 @@ impl Project {
 
 #[cfg(test)]
 mod tests {
+    use rmpv::Value;
+
     use super::*;
+    use crate::data::note::{Note, NoteKind, NotePitch};
 
     fn temp_file(name: &str, contents: &[u8]) -> PathBuf {
         let path = std::env::temp_dir().join(format!("mtrak-test-{}-{}", std::process::id(), name));
         std::fs::write(&path, contents).unwrap();
         return path;
+    }
+
+    /// Where the saved test projects live, one per file version: `v3.mtrak` and so on.
+    fn test_project_path(version: u16) -> PathBuf {
+        return PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/data/testdata")
+            .join(format!("v{version}.mtrak"));
+    }
+
+    fn full_note() -> Note {
+        return Note::new(
+            NoteKind::On(NotePitch(60)),
+            Some(3),
+            Some(0x40),
+            "F8C".parse().unwrap(),
+        );
+    }
+
+    /// A project that sets every saved field away from its default, saved as the test project
+    /// of each file version. Changing it changes the current version's test project.
+    fn test_project() -> Project {
+        let mut project = Project::empty();
+        project.name = Some("Test song".into());
+        project.bpm = 140;
+        project.speed = 4;
+        project.global_velocity = 0xC0;
+        project.transpose = -2;
+        project.midi_input = Some("Test Keys".into());
+        project.clock_input = Some("Test Clock".into());
+        project.record_input_velocity = true;
+        project.midi_output = Some("Test Synth".into());
+        project.send_midi_clock = true;
+        project.sequence[0].repeats = 2;
+        project.insert_sequence(1, PatternId(1));
+
+        let bass = &mut project.instruments[3];
+        bass.name = "Bass".into();
+        bass.volume = 0xA0;
+        bass.pitch_wheel_range = 2;
+        bass.default_cc = 74;
+        bass.transpose = 12;
+
+        let first = project
+            .patterns
+            .get_pattern_by_id_mut(PatternId(0))
+            .unwrap();
+        first.set_event(0, 0, full_note());
+        first.set_event(
+            1,
+            0,
+            Note::new(NoteKind::Off, None, None, Default::default()),
+        );
+        first.set_event(
+            2,
+            5,
+            Note::new(NoteKind::Empty, None, None, "S10".parse().unwrap()),
+        );
+        first.channel_mutes[2] = true;
+        project
+            .patterns
+            .create_pattern_id_if_not_exists(PatternId(1));
+        let second = project
+            .patterns
+            .get_pattern_by_id_mut(PatternId(1))
+            .unwrap();
+        second.set_length(32);
+        second.set_event(31, 7, full_note());
+        return project;
+    }
+
+    /// Checks a loaded test project holds what [`test_project`] put in it. Every file version
+    /// has to load into this, so keep it to what all of them save.
+    fn assert_test_project(project: &Project) {
+        assert_eq!(project.name.as_deref(), Some("Test song"));
+        assert_eq!(project.bpm, 140);
+        assert_eq!(project.speed, 4);
+        assert_eq!(project.global_velocity, 0xC0);
+        assert_eq!(project.transpose, -2);
+        assert_eq!(project.midi_input.as_deref(), Some("Test Keys"));
+        assert_eq!(project.clock_input.as_deref(), Some("Test Clock"));
+        assert!(project.record_input_velocity);
+        assert_eq!(project.midi_output.as_deref(), Some("Test Synth"));
+        assert!(project.send_midi_clock);
+        assert!(project.sequence == test_project().sequence);
+
+        let bass = &project.instruments[3];
+        assert_eq!(bass.name, "Bass");
+        assert_eq!(bass.volume, 0xA0);
+        assert_eq!(bass.pitch_wheel_range, 2);
+        assert_eq!(bass.default_cc, 74);
+        assert_eq!(bass.transpose, 12);
+
+        let expected = test_project();
+        assert_eq!(project.patterns.get_patterns().len(), 2);
+        for id in [PatternId(0), PatternId(1)] {
+            let pattern = project.patterns.get_pattern_by_id(id).unwrap();
+            let wanted = expected.patterns.get_pattern_by_id(id).unwrap();
+            assert!(pattern.same_content(wanted), "pattern {} differs", id.0);
+            assert_eq!(pattern.channel_mutes, wanted.channel_mutes);
+        }
+    }
+
+    fn with_header(payload: &[u8]) -> Vec<u8> {
+        let mut bytes = PROJECT_HEADER.to_vec();
+        bytes.extend_from_slice(&PROJECT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(payload);
+        return bytes;
+    }
+
+    fn test_project_payload() -> Value {
+        let bytes = test_project().encode().unwrap();
+        return rmpv::decode::read_value(&mut &bytes[LENGTH_END..]).unwrap();
+    }
+
+    fn encode_value(value: &Value) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        rmpv::encode::write_value(&mut bytes, value).unwrap();
+        return bytes;
+    }
+
+    /// Writes the current version's test project. Run it with
+    /// `cargo test write_test_project -- --ignored`, see the update-test-projects skill.
+    #[test]
+    #[ignore = "writes src/data/testdata, see the update-test-projects skill"]
+    fn write_test_project() {
+        let path = test_project_path(PROJECT_VERSION);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, test_project().encode().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_test_project_of_every_version_loads() {
+        for version in FIRST_MESSAGEPACK_VERSION..=PROJECT_VERSION {
+            let path = test_project_path(version);
+            let Ok(bytes) = std::fs::read(&path) else {
+                panic!(
+                    "{} is missing, see the update-test-projects skill",
+                    path.display()
+                );
+            };
+            match Project::decode(&bytes) {
+                Ok(project) => assert_test_project(&project),
+                Err(e) => panic!("the version {version} test project doesn't load: {e}"),
+            }
+        }
+    }
+
+    #[test]
+    fn saving_writes_the_current_versions_test_project_byte_for_byte() {
+        let saved = std::fs::read(test_project_path(PROJECT_VERSION)).unwrap();
+        assert!(
+            test_project().encode().unwrap() == saved,
+            "projects are saved differently than v{PROJECT_VERSION}.mtrak, see the \
+             update-test-projects skill"
+        );
+    }
+
+    #[test]
+    fn every_field_survives_saving_and_loading() {
+        let saved = test_project().encode().unwrap();
+        let loaded = Project::decode(&saved).unwrap();
+        assert_test_project(&loaded);
+        assert!(loaded.encode().unwrap() == saved);
+    }
+
+    #[test]
+    fn unknown_fields_are_ignored() {
+        let mut payload = test_project_payload();
+        let Value::Map(fields) = &mut payload else {
+            panic!("the payload isn't a map");
+        };
+        fields.insert(0, (Value::from("from_another_program"), Value::from(1)));
+        let instruments = fields
+            .iter_mut()
+            .find(|(key, _)| key.as_str() == Some("instruments"))
+            .map(|(_, value)| value);
+        let Some(Value::Array(instruments)) = instruments else {
+            panic!("the payload has no instruments");
+        };
+        let Value::Map(bass) = &mut instruments[3] else {
+            panic!("an instrument isn't a map");
+        };
+        bass.push((Value::from("colour"), Value::from("red")));
+        let project = Project::decode(&with_header(&encode_value(&payload))).unwrap();
+        assert_test_project(&project);
+    }
+
+    #[test]
+    fn a_missing_field_is_an_error() {
+        let mut payload = test_project_payload();
+        let Value::Map(fields) = &mut payload else {
+            panic!("the payload isn't a map");
+        };
+        fields.retain(|(key, _)| key.as_str() != Some("bpm"));
+        assert!(matches!(
+            Project::decode(&with_header(&encode_value(&payload))),
+            Err(MTrakError::Decode(_))
+        ));
+    }
+
+    #[test]
+    fn a_payload_that_isnt_messagepack_is_an_error() {
+        // 0xC1 is the one byte MessagePack never uses, 0xDE starts a map that's cut short, and
+        // a bare number isn't a project
+        let garbage: [&[u8]; 4] = [&[0xC1], &[], &[0xDE, 0xFF], &[0x05]];
+        for payload in garbage {
+            assert!(
+                matches!(
+                    Project::decode(&with_header(payload)),
+                    Err(MTrakError::InvalidProject(_) | MTrakError::Decode(_))
+                ),
+                "{payload:02X?} should be rejected"
+            );
+        }
     }
 
     #[test]
