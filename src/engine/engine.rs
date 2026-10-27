@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Arc,
+        Arc, Mutex,
         mpsc::{Receiver, RecvTimeoutError, Sender},
     },
     time::{Duration, Instant},
@@ -18,8 +18,8 @@ use super::{
 };
 use crate::{
     data::{
+        commands::{CommandKind, MidiCommand, PlaybackAction},
         config::TITLE,
-        effect::{CommandKind, Effect, MidiCommand},
         midi::{
             DEFAULT_BPM, DEFAULT_SPEED, MIDI_CHANNEL_MAX, MidiEvent, PULSES_PER_QUARTER,
             VELOCITY_MAX, pulse_duration, raw_message_to_bytes,
@@ -28,9 +28,12 @@ use crate::{
         pattern::{Pattern, PatternId},
         project::SequenceRow,
     },
-    engine::command_handler::{
-        CommandContext, EffectCommandHandler, MidiCommandHandler, NoteAction, SlideTarget,
-        retrig_velocity,
+    engine::{
+        command_handler::{
+            CommandContext, MidiCommandHandler, NoteAction, PlaybackCommandHandler, SlideTarget,
+            retrig_velocity,
+        },
+        effects::{MidiEffectChain, Timing},
     },
     tui::constants::TRACK_COUNT,
 };
@@ -157,7 +160,11 @@ pub struct MtrakEngine {
     retrig_memory: [(u8, u8); TRACK_COUNT as usize],
 
     midi_command_handler: MidiCommandHandler,
-    effect_command_handler: EffectCommandHandler,
+    playback_command_handler: PlaybackCommandHandler,
+    /// Pulses since the current pattern's first row, for effects' timing.
+    pattern_pulse: u32,
+    /// Each instrument's live effects, shared with the UI so it can change their settings.
+    effect_chains: [Arc<Mutex<MidiEffectChain>>; MIDI_CHANNEL_MAX as usize + 1],
 }
 
 impl MtrakEngine {
@@ -201,7 +208,9 @@ impl MtrakEngine {
             retrig_memory: [(0, 0); TRACK_COUNT as usize],
 
             midi_command_handler: MidiCommandHandler::new(),
-            effect_command_handler: EffectCommandHandler::new(),
+            playback_command_handler: PlaybackCommandHandler::new(),
+            pattern_pulse: 0,
+            effect_chains: std::array::from_fn(|_| Arc::default()),
         };
     }
 
@@ -278,6 +287,21 @@ impl MtrakEngine {
             EngineCommand::SetBendRange { channel, range } => self
                 .midi_command_handler
                 .set_bend_range(channel as usize, range),
+            EngineCommand::SetEffectChain { channel, chain } => {
+                self.set_effect_chain(channel as usize, chain)
+            }
+            EngineCommand::SetEffectParam {
+                channel,
+                effect,
+                param,
+                value,
+            } => {
+                if let Some(Ok(mut chain)) =
+                    self.effect_chains.get(channel as usize).map(|c| c.lock())
+                {
+                    chain.set_param(effect, param, value);
+                }
+            }
             EngineCommand::SetMidiClock(enabled) => self.send_midi_clock = enabled,
             EngineCommand::SetClockSource(source) => self.set_clock_source(source),
             EngineCommand::ExternalClock(timestamp) => self.external_pulse(timestamp),
@@ -317,13 +341,13 @@ impl MtrakEngine {
 
     /// The song's BPM, unless a tempo command has changed it.
     fn bpm(&self) -> u8 {
-        return self.effect_command_handler.bpm().unwrap_or(self.bpm);
+        return self.playback_command_handler.bpm().unwrap_or(self.bpm);
     }
 
     /// The song's speed (ticks per row), unless a tempo command has changed it.
     fn ticks_per_line(&self) -> u8 {
         return self
-            .effect_command_handler
+            .playback_command_handler
             .speed()
             .unwrap_or(self.speed)
             .max(1);
@@ -582,6 +606,8 @@ impl MtrakEngine {
         self.voices.release_all(&mut out);
         out.extend(self.reset_commands());
         self.dispatch_messages(out);
+        self.reset_effects();
+        self.pattern_pulse = self.position.row as u32 * self.ticks_per_line() as u32 + tick;
         let now = Instant::now();
         self.clock = Some(Clock {
             follows_input,
@@ -593,6 +619,7 @@ impl MtrakEngine {
         self.publish_position();
         self.dispatch(MidiEvent::Message(transport));
         self.send_clock();
+        self.tick_effects();
         if tick == 0 {
             self.play_row();
         }
@@ -632,6 +659,7 @@ impl MtrakEngine {
         let mut events: Vec<MidiEvent> = out.into_iter().map(MidiEvent::Message).collect();
         events.push(MidiEvent::NotesOffAll);
         self.dispatch(MidiEvent::Aggregate(events));
+        self.reset_effects();
     }
 
     /// Stops playback and silences and resets every channel.
@@ -649,6 +677,7 @@ impl MtrakEngine {
             out.push(Message::ResetAllControllers(channel));
         }
         self.dispatch_messages(out);
+        self.reset_effects();
     }
 
     /// When the engine's own timer next needs to wake up for a pulse.
@@ -704,12 +733,22 @@ impl MtrakEngine {
         }
         self.send_clock();
         if row_done {
+            let previous_row = self.position.row;
             self.advance_row();
-            if self.clock.is_some() {
-                self.play_row();
+            if self.clock.is_none() {
+                return;
             }
+            self.pattern_pulse = match self.position.row {
+                0 => 0,
+                row if row == previous_row + 1 => self.pattern_pulse + 1,
+                row => row as u32 * self.ticks_per_line() as u32,
+            };
+            self.tick_effects();
+            self.play_row();
         } else {
-            self.effect_tick();
+            self.pattern_pulse += 1;
+            self.tick_effects();
+            self.command_tick();
         }
         self.time_next_pulse(pulse_time);
     }
@@ -810,13 +849,13 @@ impl MtrakEngine {
                 .get(position.pattern.0 as usize)?
                 .get_event(position.row, track)?;
             match note.command.kind {
-                CommandKind::MidiCommand(command) if command.is_slide_target() => {
+                CommandKind::Midi(command) if command.is_slide_target() => {
                     return Some(SlideTarget {
                         value: note.command.value,
                         ticks,
                     });
                 }
-                CommandKind::MidiCommand(MidiCommand::SetCC) if stop_at_set_cc => return None,
+                CommandKind::Midi(MidiCommand::SetCC) if stop_at_set_cc => return None,
                 _ => {}
             }
         }
@@ -833,7 +872,7 @@ impl MtrakEngine {
         };
     }
 
-    /// Clears effect state so nothing carries over between playbacks, and returns the
+    /// Clears command state so nothing carries over between playbacks, and returns the
     /// messages that undo what commands left set on the synth. These go out even on muted
     /// channels, like the all sound off on stop, so a synth is never left bent.
     fn reset_commands(&mut self) -> Vec<Message> {
@@ -845,14 +884,14 @@ impl MtrakEngine {
         self.retrig_memory = [(0, 0); TRACK_COUNT as usize];
         let mut events = vec![];
         self.midi_command_handler.reset(&mut events);
-        self.effect_command_handler.reset();
+        self.playback_command_handler.reset();
         return events
             .into_iter()
             .flat_map(MidiEvent::into_messages)
             .collect();
     }
 
-    /// Advances running effects by one tick and returns their messages.
+    /// Advances running commands by one tick and returns their messages.
     fn tick_commands(&mut self) -> Vec<MidiEvent> {
         let mut events = vec![];
         self.midi_command_handler.tick(&mut events);
@@ -900,7 +939,7 @@ impl MtrakEngine {
         for (track, note) in tracks.iter().enumerate() {
             let action = match note.command.kind {
                 CommandKind::None => NoteAction::Play,
-                CommandKind::MidiCommand(command) => {
+                CommandKind::Midi(command) => {
                     let context = self.command_context(track, command);
                     let mut events = vec![];
                     self.midi_command_handler.handle_command(
@@ -913,8 +952,8 @@ impl MtrakEngine {
                     out.extend(audible(events, &mutes));
                     NoteAction::Play
                 }
-                CommandKind::Effect(command) => self
-                    .effect_command_handler
+                CommandKind::Playback(command) => self
+                    .playback_command_handler
                     .apply(command.decode(note.command.value)),
             };
             match action {
@@ -1055,12 +1094,12 @@ impl MtrakEngine {
             return;
         };
         for (track, note) in row.tracks.iter().enumerate() {
-            let CommandKind::Effect(command) = note.command.kind else {
+            let CommandKind::Playback(command) = note.command.kind else {
                 continue;
             };
             let (early, legato) = match command.decode(note.command.value) {
-                Effect::LegatoEarly(early) => (early, true),
-                Effect::DelayEarly(early) => (early, false),
+                PlaybackAction::LegatoEarly(early) => (early, true),
+                PlaybackAction::DelayEarly(early) => (early, false),
                 _ => continue,
             };
             // tick 0 is this row's own note, so the earliest start is tick 1
@@ -1180,8 +1219,8 @@ impl MtrakEngine {
         self.dispatch_messages(out);
     }
 
-    /// Runs effects for the ticks between rows.
-    fn effect_tick(&mut self) {
+    /// Runs commands for the ticks between rows.
+    fn command_tick(&mut self) {
         let events = self.tick_commands();
         let mutes = self.current_mutes();
         let mut out = audible(events, &mutes);
@@ -1204,8 +1243,84 @@ impl MtrakEngine {
         self.status
             .set_output_connected(self.output_connection.is_some());
     }
-    /// Sends an event to the MIDI output and reports it to the UI.
+    /// Swaps in an instrument's effect chain, releasing the notes the old one still holds.
+    fn set_effect_chain(&mut self, channel: usize, chain: Arc<Mutex<MidiEffectChain>>) {
+        let Some(slot) = self.effect_chains.get_mut(channel) else {
+            return;
+        };
+        if Arc::ptr_eq(slot, &chain) {
+            return;
+        }
+        let old = std::mem::replace(slot, chain);
+        let mut out = vec![];
+        if let Ok(mut old) = old.lock() {
+            old.reset(&mut out);
+        }
+        self.output_messages(out);
+    }
+
+    /// Where playback is for effects; `None` while stopped.
+    fn timing(&self) -> Option<Timing> {
+        return self.clock.as_ref().map(|_| Timing::new(self.pattern_pulse));
+    }
+
+    /// Advances every instrument's effects by a pulse and sends what they make.
+    fn tick_effects(&mut self) {
+        let timing = Timing::new(self.pattern_pulse);
+        let mut out = vec![];
+        for chain in &self.effect_chains {
+            if let Ok(mut chain) = chain.lock() {
+                chain.tick(timing, &mut out);
+            }
+        }
+        self.output_messages(out);
+    }
+
+    /// Resets every instrument's effects and sends the releases they make.
+    fn reset_effects(&mut self) {
+        let mut out = vec![];
+        for chain in &self.effect_chains {
+            if let Ok(mut chain) = chain.lock() {
+                chain.reset(&mut out);
+            }
+        }
+        self.output_messages(out);
+    }
+
+    /// Runs each channel message through its instrument's effects.
+    fn apply_effects(&self, event: MidiEvent) -> MidiEvent {
+        return match event {
+            MidiEvent::Message(message) => {
+                let Some(channel) = message_channel(&message) else {
+                    return MidiEvent::Message(message);
+                };
+                let Ok(mut chain) = self.effect_chains[channel as usize].lock() else {
+                    return MidiEvent::Message(message);
+                };
+                let mut out = vec![];
+                chain.process(message, self.timing(), &mut out);
+                match out.len() {
+                    1 => MidiEvent::Message(out.remove(0)),
+                    _ => MidiEvent::Aggregate(out.into_iter().map(MidiEvent::Message).collect()),
+                }
+            }
+            MidiEvent::Aggregate(events) => MidiEvent::Aggregate(
+                events
+                    .into_iter()
+                    .map(|event| self.apply_effects(event))
+                    .collect(),
+            ),
+            MidiEvent::NotesOffAll => MidiEvent::NotesOffAll,
+        };
+    }
+
+    /// Sends an event through its instruments' effects to the MIDI output.
     fn dispatch(&mut self, event: MidiEvent) {
+        let event = self.apply_effects(event);
+        self.output(event);
+    }
+    /// Sends an event straight to the MIDI output and reports it to the UI.
+    fn output(&mut self, event: MidiEvent) {
         let _ = self.events.send(event.clone());
         let Some(conn) = &mut self.output_connection else {
             return;
@@ -1225,6 +1340,15 @@ impl MtrakEngine {
             return;
         }
         self.dispatch(MidiEvent::Aggregate(
+            messages.into_iter().map(MidiEvent::Message).collect(),
+        ));
+    }
+    /// Outputs a batch of messages as one event, without running them through effects.
+    fn output_messages(&mut self, messages: Vec<Message>) {
+        if messages.is_empty() {
+            return;
+        }
+        self.output(MidiEvent::Aggregate(
             messages.into_iter().map(MidiEvent::Message).collect(),
         ));
     }
@@ -1275,8 +1399,12 @@ mod tests {
 
     use super::*;
     use crate::data::{
-        effect::{Command, EffectCommand, MidiCommand},
+        commands::{Command, MidiCommand, PlaybackCommand},
         note::NotePitch,
+    };
+    use crate::{
+        data::effect::EffectKind,
+        engine::effects::{MidiEffect, Param, create_effect, default_settings},
     };
 
     /// Drives an engine without a MIDI port and collects every message it would send.
@@ -1315,9 +1443,9 @@ mod tests {
         }
 
         /// Moves to the next tick in the row and runs it, like the clock does.
-        fn effect_tick(&mut self) {
+        fn command_tick(&mut self) {
             self.engine.clock.as_mut().unwrap().tick += 1;
-            self.engine.effect_tick();
+            self.engine.command_tick();
         }
 
         /// Pulses the clock through the rest of the row's ticks until the next row has played.
@@ -1352,7 +1480,7 @@ mod tests {
     fn command(kind: MidiCommand, value: u8, instrument: u8) -> Note {
         let mut note = Note::empty();
         note.instrument_id = Some(instrument);
-        note.command = Command::new(CommandKind::MidiCommand(kind), value);
+        note.command = Command::new(CommandKind::Midi(kind), value);
         return note;
     }
 
@@ -1541,7 +1669,7 @@ mod tests {
     #[test]
     fn command_on_a_note_row_comes_before_the_note_on() {
         let mut cell = note("C-4 0 7F");
-        cell.command = Command::new(CommandKind::MidiCommand(MidiCommand::ChangeCC), 0x10);
+        cell.command = Command::new(CommandKind::Midi(MidiCommand::ChangeCC), 0x10);
         let mut harness = Harness::new(vec![pattern(4, &[(0, 0, cell)])]);
         harness
             .engine
@@ -1728,7 +1856,7 @@ mod tests {
         harness.next_row();
         harness.engine.apply(EngineCommand::Stop);
         harness.messages();
-        harness.engine.effect_tick();
+        harness.engine.command_tick();
         assert!(harness.messages().is_empty());
     }
 
@@ -1793,7 +1921,7 @@ mod tests {
     #[test]
     fn zero_volume_rows_still_run_their_command() {
         let mut cell = note("C-4 0 00");
-        cell.command = Command::new(CommandKind::MidiCommand(MidiCommand::ChangeCC), 0x40);
+        cell.command = Command::new(CommandKind::Midi(MidiCommand::ChangeCC), 0x40);
         let mut harness = Harness::new(vec![pattern(4, &[(0, 0, cell)])]);
         harness
             .engine
@@ -1809,7 +1937,7 @@ mod tests {
 
     /// A note cell that also has a MIDI command.
     fn with_command(mut cell: Note, kind: MidiCommand, value: u8) -> Note {
-        cell.command = Command::new(CommandKind::MidiCommand(kind), value);
+        cell.command = Command::new(CommandKind::Midi(kind), value);
         return cell;
     }
 
@@ -2242,12 +2370,12 @@ mod tests {
 
     fn tempo(value: u8) -> Note {
         let mut note = Note::empty();
-        note.command = Command::new(CommandKind::Effect(EffectCommand::SetTempo), value);
+        note.command = Command::new(CommandKind::Playback(PlaybackCommand::SetTempo), value);
         return note;
     }
 
     fn extended(mut cell: Note, value: u8) -> Note {
-        cell.command = Command::new(CommandKind::Effect(EffectCommand::Extended), value);
+        cell.command = Command::new(CommandKind::Playback(PlaybackCommand::Extended), value);
         return cell;
     }
 
@@ -2267,9 +2395,9 @@ mod tests {
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
         assert_eq!(harness.messages(), vec![Message::Start]);
-        harness.effect_tick();
+        harness.command_tick();
         assert!(harness.messages().is_empty());
-        harness.effect_tick();
+        harness.command_tick();
         assert_eq!(
             harness.messages(),
             vec![Message::NoteOn(Channel::Ch1, 60, 0x40)]
@@ -2290,10 +2418,10 @@ mod tests {
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
         harness.next_row();
         harness.messages();
-        harness.effect_tick();
-        harness.effect_tick();
+        harness.command_tick();
+        harness.command_tick();
         assert!(harness.messages().is_empty());
-        harness.effect_tick();
+        harness.command_tick();
         assert_eq!(
             harness.messages(),
             vec![
@@ -2314,7 +2442,7 @@ mod tests {
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
         harness.next_row();
         harness.messages();
-        harness.effect_tick();
+        harness.command_tick();
         assert_eq!(
             harness.messages(),
             vec![Message::NoteOff(Channel::Ch1, 60, 0)]
@@ -2347,7 +2475,7 @@ mod tests {
     }
 
     fn retriggered(mut cell: Note, every: u8) -> Note {
-        cell.command = Command::new(CommandKind::Effect(EffectCommand::Retrig), every);
+        cell.command = Command::new(CommandKind::Playback(PlaybackCommand::Retrig), every);
         return cell;
     }
 
@@ -2357,7 +2485,7 @@ mod tests {
         let mut played = vec![];
         for tick in 0..ticks as u32 {
             if tick > 0 {
-                harness.effect_tick();
+                harness.command_tick();
             }
             if !note_velocities(&harness.messages()).is_empty() {
                 played.push(tick);
@@ -2502,7 +2630,7 @@ mod tests {
     }
 
     fn legato(mut cell: Note, value: u8) -> Note {
-        cell.command = Command::new(CommandKind::Effect(EffectCommand::Legato), value);
+        cell.command = Command::new(CommandKind::Playback(PlaybackCommand::Legato), value);
         return cell;
     }
 
@@ -2547,9 +2675,9 @@ mod tests {
             harness.messages(),
             vec![Message::NoteOn(Channel::Ch1, 62, 0x40)]
         );
-        harness.effect_tick();
+        harness.command_tick();
         assert!(harness.messages().is_empty());
-        harness.effect_tick();
+        harness.command_tick();
         assert_eq!(
             harness.messages(),
             vec![Message::NoteOff(Channel::Ch1, 60, 0)]
@@ -2570,10 +2698,10 @@ mod tests {
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
         harness.messages();
         for _ in 0..3 {
-            harness.effect_tick();
+            harness.command_tick();
         }
         assert!(harness.messages().is_empty());
-        harness.effect_tick();
+        harness.command_tick();
         assert_eq!(
             harness.messages(),
             vec![
@@ -2581,7 +2709,7 @@ mod tests {
                 Message::NoteOff(Channel::Ch1, 60, 0),
             ]
         );
-        harness.effect_tick();
+        harness.command_tick();
         harness.next_row();
         assert!(note_velocities(&harness.messages()).is_empty());
     }
@@ -2601,7 +2729,7 @@ mod tests {
         harness.next_row();
         harness.messages();
         for _ in 0..5 {
-            harness.effect_tick();
+            harness.command_tick();
         }
         assert_eq!(
             harness.messages(),
@@ -2622,10 +2750,10 @@ mod tests {
             harness.messages(),
             vec![Message::Start, Message::NoteOn(Channel::Ch1, 60, 0x40)]
         );
-        harness.effect_tick();
-        harness.effect_tick();
+        harness.command_tick();
+        harness.command_tick();
         assert!(harness.messages().is_empty());
-        harness.effect_tick();
+        harness.command_tick();
         assert_eq!(
             harness.messages(),
             vec![Message::NoteOff(Channel::Ch1, 60, 0)]
@@ -2641,7 +2769,7 @@ mod tests {
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
         harness.next_row();
         harness.messages();
-        harness.effect_tick();
+        harness.command_tick();
         assert_eq!(
             harness.messages(),
             vec![Message::NoteOff(Channel::Ch1, 60, 0)]
@@ -2676,7 +2804,7 @@ mod tests {
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
         harness.messages();
         for _ in 1..6 {
-            harness.effect_tick();
+            harness.command_tick();
         }
         assert!(harness.messages().is_empty());
     }
@@ -2695,10 +2823,10 @@ mod tests {
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
         harness.messages();
         for _ in 0..3 {
-            harness.effect_tick();
+            harness.command_tick();
         }
         assert!(harness.messages().is_empty());
-        harness.effect_tick();
+        harness.command_tick();
         assert_eq!(
             harness.messages(),
             vec![
@@ -2706,7 +2834,7 @@ mod tests {
                 Message::NoteOn(Channel::Ch1, 62, 0x40),
             ]
         );
-        harness.effect_tick();
+        harness.command_tick();
         harness.next_row();
         assert!(note_velocities(&harness.messages()).is_empty());
     }
@@ -2746,7 +2874,7 @@ mod tests {
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
         harness.messages();
         for _ in 0..4 {
-            harness.effect_tick();
+            harness.command_tick();
         }
         assert_eq!(
             harness.messages(),
@@ -2772,7 +2900,7 @@ mod tests {
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
         harness.messages();
         for _ in 0..5 {
-            harness.effect_tick();
+            harness.command_tick();
         }
         let pitches: Vec<u8> = harness
             .messages()
@@ -2803,7 +2931,7 @@ mod tests {
         harness.engine.apply(EngineCommand::PlaySong(0, true));
         harness.messages();
         for _ in 0..5 {
-            harness.effect_tick();
+            harness.command_tick();
         }
         assert!(note_velocities(&harness.messages()).is_empty());
     }
@@ -2821,7 +2949,7 @@ mod tests {
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0), true));
         for _ in 0..5 {
-            harness.effect_tick();
+            harness.command_tick();
         }
         harness.engine.apply(EngineCommand::SetPattern(
             PatternId(0),
@@ -2967,7 +3095,7 @@ mod tests {
     }
 
     #[test]
-    fn synced_row_runs_its_effect_ticks_before_the_next_row() {
+    fn synced_row_runs_its_command_ticks_before_the_next_row() {
         let mut harness = synced(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0xD2))])]);
         harness.engine.apply(EngineCommand::ExternalStart);
         external_pulses(&mut harness, 0, 6 + 1);
@@ -3216,7 +3344,7 @@ mod tests {
     }
 
     #[test]
-    fn effect_ticks_run_on_pulses() {
+    fn command_ticks_run_on_pulses() {
         let mut harness = with_speed(
             Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0xD2))])]),
             3,
@@ -3295,7 +3423,7 @@ mod tests {
         harness.next_row();
         harness.messages();
         for _ in 0..3 {
-            harness.effect_tick();
+            harness.command_tick();
         }
         assert_eq!(
             harness.messages(),
@@ -3384,7 +3512,7 @@ mod tests {
         harness.messages();
         let mut note_ons = vec![];
         for _ in 1..6 {
-            harness.effect_tick();
+            harness.command_tick();
             for message in harness.messages() {
                 if let Message::NoteOn(channel, pitch, _) = message {
                     note_ons.push((channel, pitch));
@@ -3566,5 +3694,231 @@ mod tests {
         let messages = harness.messages();
         assert!(messages.contains(&Message::NoteOff(Channel::Ch3, 64, 0)));
         assert!(messages.contains(&Message::AllNotesOff(Channel::Ch3)));
+    }
+
+    /// What an `OctaveUp` was given: the timing of each tick and of each processed note on.
+    #[derive(Default)]
+    struct Seen {
+        ticks: Vec<u32>,
+        notes: Vec<Option<Timing>>,
+    }
+
+    /// Moves notes up an octave, records its timings and plays a note when it's reset.
+    struct OctaveUp {
+        seen: Arc<Mutex<Seen>>,
+    }
+    impl MidiEffect for OctaveUp {
+        fn params(&self) -> &'static [Param] {
+            return &[];
+        }
+        fn param(&self, _index: usize) -> u8 {
+            return 0;
+        }
+        fn set_param(&mut self, _index: usize, _value: u8) {}
+        fn process(&mut self, message: Message, timing: Option<Timing>, out: &mut Vec<Message>) {
+            if matches!(message, Message::NoteOn(..)) {
+                self.seen.lock().unwrap().notes.push(timing);
+            }
+            out.push(match message {
+                Message::NoteOn(c, p, v) => Message::NoteOn(c, p + 12, v),
+                Message::NoteOff(c, p, v) => Message::NoteOff(c, p + 12, v),
+                message => message,
+            });
+        }
+        fn tick(&mut self, timing: Timing, _out: &mut Vec<Message>) {
+            self.seen.lock().unwrap().ticks.push(timing.pulse);
+        }
+        fn reset(&mut self, out: &mut Vec<Message>) {
+            out.push(Message::NoteOff(Channel::Ch3, 0, 0));
+        }
+    }
+
+    /// Puts an `OctaveUp` on channel 3 and returns what it sees.
+    fn octave_up_on_channel_3(harness: &mut Harness) -> Arc<Mutex<Seen>> {
+        let seen = Arc::new(Mutex::new(Seen::default()));
+        let mut chain = MidiEffectChain::new();
+        chain.push(Box::new(OctaveUp { seen: seen.clone() }));
+        harness.engine.apply(EngineCommand::SetEffectChain {
+            channel: 2,
+            chain: Arc::new(Mutex::new(chain)),
+        });
+        return seen;
+    }
+
+    #[test]
+    fn effects_change_notes_on_their_instruments_channel() {
+        let mut harness = Harness::new(vec![pattern(
+            4,
+            &[(0, 0, note("C-4 2 40")), (0, 1, note("C-4 1 40"))],
+        )]);
+        octave_up_on_channel_3(&mut harness);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        let messages = harness.messages();
+        assert!(messages.contains(&Message::NoteOn(Channel::Ch3, 72, 0x40)));
+        assert!(messages.contains(&Message::NoteOn(Channel::Ch2, 60, 0x40)));
+    }
+
+    #[test]
+    fn effects_change_live_notes() {
+        let mut harness = Harness::new(vec![pattern(2, &[])]);
+        octave_up_on_channel_3(&mut harness);
+        harness.engine.apply(EngineCommand::PlayNote {
+            track: 0,
+            channel: 2,
+            pitch: 64,
+            velocity: 100,
+        });
+        harness.engine.apply(EngineCommand::ReleaseNote(0));
+        assert_eq!(
+            harness.messages(),
+            vec![
+                Message::NoteOn(Channel::Ch3, 76, 100),
+                Message::NoteOff(Channel::Ch3, 76, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn effects_tick_on_every_pulse() {
+        let mut harness = Harness::new(vec![pattern(4, &[])]);
+        let seen = octave_up_on_channel_3(&mut harness);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.next_row();
+        let ticks = harness.engine.ticks_per_line() as u32;
+        assert_eq!(
+            seen.lock().unwrap().ticks,
+            (0..=ticks).collect::<Vec<u32>>()
+        );
+    }
+
+    #[test]
+    fn effect_pulses_restart_with_the_pattern() {
+        let mut harness = Harness::new(vec![pattern(2, &[])]);
+        let seen = octave_up_on_channel_3(&mut harness);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.next_row();
+        harness.next_row();
+        let ticks = harness.engine.ticks_per_line() as u32;
+        let mut expected: Vec<u32> = (0..ticks * 2).collect();
+        expected.push(0);
+        assert_eq!(seen.lock().unwrap().ticks, expected);
+    }
+
+    #[test]
+    fn effect_pulses_keep_counting_through_speed_changes() {
+        let mut slow = note("C-4 2 40");
+        slow.command = Command::new(CommandKind::Playback(PlaybackCommand::SetTempo), 3);
+        let mut harness = Harness::new(vec![pattern(4, &[(1, 0, slow), (2, 0, note("C-4 2 40"))])]);
+        let seen = octave_up_on_channel_3(&mut harness);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.next_row();
+        harness.next_row();
+        let notes = &seen.lock().unwrap().notes;
+        assert_eq!(
+            *notes,
+            vec![
+                Some(Timing::new(DEFAULT_SPEED as u32)),
+                Some(Timing::new(DEFAULT_SPEED as u32 + 3)),
+            ]
+        );
+    }
+
+    #[test]
+    fn continuing_mid_pattern_counts_pulses_from_its_first_row() {
+        let mut harness = Harness::new(vec![pattern(4, &[])]);
+        harness
+            .engine
+            .apply(EngineCommand::SetSequence(vec![SequenceRow {
+                pattern_id: PatternId(0),
+                repeats: 1,
+            }]));
+        harness
+            .engine
+            .apply(EngineCommand::SetClockSource(ClockSource::External));
+        let seen = octave_up_on_channel_3(&mut harness);
+        harness.engine.apply(EngineCommand::ExternalSongPosition(2));
+        harness.engine.apply(EngineCommand::ExternalContinue);
+        external_pulses(&mut harness, 0, 1);
+        assert_eq!(seen.lock().unwrap().ticks.first(), Some(&12));
+    }
+
+    #[test]
+    fn live_notes_have_no_timing_while_stopped() {
+        let mut harness = Harness::new(vec![pattern(2, &[])]);
+        let seen = octave_up_on_channel_3(&mut harness);
+        harness.engine.apply(EngineCommand::PlayNote {
+            track: 0,
+            channel: 2,
+            pitch: 64,
+            velocity: 100,
+        });
+        assert_eq!(seen.lock().unwrap().notes, vec![None]);
+    }
+
+    #[test]
+    fn stopping_resets_effects_without_running_their_releases_through_them_again() {
+        let mut harness = Harness::new(vec![pattern(4, &[])]);
+        octave_up_on_channel_3(&mut harness);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.messages();
+        harness.engine.apply(EngineCommand::Stop);
+        assert!(
+            harness
+                .messages()
+                .contains(&Message::NoteOff(Channel::Ch3, 0, 0))
+        );
+    }
+
+    #[test]
+    fn set_effect_param_changes_the_instruments_effect() {
+        let mut harness = Harness::new(vec![pattern(2, &[])]);
+        let mut chain = MidiEffectChain::new();
+        chain.push(create_effect(&default_settings(EffectKind::Eq)));
+        let chain = Arc::new(Mutex::new(chain));
+        harness.engine.apply(EngineCommand::SetEffectChain {
+            channel: 2,
+            chain: chain.clone(),
+        });
+        harness.engine.apply(EngineCommand::SetEffectParam {
+            channel: 2,
+            effect: 0,
+            param: 3,
+            value: 0x40,
+        });
+        harness.engine.apply(EngineCommand::PlayNote {
+            track: 0,
+            channel: 2,
+            pitch: 60,
+            velocity: 100,
+        });
+        assert_eq!(chain.lock().unwrap().get(0).unwrap().param(3), 0x40);
+        assert_eq!(
+            harness.messages(),
+            vec![Message::NoteOn(Channel::Ch3, 60, 50)]
+        );
+    }
+
+    #[test]
+    fn replacing_a_chain_resets_the_old_one() {
+        let mut harness = Harness::new(vec![pattern(2, &[])]);
+        octave_up_on_channel_3(&mut harness);
+        harness.engine.apply(EngineCommand::SetEffectChain {
+            channel: 2,
+            chain: Arc::default(),
+        });
+        assert_eq!(
+            harness.messages(),
+            vec![Message::NoteOff(Channel::Ch3, 0, 0)]
+        );
     }
 }

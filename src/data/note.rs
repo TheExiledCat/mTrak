@@ -2,7 +2,7 @@ use std::fmt::{self, Display};
 
 use crate::{
     data::{
-        effect::{Command, CommandKind},
+        commands::{Command, CommandKind},
         midi::{MIDI_CHANNEL_MAX, VOLUME_MAX},
         pattern::invalid_pattern,
     },

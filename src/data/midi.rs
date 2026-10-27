@@ -15,6 +15,14 @@ pub const MAX_SPEED: u8 = 0x1F;
 pub fn pulse_duration(bpm: u8) -> Duration {
     return Duration::from_secs_f64(60.0 / (bpm.max(1) as f64 * PULSES_PER_QUARTER as f64));
 }
+/// Multiplies a velocity by `scale / max`, rounding up so a scaled note never drops to a
+/// velocity of 0, which MIDI treats as a note off. A scale above `max` boosts the velocity, up
+/// to `VELOCITY_MAX`.
+pub fn scale_velocity(velocity: u8, scale: u8, max: u8) -> u8 {
+    return (velocity as u16 * scale as u16)
+        .div_ceil(max.max(1) as u16)
+        .min(VELOCITY_MAX as u16) as u8;
+}
 #[derive(Clone)]
 pub enum MidiEvent {
     Message(Message),
@@ -135,6 +143,23 @@ mod tests {
     use midi::ToRawMessages;
 
     use super::*;
+
+    #[test]
+    fn scale_velocity_rounds_up() {
+        assert_eq!(scale_velocity(100, 0xFF, u8::MAX), 100);
+        assert_eq!(scale_velocity(100, 0x80, u8::MAX), 51);
+        assert_eq!(scale_velocity(1, 1, u8::MAX), 1);
+        assert_eq!(scale_velocity(100, 0, u8::MAX), 0);
+        assert_eq!(scale_velocity(VELOCITY_MAX, 0xFF, u8::MAX), VELOCITY_MAX);
+    }
+
+    #[test]
+    fn scale_velocity_uses_its_own_max() {
+        assert_eq!(scale_velocity(100, 5, 10), 50);
+        assert_eq!(scale_velocity(100, 10, 10), 100);
+        assert_eq!(scale_velocity(100, 20, 10), VELOCITY_MAX);
+        assert_eq!(scale_velocity(100, 5, 0), VELOCITY_MAX);
+    }
 
     #[test]
     fn durations_follow_bpm() {

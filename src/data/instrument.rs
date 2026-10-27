@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::data::effect::EffectSettings;
+
 pub const DEFAULT_PITCH_WHEEL_RANGE: u8 = 12;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -11,6 +13,8 @@ pub struct Instrument {
     pub default_cc: u8,
     /// Semitones added to every note the instrument plays, on top of the song's transpose.
     pub transpose: i8,
+    /// The live MIDI effects on the instrument's channel, in the order notes go through them.
+    pub effects: Vec<EffectSettings>,
 }
 impl Default for Instrument {
     fn default() -> Self {
@@ -20,6 +24,7 @@ impl Default for Instrument {
             pitch_wheel_range: DEFAULT_PITCH_WHEEL_RANGE,
             default_cc: 0,
             transpose: 0,
+            effects: Vec::new(),
         };
     }
 }

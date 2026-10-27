@@ -19,16 +19,45 @@ pub type Migration = fn(Value) -> Result<Value>;
 
 /// Each file version before the current one, with the migration that turns its payload into
 /// the next version's.
-const MIGRATIONS: &[(u16, Migration)] = &[];
+const MIGRATIONS: &[(u16, Migration)] = &[(3, add_instrument_effects)];
 
 /// The first file version written as MessagePack. Older files used bincode, which can't be
 /// migrated as it doesn't store field names.
 pub const FIRST_MESSAGEPACK_VERSION: u16 = 3;
-pub const PROJECT_VERSION: u16 = 3;
+pub const PROJECT_VERSION: u16 = 4;
 
 /// Passes a payload of `version` through every migration up to [`PROJECT_VERSION`].
 pub fn migrate(payload: Value, version: u16) -> Result<Value> {
     return migrate_with(payload, version, PROJECT_VERSION, MIGRATIONS);
+}
+
+/// Version 4 gave instruments a chain of effects, which is empty for older projects.
+fn add_instrument_effects(mut payload: Value) -> Result<Value> {
+    let Some(Value::Array(instruments)) = map_field(&mut payload, "instruments") else {
+        return Err(MTrakError::InvalidProject(
+            "the project has no instruments".into(),
+        ));
+    };
+    for instrument in instruments {
+        let Value::Map(fields) = instrument else {
+            return Err(MTrakError::InvalidProject(
+                "an instrument isn't a map".into(),
+            ));
+        };
+        fields.push((Value::from("effects"), Value::Array(Vec::new())));
+    }
+    return Ok(payload);
+}
+
+/// The value of a field of a payload map.
+fn map_field<'a>(payload: &'a mut Value, name: &str) -> Option<&'a mut Value> {
+    let Value::Map(fields) = payload else {
+        return None;
+    };
+    return fields
+        .iter_mut()
+        .find(|(key, _)| key.as_str() == Some(name))
+        .map(|(_, value)| value);
 }
 
 fn migrate_with(
@@ -95,10 +124,28 @@ mod tests {
     const TEST_MIGRATIONS: &[(u16, Migration)] = &[(V, rename_tempo_to_bpm), (V + 1, add_speed)];
 
     #[test]
-    #[allow(
-        clippy::reversed_empty_ranges,
-        reason = "empty until the first migration"
-    )]
+    fn version_3_instruments_get_an_empty_effect_chain() {
+        let instrument = payload(vec![("name", Value::from("Bass"))]);
+        let old = payload(vec![("instruments", Value::Array(vec![instrument; 2]))]);
+        let migrated = add_instrument_effects(old).unwrap();
+        let Some(Value::Array(instruments)) = field(&migrated, "instruments") else {
+            panic!("the instruments are gone");
+        };
+        for instrument in instruments {
+            assert_eq!(field(instrument, "name"), Some(&Value::from("Bass")));
+            assert_eq!(field(instrument, "effects"), Some(&Value::Array(vec![])));
+        }
+    }
+
+    #[test]
+    fn version_3_without_instruments_is_an_error() {
+        assert!(matches!(
+            add_instrument_effects(payload(vec![])),
+            Err(MTrakError::InvalidProject(_))
+        ));
+    }
+
+    #[test]
     fn every_version_before_the_current_one_has_a_migration() {
         for version in FIRST_MESSAGEPACK_VERSION..PROJECT_VERSION {
             let count = MIGRATIONS

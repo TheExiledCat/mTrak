@@ -1,7 +1,7 @@
 # Project file format
 
 This page describes how mTrak saves a project (`.mtrak`), so other programs can read and write
-it. It describes file version 3, written by mTrak v0.6.0 and later.
+it. It describes file version 4, written by the first mTrak release after v0.6.0 and later.
 
 A project file is a short header followed by a [MessagePack](https://msgpack.org) payload.
 Everything in the payload is a map with named fields, except the notes in a pattern, which are
@@ -61,6 +61,33 @@ The first instrument plays on MIDI channel 1, the last on channel 16.
 | `pitch_wheel_range` | int    | The synth's pitch bend range in semitones, for the `I` command |
 | `default_cc`        | int    | The CC that CC commands change on a track without an `S`       |
 | `transpose`         | int    | Semitones added to the instrument's notes, can be negative     |
+| `effects`           | array of maps | The instrument's live MIDI effects, see below           |
+
+#### Effects
+
+The effects on an instrument's channel, in the order notes go through them. Each one is:
+
+| Field    | Type          | Contents                                                     |
+| -------- | ------------- | ------------------------------------------------------------ |
+| `kind`   | string        | Which effect it is, see below                                |
+| `values` | array of ints | Each of the effect's parameters, `0`-`255`, in the order below |
+
+mTrak clamps a value to what its parameter takes, gives parameters without a value their
+default, and ignores values past the effect's last parameter.
+
+The `Eq` effect changes the velocity of notes by their pitch, and fades notes out above and
+below a cutoff. A note whose velocity reaches 0 isn't played. Its values:
+
+| Index | Parameter                | Values                                                         | Default |
+| ----- | ------------------------ | -------------------------------------------------------------- | ------- |
+| 0     | Low band up to           | A MIDI note, `0`-`127`; notes up to it are in the low band     | `42`    |
+| 1     | Mid band up to           | A MIDI note; notes above the low band up to it are in the mid band | `84` |
+| 2     | Low velocity             | Scales the low band's velocity, `0x80` leaves it unchanged     | `0x80`  |
+| 3     | Mid velocity             | The same for the mid band                                      | `0x80`  |
+| 4     | High velocity            | The same for notes above the mid band                          | `0x80`  |
+| 5     | High pass                | A MIDI note; notes below it get quieter                        | `0`     |
+| 6     | Low pass                 | A MIDI note; notes above it get quieter                        | `127`   |
+| 7     | Filter slope             | The velocity notes lose per octave past a cutoff               | `8`     |
 
 ### Patterns
 
@@ -100,3 +127,7 @@ Some cells and their bytes:
 | `===\|-\|--\|000` | `81 01`                  |
 | `C-4\|3\|40\|F8C` | `9F 3C 03 40 46 8C`      |
 | `---\|-\|--\|S10` | `98 53 10`               |
+
+## Older versions
+
+- [File version 3](archive/FILE_FORMAT_v3.md), written by mTrak v0.6.0.

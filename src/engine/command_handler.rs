@@ -7,7 +7,7 @@ use rand::RngExt;
 
 use crate::{
     data::{
-        effect::{Effect, MidiCommand},
+        commands::{MidiCommand, PlaybackAction},
         instrument::DEFAULT_PITCH_WHEEL_RANGE,
         midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX},
         note::Note,
@@ -28,7 +28,7 @@ pub struct SlideTarget {
     pub ticks: u32,
 }
 
-/// What happens to the note on the same cell as an effect command.
+/// What happens to the note on the same cell as a playback command.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NoteAction {
     Play,
@@ -326,7 +326,7 @@ impl MidiCommandHandler {
         }
     }
 
-    /// Advances running slides by one tick; called at every row start and effect tick.
+    /// Advances running slides by one tick; called at every row start and tick between rows.
     pub fn tick(&mut self, events: &mut Vec<MidiEvent>) {
         for state in self.tracks.iter_mut() {
             state.row_velocity = None;
@@ -374,19 +374,19 @@ impl MidiCommandHandler {
         self.pressed = [false; MIDI_CHANNEL_COUNT];
     }
 }
-/// Keeps the tempo set by effect commands, which carries over pattern boundaries until it is
+/// Keeps the tempo set by playback commands, which carries over pattern boundaries until it is
 /// reset by 00 or by playback starting or stopping.
-pub struct EffectCommandHandler {
+pub struct PlaybackCommandHandler {
     bpm: Option<u8>,
     speed: Option<u8>,
 }
-impl Default for EffectCommandHandler {
+impl Default for PlaybackCommandHandler {
     fn default() -> Self {
         return Self::new();
     }
 }
 
-impl EffectCommandHandler {
+impl PlaybackCommandHandler {
     pub fn new() -> Self {
         return Self {
             bpm: None,
@@ -403,37 +403,37 @@ impl EffectCommandHandler {
         return self.speed;
     }
 
-    /// Runs an effect and says what happens to the note on its cell.
-    pub fn apply(&mut self, effect: Effect) -> NoteAction {
-        return match effect {
-            Effect::ResetTempo => {
+    /// Runs a playback action and says what happens to the note on its cell.
+    pub fn apply(&mut self, action: PlaybackAction) -> NoteAction {
+        return match action {
+            PlaybackAction::ResetTempo => {
                 self.bpm = None;
                 self.speed = None;
                 NoteAction::Play
             }
-            Effect::SetSpeed(speed) => {
+            PlaybackAction::SetSpeed(speed) => {
                 self.speed = Some(speed);
                 NoteAction::Play
             }
-            Effect::SetBpm(bpm) => {
+            PlaybackAction::SetBpm(bpm) => {
                 self.bpm = Some(bpm);
                 NoteAction::Play
             }
-            Effect::Probability(0) => NoteAction::Skip,
-            Effect::Probability(0xFF) => NoteAction::Play,
-            Effect::Probability(chance) if rand::rng().random_range(0..=0xFF) < chance => {
+            PlaybackAction::Probability(0) => NoteAction::Skip,
+            PlaybackAction::Probability(0xFF) => NoteAction::Play,
+            PlaybackAction::Probability(chance) if rand::rng().random_range(0..=0xFF) < chance => {
                 NoteAction::Play
             }
-            Effect::Probability(_) => NoteAction::Skip,
-            Effect::DelayEarly(_) => NoteAction::Play,
-            Effect::DelayLate(0) => NoteAction::Play,
-            Effect::DelayLate(ticks) => NoteAction::Delay(ticks),
-            Effect::Retrig { every, volume } => NoteAction::Retrig { every, volume },
-            Effect::LegatoEarly(_) => NoteAction::Legato(0),
-            Effect::LegatoHold(overlap) => NoteAction::Legato(overlap),
-            Effect::Cut(tick) => NoteAction::Cut(tick),
-            Effect::RetrigNote(every) => NoteAction::RetrigNote(every),
-            Effect::Unused => NoteAction::Play,
+            PlaybackAction::Probability(_) => NoteAction::Skip,
+            PlaybackAction::DelayEarly(_) => NoteAction::Play,
+            PlaybackAction::DelayLate(0) => NoteAction::Play,
+            PlaybackAction::DelayLate(ticks) => NoteAction::Delay(ticks),
+            PlaybackAction::Retrig { every, volume } => NoteAction::Retrig { every, volume },
+            PlaybackAction::LegatoEarly(_) => NoteAction::Legato(0),
+            PlaybackAction::LegatoHold(overlap) => NoteAction::Legato(overlap),
+            PlaybackAction::Cut(tick) => NoteAction::Cut(tick),
+            PlaybackAction::RetrigNote(every) => NoteAction::RetrigNote(every),
+            PlaybackAction::Unused => NoteAction::Play,
         };
     }
 
@@ -450,20 +450,20 @@ mod tests {
 
     use super::*;
     use crate::data::{
-        effect::{Command, CommandKind, EffectCommand},
+        commands::{Command, CommandKind, PlaybackCommand},
         note::Note,
     };
 
     fn cc_note(command: MidiCommand, value: u8, instrument: u8) -> Note {
         let mut note = Note::empty();
         note.instrument_id = Some(instrument);
-        note.command = Command::new(CommandKind::MidiCommand(command), value);
+        note.command = Command::new(CommandKind::Midi(command), value);
         return note;
     }
 
     fn handle(handler: &mut MidiCommandHandler, track: usize, note: Note) -> Vec<Message> {
         let mut events = vec![];
-        let CommandKind::MidiCommand(command) = note.command.kind else {
+        let CommandKind::Midi(command) = note.command.kind else {
             unreachable!();
         };
         handler.handle_command(
@@ -649,16 +649,16 @@ mod tests {
         assert!(events.is_empty());
     }
 
-    fn tempo(handler: &mut EffectCommandHandler, value: u8) {
+    fn tempo(handler: &mut PlaybackCommandHandler, value: u8) {
         assert_eq!(
-            handler.apply(EffectCommand::SetTempo.decode(value)),
+            handler.apply(PlaybackCommand::SetTempo.decode(value)),
             NoteAction::Play
         );
     }
 
     #[test]
     fn tempo_sets_bpm_from_20_and_speed_below() {
-        let mut handler = EffectCommandHandler::new();
+        let mut handler = PlaybackCommandHandler::new();
         tempo(&mut handler, 0x1F);
         assert_eq!((handler.bpm(), handler.speed()), (None, Some(0x1F)));
         tempo(&mut handler, 0x20);
@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn reset_clears_the_tempo() {
-        let mut handler = EffectCommandHandler::new();
+        let mut handler = PlaybackCommandHandler::new();
         tempo(&mut handler, 0x90);
         tempo(&mut handler, 0x03);
         handler.reset();
@@ -678,14 +678,14 @@ mod tests {
 
     #[test]
     fn probability_00_never_plays_and_ff_always_plays() {
-        let mut handler = EffectCommandHandler::new();
+        let mut handler = PlaybackCommandHandler::new();
         for _ in 0..100 {
             assert_eq!(
-                handler.apply(EffectCommand::Probability.decode(0x00)),
+                handler.apply(PlaybackCommand::Probability.decode(0x00)),
                 NoteAction::Skip
             );
             assert_eq!(
-                handler.apply(EffectCommand::Probability.decode(0xFF)),
+                handler.apply(PlaybackCommand::Probability.decode(0xFF)),
                 NoteAction::Play
             );
         }
@@ -693,22 +693,22 @@ mod tests {
 
     #[test]
     fn late_delay_holds_the_note_back_unless_it_is_10() {
-        let mut handler = EffectCommandHandler::new();
+        let mut handler = PlaybackCommandHandler::new();
         assert_eq!(
-            handler.apply(EffectCommand::Extended.decode(0xD0)),
+            handler.apply(PlaybackCommand::Extended.decode(0xD0)),
             NoteAction::Play
         );
         assert_eq!(
-            handler.apply(EffectCommand::Extended.decode(0xD3)),
+            handler.apply(PlaybackCommand::Extended.decode(0xD3)),
             NoteAction::Delay(3)
         );
     }
 
     #[test]
     fn retrig_with_zeros_is_still_a_retrig() {
-        let mut handler = EffectCommandHandler::new();
+        let mut handler = PlaybackCommandHandler::new();
         assert_eq!(
-            handler.apply(EffectCommand::Retrig.decode(0x00)),
+            handler.apply(PlaybackCommand::Retrig.decode(0x00)),
             NoteAction::Retrig {
                 every: 0,
                 volume: 0
@@ -718,16 +718,16 @@ mod tests {
 
     #[test]
     fn retrig_splits_volume_and_interval() {
-        let mut handler = EffectCommandHandler::new();
+        let mut handler = PlaybackCommandHandler::new();
         assert_eq!(
-            handler.apply(EffectCommand::Retrig.decode(0x02)),
+            handler.apply(PlaybackCommand::Retrig.decode(0x02)),
             NoteAction::Retrig {
                 every: 2,
                 volume: 0
             }
         );
         assert_eq!(
-            handler.apply(EffectCommand::Retrig.decode(0xA3)),
+            handler.apply(PlaybackCommand::Retrig.decode(0xA3)),
             NoteAction::Retrig {
                 every: 3,
                 volume: 0xA

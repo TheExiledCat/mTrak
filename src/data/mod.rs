@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod config;
 pub mod effect;
 pub mod instrument;

@@ -9,23 +9,25 @@ use crate::tui::{
     framework::keymap::{HelpSection, KeyHint},
 };
 
+#[allow(unused_variables)]
 pub trait MtrakWidget {
-    fn update(&mut self, _state: &mut AppState) {}
-    fn handle_event(&mut self, _state: &mut AppState, _event: &Event) -> bool {
+    fn update(&mut self, state: &mut AppState) {}
+    fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
         return false;
     }
     /// Adds the keys this widget currently responds to, for display in a footer or help view.
     /// Widgets with children should forward this to them.
-    fn key_hints(&self, _state: &AppState, _hints: &mut Vec<KeyHint>) {}
-    fn help(&self, _sections: &mut Vec<HelpSection>) {}
+    fn key_hints(&self, state: &AppState, hints: &mut Vec<KeyHint>) {}
+    fn help(&self, sections: &mut Vec<HelpSection>) {}
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer);
 }
 
 /// A widget with a compact layout alongside its full one.
+#[allow(unused_variables)]
 pub trait Collapsible {
     fn render_full(&mut self, state: &AppState, area: Rect, buf: &mut Buffer);
     /// Draws nothing by default, for widgets that are hidden while collapsed.
-    fn render_collapsed(&mut self, _state: &AppState, _area: Rect, _buf: &mut Buffer) {}
+    fn render_collapsed(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {}
 }
 
 /// Returns the click position relative to `area` if `event` is a left click inside it.

@@ -175,9 +175,9 @@ C-4|1|--|I7B   5 semitones lower (G-3)
   `I8C`. With a range of `00`, `I` sends no bend.
 - Like `P`, the bend affects every note on the channel and stays until the next `P` or `I`.
 
-## Effect commands
+## Playback commands
 
-Effect commands change playback, or how the cell's note plays, instead of sending MIDI. They
+Playback commands change playback, or how the cell's note plays, instead of sending MIDI. They
 work on any track and on muted channels.
 
 Several of them work in ticks. A row lasts as many ticks as the speed, 6 by default: the

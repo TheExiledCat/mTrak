@@ -1,19 +1,25 @@
 use chrono::{Datelike, Local};
+use clap::builder::styling::EffectIter;
 use figlet_rs::FIGlet;
 
 use crate::{
     data::{
         config::TITLE,
+        effect::EffectKind,
+        midi::VELOCITY_MAX,
+        note::NotePitch,
         pattern::{ClearOption, ClearTarget},
     },
+    engine::effects::{Param, ParamKind, effect_params},
     tui::{
         app::AppState,
         framework::{
             core_extensions::Boxed,
             dialog::{
-                Checkbox, Dialog, DialogComponent, DialogResult, InfoLevel, Label, Link, NumberBox,
-                Select, TextPrompt,
+                Buttons, Checkbox, Dialog, DialogComponent, DialogResult, InfoLevel, Label, Link,
+                List, ListEvent, NumberBox, Select, TextPrompt,
             },
+            keymap::KeyActions,
         },
         glyphs,
     },
@@ -184,11 +190,16 @@ pub fn open_instrument_dialog(state: &mut AppState) {
                 .range(i8::MIN as i32, i8::MAX as i32)
                 .value(settings.transpose as i32)
                 .boxed(),
+            Buttons::new("effects", vec!["Effects"]).boxed(),
         ],
     )
+    .hide_behind_child()
     .focus_first()
     .on_update(move |state, fields| {
         apply_instrument(state, instrument, fields);
+        if fields.changed() == "effects" {
+            open_effects_dialog(state);
+        }
         return Ok(());
     })
     .on_submit(move |state, result| {
@@ -201,6 +212,7 @@ pub fn open_instrument_dialog(state: &mut AppState) {
         state.set_bend_range(instrument, original.pitch_wheel_range);
         state.set_default_cc(instrument, original.default_cc);
         state.set_instrument_transpose(instrument, original.transpose);
+        state.set_effects(instrument, original.effects);
         state.restore_has_changes(had_changes);
     });
     state.open_dialog(dialog);
@@ -223,7 +235,135 @@ fn apply_instrument(state: &mut AppState, instrument: u8, result: &DialogResult)
         state.set_instrument_transpose(instrument, transpose as i8);
     }
 }
+/// The active instrument's effects, in the order notes go through them. Changes are made
+/// right away.
+fn open_effects_dialog(state: &mut AppState) {
+    let instrument = state.active_instrument;
+    let list = List::new("effects", effect_names(state, instrument))
+        .items_from(move |state| effect_names(state, instrument))
+        .show_index(true)
+        .add_button("Add effect")
+        .removable(true)
+        .reorderable(true);
+    let dialog = Dialog::new(
+        format!("Instrument {:1X} effects", instrument),
+        vec![list.boxed()],
+    )
+    .hide_behind_child()
+    .focus_first()
+    .on_update(move |state, fields| {
+        match fields.list_event("effects") {
+            Some(ListEvent::Open(effect)) => open_effect_dialog(state, instrument, effect),
+            Some(ListEvent::Add) => open_add_effect_dialog(state, instrument),
+            Some(ListEvent::Remove(effect)) => state.remove_effect(instrument, effect),
+            Some(ListEvent::Move { from, to }) => state.move_effect(instrument, from, to),
+            None => {}
+        }
+        return Ok(());
+    });
+    state.open_dialog(dialog);
+}
 
+fn effect_names(state: &AppState, instrument: u8) -> Vec<String> {
+    return state.project().instruments[instrument as usize]
+        .effects
+        .iter()
+        .map(|settings| settings.kind.name().to_owned())
+        .collect();
+}
+
+fn open_add_effect_dialog(state: &mut AppState, instrument: u8) {
+    let kinds = EffectKind::ALL.iter().map(|kind| kind.name()).collect();
+    let dialog = Dialog::new(
+        "Add effect",
+        vec![Select::new("kind", kinds).label("Effect").boxed()],
+    )
+    .focus_first()
+    .on_submit(move |state, result| {
+        if let Some(kind) = result.choice("kind").and_then(|i| EffectKind::ALL.get(i)) {
+            state.add_effect(instrument, *kind);
+        }
+        return Ok(());
+    });
+    state.open_dialog(dialog);
+}
+
+/// One field per parameter of an effect, previewed live; cancelling restores the old values.
+fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
+    let Some(settings) = state.project().instruments[instrument as usize]
+        .effects
+        .get(effect)
+        .cloned()
+    else {
+        return;
+    };
+    let had_changes = state.has_changes();
+    let params = effect_params(settings.kind);
+    let values: Vec<u8> = params
+        .iter()
+        .enumerate()
+        .map(|(index, param)| settings.values.get(index).copied().unwrap_or(param.default))
+        .collect();
+    let fields = params
+        .iter()
+        .zip(&values)
+        .map(|(param, value)| param_field(param, *value))
+        .collect();
+    let dialog = Dialog::new(format!("{} {:X}", settings.kind.name(), effect), fields)
+        .focus_first()
+        .on_update(move |state, fields| {
+            let changed = params
+                .iter()
+                .position(|param| param.name == fields.changed());
+            if let Some(index) = changed
+                && let Some(value) = param_value(&params[index], fields)
+            {
+                state.set_effect_param(instrument, effect, index, value);
+            }
+            return Ok(());
+        })
+        .on_cancel(move |state| {
+            for (index, value) in values.iter().enumerate() {
+                state.set_effect_param(instrument, effect, index, *value);
+            }
+            state.restore_has_changes(had_changes);
+        });
+    state.open_dialog(dialog);
+}
+
+fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
+    return match param.kind {
+        ParamKind::Number { min, max } => {
+            let digits = if max > 0xF { 2 } else { 1 };
+            NumberBox::new(param.name, param.name, digits)
+                .range(min as i32, max as i32)
+                .value(value as i32)
+                .boxed()
+        }
+        ParamKind::Toggle => Checkbox::new(param.name, param.name)
+            .checked(value != 0)
+            .boxed(),
+        ParamKind::Choice(names) => Select::new(param.name, names.to_vec())
+            .label(param.name)
+            .selected(value as usize)
+            .boxed(),
+        ParamKind::Pitch => {
+            let pitches = (0..=VELOCITY_MAX).map(|pitch| NotePitch(pitch).to_string());
+            Select::new(param.name, pitches.collect())
+                .label(param.name)
+                .selected(value as usize)
+                .boxed()
+        }
+    };
+}
+
+fn param_value(param: &Param, result: &DialogResult) -> Option<u8> {
+    return match param.kind {
+        ParamKind::Number { .. } => result.number(param.name).map(|n| n as u8),
+        ParamKind::Toggle => result.bool(param.name).map(|on| on as u8),
+        ParamKind::Choice(_) | ParamKind::Pitch => result.choice(param.name).map(|i| i as u8),
+    };
+}
 pub fn open_about_dialog(state: &mut AppState) {
     let logo = FIGlet::small()
         .ok()

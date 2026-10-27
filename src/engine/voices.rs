@@ -1,7 +1,10 @@
 use midi::{Channel, Message};
 use num::FromPrimitive;
 
-use crate::{data::midi::MIDI_CHANNEL_MAX, tui::constants::TRACK_COUNT};
+use crate::{
+    data::midi::{MIDI_CHANNEL_MAX, scale_velocity},
+    tui::constants::TRACK_COUNT,
+};
 
 const PITCH_COUNT: usize = 128;
 const MIDI_CHANNEL_COUNT: usize = MIDI_CHANNEL_MAX as usize + 1;
@@ -206,10 +209,11 @@ impl Voices {
         if pitch as usize >= PITCH_COUNT {
             return;
         }
-        let velocity = (velocity as f32
-            * (self.channel_volumes[channel as usize] as f32 / u8::MAX as f32)
-            * (self.velocity as f32 / u8::MAX as f32))
-            .ceil() as u8; // global volume and velocity work as velocity multipliers.
+        let velocity = scale_velocity(
+            scale_velocity(velocity, self.channel_volumes[channel as usize], u8::MAX),
+            self.velocity,
+            u8::MAX,
+        );
         let held = &mut self.held[channel as usize][pitch as usize];
         *held = held.saturating_add(1);
         self.tracks[track] = Some(Voice {

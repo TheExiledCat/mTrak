@@ -24,8 +24,10 @@ use crate::{
 };
 
 mod color_picker;
+mod list;
 
 pub use color_picker::ColorPicker;
+pub use list::{List, ListEvent};
 
 /// The value a single input component contributes to a `DialogResult`.
 #[derive(Clone, Debug, PartialEq)]
@@ -38,6 +40,11 @@ pub enum DialogValue {
     /// The last button pressed in a row of buttons, and how many presses there have been.
     Press {
         button: usize,
+        count: u32,
+    },
+    /// What was last done in a list, and how many times something has been.
+    List {
+        event: Option<ListEvent>,
         count: u32,
     },
 }
@@ -89,6 +96,14 @@ impl DialogResult {
         };
     }
 
+    /// What was last done in a list, if anything was.
+    pub fn list_event(&self, id: &str) -> Option<ListEvent> {
+        return match self.values.get(id) {
+            Some(DialogValue::List { event, count }) if *count > 0 => *event,
+            _ => None,
+        };
+    }
+
     pub fn color(&self, id: &str) -> Option<Color> {
         return match self.values.get(id) {
             Some(DialogValue::Color(c)) => Some(*c),
@@ -136,6 +151,7 @@ impl Deref for DialogFields<'_> {
     }
 }
 
+#[allow(unused_variables)]
 pub trait DialogComponent: MtrakWidget {
     fn get_height(&self) -> u8 {
         return 1;
@@ -156,22 +172,22 @@ pub trait DialogComponent: MtrakWidget {
     fn focusable(&self) -> bool {
         return false;
     }
-    fn set_focused(&mut self, _focused: bool) {}
+    fn set_focused(&mut self, focused: bool) {}
     /// How many fields Tab moves through inside this component before going on to the next
     /// one; 0 for a component that is a single field.
     fn subcomponents(&self) -> usize {
         return 0;
     }
     /// Focuses one of the fields counted by `subcomponents`, while the component has focus.
-    fn focus_subcomponent(&mut self, _index: usize) {}
+    fn focus_subcomponent(&mut self, index: usize) {}
     /// Draws on top of the whole dialog, e.g. an open dropdown list.
-    fn render_overlay(&mut self, _state: &AppState, _bounds: Rect, _buf: &mut Buffer) {}
+    fn render_overlay(&mut self, state: &AppState, bounds: Rect, buf: &mut Buffer) {}
     /// The id and current value of an input component; `None` for static content.
     fn value(&self) -> Option<(&'static str, DialogValue)> {
         return None;
     }
     /// Replaces the value of an input component; values of the wrong kind are ignored.
-    fn set_value(&mut self, _value: DialogValue) {}
+    fn set_value(&mut self, value: DialogValue) {}
 }
 
 type OnSubmit = Box<dyn FnOnce(&mut AppState, DialogResult) -> Result<()>>;
@@ -212,6 +228,8 @@ pub struct Dialog {
     on_cancel: Option<OnCancel>,
     on_update: Option<OnUpdate>,
     closed: bool,
+    /// Draws only the frame and title while another dialog is open on top.
+    hides_behind_child: bool,
     keys: Keymap<DialogAction>,
     footer: Footer,
 }
@@ -230,6 +248,7 @@ impl Dialog {
             on_cancel: None,
             on_update: None,
             closed: false,
+            hides_behind_child: false,
             footer: Footer::new(),
             keys: Keymap::new("dialog")
                 .bind(Key::plain(KeyCode::Enter), DialogAction::Submit, "OK")
@@ -274,6 +293,21 @@ impl Dialog {
     pub fn width(mut self, width: u16) -> Self {
         self.width = width;
         return self;
+    }
+    /// While a dialog opened from this one is on top, draws only this one's frame and title,
+    /// so the two don't run into each other.
+    pub fn hide_behind_child(mut self) -> Self {
+        self.hides_behind_child = true;
+        return self;
+    }
+
+    /// Draws the dialog while another one is open on top of it.
+    pub fn render_covered(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
+        if self.hides_behind_child {
+            self.render_frame(state, area, buf);
+        } else {
+            self.render(state, area, buf);
+        }
     }
 
     /// Opens with the first focusable component focused.
@@ -442,6 +476,34 @@ impl Dialog {
     fn content_height(&self) -> u16 {
         return self.components.iter().map(|c| c.get_height() as u16).sum();
     }
+
+    /// Clears the dialog's area and draws its border and title, returning the area inside.
+    fn render_frame(&self, state: &AppState, area: Rect, buf: &mut Buffer) -> Rect {
+        let block = Block::bordered()
+            .title(format!(" {} ", self.title))
+            .border_style(match self.level {
+                InfoLevel::Info => state.theme.border,
+                InfoLevel::Success => state.theme.border_success,
+                InfoLevel::Warning => state.theme.border_warning,
+                InfoLevel::Error => state.theme.border_danger,
+            })
+            .padding(Padding::horizontal(1));
+
+        // borders + content + spacer + hint line
+        let width = self.width.min(area.width);
+        let height = (self.content_height() + 4).min(area.height);
+        let popup = Rect {
+            x: area.x + (area.width - width) / 2,
+            y: area.y + (area.height - height) / 2,
+            width,
+            height,
+        };
+        Clear.render(popup, buf);
+        buf.set_style(popup, state.theme.background);
+        let inner = block.inner(popup);
+        block.render(popup, buf);
+        return inner;
+    }
 }
 
 impl KeyActions for Dialog {
@@ -552,29 +614,7 @@ impl MtrakWidget for Dialog {
     }
 
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
-        let block = Block::bordered()
-            .title(format!(" {} ", self.title))
-            .border_style(match self.level {
-                InfoLevel::Info => state.theme.border,
-                InfoLevel::Success => state.theme.border_success,
-                InfoLevel::Warning => state.theme.border_warning,
-                InfoLevel::Error => state.theme.border_danger,
-            })
-            .padding(Padding::horizontal(1));
-
-        // borders + content + spacer + hint line
-        let width = self.width.min(area.width);
-        let height = (self.content_height() + 4).min(area.height);
-        let popup = Rect {
-            x: area.x + (area.width - width) / 2,
-            y: area.y + (area.height - height) / 2,
-            width,
-            height,
-        };
-        Clear.render(popup, buf);
-        buf.set_style(popup, state.theme.background);
-        let inner = block.inner(popup);
-        block.render(popup, buf);
+        let inner = self.render_frame(state, area, buf);
 
         let [content, _, hint_area] = Layout::vertical([
             Constraint::Fill(1),

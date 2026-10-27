@@ -25,8 +25,10 @@ Read these before touching the doc:
   loading accepts), and `PatternStore`.
 - `src/data/note.rs`: the `CELL_*` constants, `write_cell` and `read_cell` for the cell bytes,
   and `NotePitch::MIN` / `MAX`.
-- `src/data/instrument.rs`, and `src/data/effect.rs` for the command letters and
-  `CommandKind::letter`.
+- `src/data/instrument.rs`, and `src/data/effect.rs` for the saved effects (`EffectKind`,
+  `EffectSettings`). Each effect's parameters, defaults and value ranges are in its file in
+  `src/engine/effects/` (e.g. `PARAMS` in `eq.rs`).
+- `src/data/commands.rs` for the command letters and `CommandKind::letter`.
 - Ranges the doc gives: check them in the code that enforces them (e.g. `VOLUME_MAX` and
   `MIDI_CHANNEL_MAX` in `src/data/midi.rs`, `MAX_ROWS`, `TRACK_COUNT`).
 - `docs/FILE_FORMAT.md` itself, and the archived versions in `docs/archive/`.

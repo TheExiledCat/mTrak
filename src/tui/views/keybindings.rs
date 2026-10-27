@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::{
-    data::effect::{CommandForm, EFFECT_COMMAND_LOOKUP, MIDI_COMMAND_LOOKUP},
+    data::commands::{CommandForm, MIDI_COMMAND_LOOKUP, PLAYBACK_COMMAND_LOOKUP},
     error::Result,
     tui::{
         app::AppState,
@@ -385,14 +385,14 @@ pub fn commands_dialog(height: u8) -> Dialog {
             .iter()
             .map(|(c, command)| (*c, command.forms())),
     );
-    let effects = commands_section(
-        "Effect commands",
-        EFFECT_COMMAND_LOOKUP
+    let playback = commands_section(
+        "Playback commands",
+        PLAYBACK_COMMAND_LOOKUP
             .iter()
             .map(|(c, command)| (*c, command.forms())),
     );
     let general = HelpSection::new("Values").entry("000", "No command");
-    let sections = vec![general, midi, effects];
+    let sections = vec![general, midi, playback];
     return table_dialog("Commands", KeyTable::new(sections, height.max(1), false));
 }
 

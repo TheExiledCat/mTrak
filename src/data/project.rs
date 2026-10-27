@@ -161,7 +161,10 @@ mod tests {
     use rmpv::Value;
 
     use super::*;
-    use crate::data::note::{Note, NoteKind, NotePitch};
+    use crate::data::{
+        effect::{EffectKind, EffectSettings},
+        note::{Note, NoteKind, NotePitch},
+    };
 
     fn temp_file(name: &str, contents: &[u8]) -> PathBuf {
         let path = std::env::temp_dir().join(format!("mtrak-test-{}-{}", std::process::id(), name));
@@ -208,6 +211,10 @@ mod tests {
         bass.pitch_wheel_range = 2;
         bass.default_cc = 74;
         bass.transpose = 12;
+        bass.effects = vec![EffectSettings::new(
+            EffectKind::Eq,
+            vec![30, 90, 0x40, 0x80, 0xC0, 24, 100, 16],
+        )];
 
         let first = project
             .patterns

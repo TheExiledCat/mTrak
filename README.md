@@ -18,7 +18,7 @@ any hardware or software synth.
 - MIDI output on all 16 channels, with one instrument per channel and instrument configuration
 - Midi input for note data, clock sync and start/stop
   (see [docs/SYNC.md](docs/SYNC.md))
-- Command column for (midi) effects, using FT2 syntax where applicable
+- Command column for MIDI and playback commands, using FT2 syntax where applicable
   (see [docs/COMMANDS.md](docs/COMMANDS.md))
 - Per-channel activity meters, channel muting and a MIDI event monitor
 - Built-in file browser for opening and saving projects

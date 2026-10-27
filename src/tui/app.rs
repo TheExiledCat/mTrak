@@ -3,7 +3,7 @@ use std::{
     fmt::Write,
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         mpsc::{self, Receiver, Sender},
     },
     time::{Duration, Instant},
@@ -21,8 +21,9 @@ use ratatui::{
 use super::constants;
 use crate::{
     data::{
+        commands::CommandKind,
         config::{Config, TITLE},
-        effect::CommandKind,
+        effect::{EffectKind, EffectSettings},
         midi::{
             MAX_SPEED, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX, bytes_to_message,
         },
@@ -31,6 +32,7 @@ use crate::{
         project::{Project, SequenceRow},
     },
     engine::{
+        effects::{create_chain, default_settings, set_saved_param},
         engine::PlayMode,
         handle::{ClockSource, EngineCommand, EngineHandle},
     },
@@ -145,8 +147,11 @@ impl App {
             } else {
                 self.root.render(&self.state, area, buf);
             }
-            for dialog in &mut self.dialogs {
-                dialog.render(&self.state, area, buf);
+            if let Some((top, covered)) = self.dialogs.split_last_mut() {
+                for dialog in covered {
+                    dialog.render_covered(&self.state, area, buf);
+                }
+                top.render(&self.state, area, buf);
             }
             if glyphs::ascii_mode() {
                 glyphs::asciify(f.buffer_mut());
@@ -538,6 +543,9 @@ impl AppState {
             state
                 .engine
                 .set_channel_transpose(channel as u8, instrument.transpose);
+        }
+        for channel in 0..state.project.instruments.len() {
+            state.send_effect_chain(channel as u8);
         }
         state.engine.set_transpose(state.project.transpose);
         state.engine.set_bpm(state.project.bpm);
@@ -1052,7 +1060,7 @@ impl AppState {
         &mut self,
         track_index: usize,
         row_index: usize,
-        command: crate::data::effect::Command,
+        command: crate::data::commands::Command,
     ) {
         let instrument = self.active_instrument;
         self.edit_event(row_index, track_index, |note| {
@@ -1096,6 +1104,54 @@ impl AppState {
         self.project_mut().instruments[channel as usize].pitch_wheel_range = range;
         self.engine.set_bend_range(channel, range);
     }
+    /// Adds an effect with its default settings to the end of an instrument's chain.
+    pub fn add_effect(&mut self, channel: u8, kind: EffectKind) {
+        self.project_mut().instruments[channel as usize]
+            .effects
+            .push(default_settings(kind));
+        self.send_effect_chain(channel);
+    }
+    pub fn remove_effect(&mut self, channel: u8, effect: usize) {
+        if effect >= self.project.instruments[channel as usize].effects.len() {
+            return;
+        }
+        self.project_mut().instruments[channel as usize]
+            .effects
+            .remove(effect);
+        self.send_effect_chain(channel);
+    }
+    /// Moves an effect to another place in the chain, shifting the ones between.
+    pub fn move_effect(&mut self, channel: u8, from: usize, to: usize) {
+        let count = self.project.instruments[channel as usize].effects.len();
+        if from >= count || to >= count || from == to {
+            return;
+        }
+        let effects = &mut self.project_mut().instruments[channel as usize].effects;
+        let settings = effects.remove(from);
+        effects.insert(to, settings);
+        self.send_effect_chain(channel);
+    }
+    /// Replaces an instrument's whole chain, e.g. to undo changes made in a dialog.
+    pub fn set_effects(&mut self, channel: u8, effects: Vec<EffectSettings>) {
+        self.project_mut().instruments[channel as usize].effects = effects;
+        self.send_effect_chain(channel);
+    }
+    /// Changes one parameter of an effect without rebuilding the chain, so the effect keeps
+    /// what it's playing.
+    pub fn set_effect_param(&mut self, channel: u8, effect: usize, param: usize, value: u8) {
+        let Some(settings) = self.project.instruments[channel as usize]
+            .effects
+            .get(effect)
+        else {
+            return;
+        };
+        let mut settings = settings.clone();
+        let Some(value) = set_saved_param(&mut settings, param, value) else {
+            return;
+        };
+        self.project_mut().instruments[channel as usize].effects[effect] = settings;
+        self.engine.set_effect_param(channel, effect, param, value);
+    }
     pub fn is_saved(&self) -> bool {
         return !self.has_changes && self.saved_position == self.undo_stack.position();
     }
@@ -1127,6 +1183,12 @@ impl AppState {
             .find(|p| client.port_name(p).is_ok_and(|n| n == name));
     }
 
+    /// Gives the engine a new chain built from an instrument's saved effects.
+    fn send_effect_chain(&self, channel: u8) {
+        let effects = &self.project.instruments[channel as usize].effects;
+        let chain = Arc::new(Mutex::new(create_chain(effects)));
+        self.engine.set_effect_chain(channel, chain);
+    }
     fn restore_midi_input(&mut self) {
         let Some(name) = self.project.midi_input.clone() else {
             return;
