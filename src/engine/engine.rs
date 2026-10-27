@@ -122,7 +122,7 @@ pub struct MtrakEngine {
     events: Sender<MidiEvent>,
     status: Arc<EngineStatus>,
 
-    patterns: Vec<Pattern>,
+    patterns: Vec<Arc<Pattern>>,
     sequence: Vec<SequenceRow>,
     bpm: u8,
     speed: u8,
@@ -296,10 +296,10 @@ impl MtrakEngine {
     }
 
     /// Stores the engine's copy of a pattern and cuts newly muted notes if it is playing.
-    fn set_pattern(&mut self, id: PatternId, pattern: Pattern) {
+    fn set_pattern(&mut self, id: PatternId, pattern: Arc<Pattern>) {
         if id.0 as usize >= self.patterns.len() {
             self.patterns
-                .resize_with(id.0 as usize + 1, Pattern::default);
+                .resize_with(id.0 as usize + 1, Default::default);
         }
         self.patterns[id.0 as usize] = pattern;
         if self.clock.is_some() && id == self.position.pattern {
@@ -309,7 +309,10 @@ impl MtrakEngine {
 
     /// The pattern at the current play position.
     fn current_pattern(&self) -> Option<&Pattern> {
-        return self.patterns.get(self.position.pattern.0 as usize);
+        return self
+            .patterns
+            .get(self.position.pattern.0 as usize)
+            .map(Arc::as_ref);
     }
 
     /// The song's BPM, unless a tempo command has changed it.
@@ -452,7 +455,7 @@ impl MtrakEngine {
         let row_count = |id: PatternId| {
             self.patterns
                 .get(id.0 as usize)
-                .map_or(0, |p| p.row_count as usize)
+                .map_or(0, |p| p.row_count() as usize)
         };
         let total: usize = self
             .sequence
@@ -524,7 +527,7 @@ impl MtrakEngine {
         let rows = self
             .patterns
             .get(id.0 as usize)
-            .map_or(0, |p| p.row_count as usize);
+            .map_or(0, |p| p.row_count() as usize);
         if rows == 0 {
             return;
         }
@@ -743,7 +746,7 @@ impl MtrakEngine {
         let row_count = self
             .patterns
             .get(next.pattern.0 as usize)
-            .map_or(0, |p| p.row_count as usize);
+            .map_or(0, |p| p.row_count() as usize);
         if next.row < row_count {
             return Some(next);
         }
@@ -779,7 +782,7 @@ impl MtrakEngine {
         let rows = |id: PatternId| {
             self.patterns
                 .get(id.0 as usize)
-                .map_or(0, |p| p.row_count as usize)
+                .map_or(0, |p| p.row_count() as usize)
         };
         if matches!(self.mode, PlayMode::PatternLoop | PlayMode::Pattern) {
             return rows(self.position.pattern);
@@ -1290,7 +1293,10 @@ mod tests {
             let mut engine =
                 MtrakEngine::new(receiver, event_sender, Arc::new(EngineStatus::default()));
             for (id, pattern) in patterns.into_iter().enumerate() {
-                engine.apply(EngineCommand::SetPattern(PatternId(id as u8), pattern));
+                engine.apply(EngineCommand::SetPattern(
+                    PatternId(id as u8),
+                    Arc::new(pattern),
+                ));
             }
             return Self {
                 engine,
@@ -1740,15 +1746,16 @@ mod tests {
         }
         harness
             .engine
-            .apply(EngineCommand::SetPattern(PatternId(0), muted));
+            .apply(EngineCommand::SetPattern(PatternId(0), Arc::new(muted)));
         control.next_row();
         harness.next_row();
         assert!(!control.messages().is_empty());
         assert!(harness.messages().is_empty());
 
-        harness
-            .engine
-            .apply(EngineCommand::SetPattern(PatternId(0), slide_pattern()));
+        harness.engine.apply(EngineCommand::SetPattern(
+            PatternId(0),
+            Arc::new(slide_pattern()),
+        ));
         control.next_row();
         harness.next_row();
         assert_eq!(harness.messages(), control.messages());
@@ -1771,7 +1778,10 @@ mod tests {
         assert_eq!(harness.messages(), vec![Message::Start]);
         harness.engine.apply(EngineCommand::SetPattern(
             PatternId(0),
-            pattern(4, &[(1, 0, command(MidiCommand::ChangeCC, 0x40, 0))]),
+            Arc::new(pattern(
+                4,
+                &[(1, 0, command(MidiCommand::ChangeCC, 0x40, 0))],
+            )),
         ));
         harness.next_row();
         assert_eq!(
@@ -2815,7 +2825,10 @@ mod tests {
         }
         harness.engine.apply(EngineCommand::SetPattern(
             PatternId(0),
-            pattern(2, &[(0, 0, note("C-4 0 40")), (1, 0, note("E-4 0 40"))]),
+            Arc::new(pattern(
+                2,
+                &[(0, 0, note("C-4 0 40")), (1, 0, note("E-4 0 40"))],
+            )),
         ));
         harness.messages();
         harness.next_row();

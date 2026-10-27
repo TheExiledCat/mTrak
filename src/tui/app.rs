@@ -1,7 +1,11 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
+    fmt::Write,
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, Sender},
+    },
     time::{Duration, Instant},
 };
 
@@ -87,7 +91,7 @@ impl App {
         return Ok(Self {
             terminal,
             fps,
-            root: Container::new(MainView::new(&state).boxed(), Padding::ZERO),
+            root: Container::new(MainView::new().boxed(), Padding::ZERO),
             dialogs: Vec::new(),
             file_browser: FileBrowser::new(),
             held_keys: HashSet::new(),
@@ -165,7 +169,7 @@ impl App {
         self.state = AppState::new(project, theme)?;
         self.state.apply_config(config);
         self.state.project_path = Some(path.clone());
-        self.root = Container::new(MainView::new(&self.state).boxed(), Padding::ZERO);
+        self.root = Container::new(MainView::new().boxed(), Padding::ZERO);
         self.terminal.clear()?;
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         self.state.open_dialog(Dialog::popup(
@@ -848,9 +852,6 @@ impl AppState {
         self.has_changes = true;
         return &mut self.project;
     }
-    pub fn refresh_track_cache_row(&mut self, cache: &mut TrackCache, row: usize) {
-        cache.update_dirty(&mut self.project, self.active_pattern, row);
-    }
     pub fn active_pattern(&self) -> &Pattern {
         return self
             .project
@@ -969,14 +970,14 @@ impl AppState {
     }
     pub fn change_length(&mut self, increase: bool) {
         let (_, pattern) = self.copy_buffers_and_active_pattern_mut();
-        let previous = pattern.row_count;
+        let previous = pattern.row_count();
         let removed_rows = if increase {
             pattern.increase_length();
             Vec::new()
         } else {
             pattern.decrease_length()
         };
-        let new = pattern.row_count;
+        let new = pattern.row_count();
         if new != previous {
             self.track(AppStateAction::ChangeLength {
                 pattern: self.active_pattern,
@@ -1208,15 +1209,16 @@ impl AppState {
         self.changed_patterns.clear();
         self.sequence_changed = false;
         for (i, pattern) in self.project.patterns.get_patterns().iter().enumerate() {
-            self.engine.set_pattern(PatternId(i as u8), pattern.clone());
+            self.engine
+                .set_pattern(PatternId(i as u8), Arc::clone(pattern));
         }
         self.engine.set_sequence(self.project.sequence.clone());
     }
 
     fn send_changes_to_engine(&mut self) {
         for id in self.changed_patterns.drain() {
-            if let Some(pattern) = self.project.patterns.get_pattern_by_id(id) {
-                self.engine.set_pattern(id, pattern.clone());
+            if let Some(pattern) = self.project.patterns.get_shared_pattern(id) {
+                self.engine.set_pattern(id, pattern);
             }
         }
         if self.sequence_changed {
@@ -1368,90 +1370,66 @@ impl AppState {
         return std::mem::take(&mut self.pending_midi_input);
     }
 }
+/// The active pattern's cells as text, so rendering doesn't format every note each frame.
+/// Each cell keeps the note it was formatted from and is only reformatted when that changes.
 pub struct TrackCache {
-    patterns: HashMap<usize, Vec<TrackCacheRow>>,
+    pattern: Option<PatternId>,
+    rows: Vec<TrackCacheRow>,
 }
 
-pub struct TrackCacheRow {
-    pub tracks: [Line<'static>; constants::TRACK_COUNT as usize],
+struct TrackCacheRow {
+    notes: [Note; constants::TRACK_COUNT as usize],
+    tracks: [String; constants::TRACK_COUNT as usize],
 }
-impl<'a> TrackCache {
-    pub fn new(patterns: &[Pattern]) -> Self {
-        let mut cache = TrackCache {
-            patterns: HashMap::new(),
+impl TrackCacheRow {
+    fn new(row: &PatternRow) -> Self {
+        let notes = std::array::from_fn(|track| cell_note(row, track));
+        return Self {
+            notes,
+            tracks: notes.map(|note| note.to_string()),
         };
-        for (i, pattern) in patterns.iter().enumerate() {
-            cache.sync_pattern(PatternId(i as u8), pattern);
-        }
-        return cache;
     }
-    fn build_rows(pattern: &Pattern) -> Vec<TrackCacheRow> {
-        return pattern
+    fn sync(&mut self, row: &PatternRow) {
+        for (track, (cached, text)) in self.notes.iter_mut().zip(&mut self.tracks).enumerate() {
+            let note = cell_note(row, track);
+            if *cached != note {
+                *cached = note;
+                text.clear();
+                write!(text, "{note}").unwrap();
+            }
+        }
+    }
+}
+fn cell_note(row: &PatternRow, track: usize) -> Note {
+    return row.tracks.get(track).copied().unwrap_or_else(Note::empty);
+}
+
+impl TrackCache {
+    pub fn new() -> Self {
+        return Self {
+            pattern: None,
+            rows: Vec::new(),
+        };
+    }
+    /// Brings the cache up to date with the pattern, reformatting only the cells that changed.
+    pub fn sync(&mut self, id: PatternId, pattern: &Pattern) {
+        if self.pattern != Some(id) {
+            self.pattern = Some(id);
+            self.rows.clear();
+        }
+        self.rows.truncate(pattern.rows.len());
+        for (index, row) in pattern.rows.iter().enumerate() {
+            match self.rows.get_mut(index) {
+                Some(cached) => cached.sync(row),
+                None => self.rows.push(TrackCacheRow::new(row)),
+            }
+        }
+    }
+    pub fn track_lines(&self, track: usize) -> Vec<Line<'_>> {
+        return self
             .rows
             .iter()
-            .map(|row| TrackCacheRow {
-                tracks: row
-                    .tracks
-                    .iter()
-                    .map(|c| Line::from(c.to_string()))
-                    .collect::<Vec<Line<'static>>>()
-                    .try_into()
-                    .unwrap(),
-            })
-            .collect();
-    }
-    pub fn sync_pattern(&mut self, pattern_index: PatternId, pattern: &Pattern) {
-        let pattern_index = pattern_index.0 as usize;
-        let stale = self
-            .patterns
-            .get(&pattern_index)
-            .is_none_or(|rows| rows.len() != pattern.rows.len());
-        if stale {
-            self.patterns
-                .insert(pattern_index, Self::build_rows(pattern));
-        }
-    }
-    pub fn update_dirty(
-        &mut self,
-        project: &mut Project,
-        pattern_index: PatternId,
-        row_index: usize,
-    ) {
-        let pattern = project
-            .patterns
-            .get_pattern_by_id_mut(pattern_index)
-            .unwrap();
-        let pattern_index = pattern_index.0 as usize;
-        let row = pattern.rows.get_mut(row_index).unwrap();
-
-        if !row.dirty {
-            return;
-        }
-        row.dirty = false;
-        self.patterns.get_mut(&pattern_index).unwrap()[row_index].tracks = row
-            .tracks
-            .iter()
-            .map(|c| Line::from(c.to_string()))
-            .collect::<Vec<Line<'static>>>()
-            .try_into()
-            .unwrap();
-    }
-    pub fn get_row(&'a self, pattern_index: PatternId, row_index: usize) -> &'a TrackCacheRow {
-        let pattern_index = pattern_index.0 as usize;
-        return &self.patterns.get(&pattern_index).unwrap()[row_index];
-    }
-    pub fn get_all_rows_for_track(
-        &'a self,
-        pattern_index: PatternId,
-        track_index: usize,
-    ) -> Vec<Line<'a>> {
-        let pattern_index = pattern_index.0 as usize;
-        return self
-            .patterns
-            .get(&pattern_index)
-            .unwrap()
-            .iter()
-            .map(|r| r.tracks[track_index].clone())
+            .map(|row| Line::raw(row.tracks[track].as_str()))
             .collect();
     }
 }
@@ -1477,5 +1455,25 @@ mod tests {
             .filter_map(column_index_to_note_string_index)
             .collect();
         assert_eq!(indices, vec![0, 4, 6, 7, 9, 10, 11]);
+    }
+
+    #[test]
+    fn track_cache_follows_pattern_edits_and_switches() {
+        let mut pattern = Pattern::new(4);
+        let mut cache = TrackCache::new();
+        cache.sync(PatternId(0), &pattern);
+        assert_eq!(cache.track_lines(1)[2].to_string(), constants::EMPTY_NOTE);
+
+        let note = Note::new(NoteKind::Off, None, None, Default::default());
+        pattern.set_event(2, 1, note);
+        cache.sync(PatternId(0), &pattern);
+        assert_eq!(cache.track_lines(1)[2].to_string(), note.to_string());
+
+        pattern.set_length(2);
+        cache.sync(PatternId(0), &pattern);
+        assert_eq!(cache.track_lines(0).len(), 2);
+
+        cache.sync(PatternId(1), &Pattern::new(8));
+        assert_eq!(cache.track_lines(0).len(), 8);
     }
 }
