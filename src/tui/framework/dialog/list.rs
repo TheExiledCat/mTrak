@@ -24,9 +24,9 @@ type ItemSource = Box<dyn Fn(&AppState) -> Vec<String>>;
 /// What was last done in a list, read in `on_update` with `DialogResult::list_event`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ListEvent {
-    /// Enter on an item.
+    /// Space on an item.
     Open(usize),
-    /// Enter on the add row.
+    /// Space on the add row.
     Add,
     Remove(usize),
     /// An item moved one place up or down.
@@ -141,7 +141,7 @@ impl List {
             .bind(Key::plain(KeyCode::Up), ListAction::Up, "Select")
             .bind(Key::plain(KeyCode::Down), ListAction::Down, "Select");
         if self.selectable || self.add_label.is_some() {
-            keys = keys.bind(Key::plain(KeyCode::Enter), ListAction::Open, "Open");
+            keys = keys.bind(Key::char(' '), ListAction::Open, "Open");
         }
         if self.selectable && self.removable {
             keys = keys.bind(Key::plain(KeyCode::Delete), ListAction::Remove, "Remove");
@@ -308,10 +308,6 @@ impl DialogComponent for List {
     fn get_height(&self) -> u8 {
         return self.rows().clamp(1, self.max_visible as usize) as u8;
     }
-    /// Enter opens the selected item instead of submitting the dialog.
-    fn takes_keys_first(&self) -> bool {
-        return true;
-    }
     fn focusable(&self) -> bool {
         return self.rows() > self.first_row();
     }
@@ -349,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_opens_the_selected_item() {
+    fn space_opens_the_selected_item() {
         let mut list = list(&["a", "b"]);
         list.act(ListAction::Down);
         list.act(ListAction::Open);

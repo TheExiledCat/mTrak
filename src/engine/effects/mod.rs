@@ -1,5 +1,6 @@
 pub mod arp;
 pub mod eq;
+pub mod harmonizer;
 use midi::{Channel, Message, U7};
 
 use crate::{

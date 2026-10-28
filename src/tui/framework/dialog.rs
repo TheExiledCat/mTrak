@@ -1725,6 +1725,34 @@ mod tests {
         assert_eq!(dialog.result().text("hex"), Some("#00ff00"));
     }
 
+    #[test]
+    fn space_opens_a_list_item_and_enter_still_submits() {
+        use std::{cell::RefCell, rc::Rc};
+
+        use ratatui::crossterm::event::KeyEvent;
+
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut dialog = Dialog::new("", vec![List::new("l", vec!["a", "b"]).boxed()])
+            .focus_first()
+            .on_update({
+                let seen = seen.clone();
+                move |_, fields| {
+                    seen.borrow_mut().extend(fields.list_event("l"));
+                    return Ok(());
+                }
+            });
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        dialog.handle_event(&mut state, &press(KeyCode::Down));
+        dialog.handle_event(&mut state, &press(KeyCode::Char(' ')));
+        assert_eq!(*seen.borrow(), vec![ListEvent::Open(1)]);
+        assert!(!dialog.closed);
+        dialog.handle_event(&mut state, &press(KeyCode::Enter));
+        assert!(dialog.closed);
+    }
+
     impl NumberBox {
         fn clone_with(&self, value: i32) -> NumberBox {
             return NumberBox::new(self.id, "", self.digits)

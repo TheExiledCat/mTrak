@@ -310,7 +310,6 @@ fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
         .map(|(param, value)| param_field(param, *value))
         .collect();
     let dialog = Dialog::new(format!("{} {:X}", settings.kind.name(), effect), fields)
-        .focus_first()
         .on_update(move |state, fields| {
             let changed = params
                 .iter()
