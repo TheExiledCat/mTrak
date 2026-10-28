@@ -1,6 +1,6 @@
 use chrono::{Datelike, Local};
-use clap::builder::styling::EffectIter;
 use figlet_rs::FIGlet;
+use strum::IntoEnumIterator;
 
 use crate::{
     data::{
@@ -241,6 +241,8 @@ fn open_effects_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
     let list = List::new("effects", effect_names(state, instrument))
         .items_from(move |state| effect_names(state, instrument))
+        .checkboxes(effects_enabled(state, instrument))
+        .checks_from(move |state| effects_enabled(state, instrument))
         .show_index(true)
         .add_button("Add effect")
         .removable(true)
@@ -257,6 +259,9 @@ fn open_effects_dialog(state: &mut AppState) {
             Some(ListEvent::Add) => open_add_effect_dialog(state, instrument),
             Some(ListEvent::Remove(effect)) => state.remove_effect(instrument, effect),
             Some(ListEvent::Move { from, to }) => state.move_effect(instrument, from, to),
+            Some(ListEvent::Check { item, checked }) => {
+                state.set_effect_enabled(instrument, item, checked)
+            }
             None => {}
         }
         return Ok(());
@@ -272,16 +277,27 @@ fn effect_names(state: &AppState, instrument: u8) -> Vec<String> {
         .collect();
 }
 
+fn effects_enabled(state: &AppState, instrument: u8) -> Vec<bool> {
+    return state.project().instruments[instrument as usize]
+        .effects
+        .iter()
+        .map(|settings| settings.enabled)
+        .collect();
+}
+
 fn open_add_effect_dialog(state: &mut AppState, instrument: u8) {
-    let kinds = EffectKind::ALL.iter().map(|kind| kind.name()).collect();
+    let kinds = EffectKind::iter().map(|kind| kind.name()).collect();
     let dialog = Dialog::new(
         "Add effect",
         vec![Select::new("kind", kinds).label("Effect").boxed()],
     )
     .focus_first()
     .on_submit(move |state, result| {
-        if let Some(kind) = result.choice("kind").and_then(|i| EffectKind::ALL.get(i)) {
-            state.add_effect(instrument, *kind);
+        if let Some(kind) = result
+            .choice("kind")
+            .and_then(|i| EffectKind::iter().nth(i))
+        {
+            state.add_effect(instrument, kind);
         }
         return Ok(());
     });
@@ -339,6 +355,17 @@ fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
                 .value(value as i32)
                 .boxed()
         }
+        ParamKind::SignedNumber { min, max } => {
+            let digits = if min.unsigned_abs().max(max.unsigned_abs()) > 0xF {
+                2
+            } else {
+                1
+            };
+            NumberBox::new(param.name, param.name, digits)
+                .range(min as i32, max as i32)
+                .value(value as i8 as i32)
+                .boxed()
+        }
         ParamKind::Toggle => Checkbox::new(param.name, param.name)
             .checked(value != 0)
             .boxed(),
@@ -359,6 +386,7 @@ fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
 fn param_value(param: &Param, result: &DialogResult) -> Option<u8> {
     return match param.kind {
         ParamKind::Number { .. } => result.number(param.name).map(|n| n as u8),
+        ParamKind::SignedNumber { .. } => result.number(param.name).map(|n| n as i8 as u8),
         ParamKind::Toggle => result.bool(param.name).map(|on| on as u8),
         ParamKind::Choice(_) | ParamKind::Pitch => result.choice(param.name).map(|i| i as u8),
     };

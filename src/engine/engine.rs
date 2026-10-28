@@ -623,6 +623,7 @@ impl MtrakEngine {
         if tick == 0 {
             self.play_row();
         }
+        self.finish_effects();
         self.time_next_pulse(now);
     }
 
@@ -750,6 +751,7 @@ impl MtrakEngine {
             self.tick_effects();
             self.command_tick();
         }
+        self.finish_effects();
         self.time_next_pulse(pulse_time);
     }
 
@@ -1271,6 +1273,18 @@ impl MtrakEngine {
         for chain in &self.effect_chains {
             if let Ok(mut chain) = chain.lock() {
                 chain.tick(timing, &mut out);
+            }
+        }
+        self.output_messages(out);
+    }
+
+    /// Lets every instrument's effects send what waited for the pulse's own messages.
+    fn finish_effects(&mut self) {
+        let timing = Timing::new(self.pattern_pulse);
+        let mut out = vec![];
+        for chain in &self.effect_chains {
+            if let Ok(mut chain) = chain.lock() {
+                chain.after_pulse(timing, &mut out);
             }
         }
         self.output_messages(out);
@@ -3893,7 +3907,7 @@ mod tests {
             channel: 2,
             effect: 0,
             param: 3,
-            value: 0x40,
+            value: -0x40i8 as u8,
         });
         harness.engine.apply(EngineCommand::PlayNote {
             track: 0,
@@ -3901,7 +3915,10 @@ mod tests {
             pitch: 60,
             velocity: 100,
         });
-        assert_eq!(chain.lock().unwrap().get(0).unwrap().param(3), 0x40);
+        assert_eq!(
+            chain.lock().unwrap().get(0).unwrap().param(3),
+            -0x40i8 as u8
+        );
         assert_eq!(
             harness.messages(),
             vec![Message::NoteOn(Channel::Ch3, 60, 50)]

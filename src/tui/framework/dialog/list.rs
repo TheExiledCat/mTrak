@@ -20,6 +20,7 @@ use crate::{
 };
 
 type ItemSource = Box<dyn Fn(&AppState) -> Vec<String>>;
+type CheckSource = Box<dyn Fn(&AppState) -> Vec<bool>>;
 
 /// What was last done in a list, read in `on_update` with `DialogResult::list_event`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +35,11 @@ pub enum ListEvent {
         from: usize,
         to: usize,
     },
+    /// An item's checkbox was ticked or cleared.
+    Check {
+        item: usize,
+        checked: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -44,6 +50,7 @@ pub enum ListAction {
     Remove,
     MoveUp,
     MoveDown,
+    Check,
 }
 
 impl Action for ListAction {}
@@ -56,6 +63,9 @@ pub struct List {
     id: &'static str,
     items: Vec<String>,
     source: Option<ItemSource>,
+    /// Each item's checkbox, if the list has them.
+    checks: Option<Vec<bool>>,
+    check_source: Option<CheckSource>,
     show_index: bool,
     add_label: Option<String>,
     selectable: bool,
@@ -77,6 +87,8 @@ impl List {
             id,
             items: items.into_iter().map(|item| item.into()).collect(),
             source: None,
+            checks: None,
+            check_source: None,
             show_index: false,
             add_label: None,
             selectable: true,
@@ -126,6 +138,17 @@ impl List {
         self.keys = self.bindings();
         return self;
     }
+    /// Puts a checkbox in front of each item, which X ticks or clears.
+    pub fn checkboxes(mut self, checks: Vec<bool>) -> Self {
+        self.checks = Some(checks);
+        self.keys = self.bindings();
+        return self;
+    }
+    /// Reads the checkboxes from the app state on every update, like `items_from`.
+    pub fn checks_from(mut self, source: impl Fn(&AppState) -> Vec<bool> + 'static) -> Self {
+        self.check_source = Some(Box::new(source));
+        return self;
+    }
     pub fn max_visible(mut self, rows: u8) -> Self {
         self.max_visible = rows.max(1);
         return self;
@@ -145,6 +168,9 @@ impl List {
         }
         if self.selectable && self.removable {
             keys = keys.bind(Key::plain(KeyCode::Delete), ListAction::Remove, "Remove");
+        }
+        if self.selectable && self.checks.is_some() {
+            keys = keys.bind(Key::char('x'), ListAction::Check, "On/off");
         }
         if self.selectable && self.reorderable {
             keys = keys
@@ -190,6 +216,11 @@ impl List {
             }
             ListAction::Remove if self.removable && self.on_item() => {
                 self.items.remove(self.selected);
+                if let Some(checks) = &mut self.checks
+                    && self.selected < checks.len()
+                {
+                    checks.remove(self.selected);
+                }
                 self.emit(ListEvent::Remove(self.selected));
                 self.clamp_selection();
             }
@@ -201,6 +232,14 @@ impl List {
             {
                 self.move_selected(self.selected + 1);
             }
+            ListAction::Check if self.on_item() => {
+                let item = self.selected;
+                if let Some(check) = self.checks.as_mut().and_then(|checks| checks.get_mut(item)) {
+                    *check = !*check;
+                    let checked = *check;
+                    self.emit(ListEvent::Check { item, checked });
+                }
+            }
             _ => {}
         }
     }
@@ -208,6 +247,11 @@ impl List {
     fn move_selected(&mut self, to: usize) {
         let from = self.selected;
         self.items.swap(from, to);
+        if let Some(checks) = &mut self.checks
+            && from.max(to) < checks.len()
+        {
+            checks.swap(from, to);
+        }
         self.selected = to;
         self.emit(ListEvent::Move { from, to });
     }
@@ -216,8 +260,19 @@ impl List {
         let Some(item) = self.items.get(row) else {
             return format!("+ {}", self.add_label.as_deref().unwrap_or_default());
         };
+        let item = match &self.checks {
+            Some(checks) => {
+                let mark = if checks.get(row).copied().unwrap_or(false) {
+                    "X"
+                } else {
+                    " "
+                };
+                format!("[{mark}] {item}")
+            }
+            None => item.clone(),
+        };
         if !self.show_index {
-            return item.clone();
+            return item;
         }
         let width = format!("{:X}", self.items.len().saturating_sub(1)).len();
         return format!("{row:>width$X} {item}");
@@ -244,6 +299,7 @@ impl KeyActions for List {
             ListAction::Remove => "Remove an item",
             ListAction::MoveUp => "Move an item up",
             ListAction::MoveDown => "Move an item down",
+            ListAction::Check => "Tick or clear an item's checkbox",
         };
     }
 }
@@ -253,6 +309,9 @@ impl MtrakWidget for List {
         if let Some(source) = &self.source {
             self.items = source(state);
             self.clamp_selection();
+        }
+        if let Some(source) = &self.check_source {
+            self.checks = Some(source(state));
         }
     }
 
@@ -417,6 +476,39 @@ mod tests {
         list.act(ListAction::Open);
         assert_ne!(before, once);
         assert_ne!(once, list.value());
+    }
+
+    #[test]
+    fn x_ticks_checkboxes_which_follow_moves_and_removes() {
+        let mut list = list(&["a", "b", "c"])
+            .checkboxes(vec![true, false, true])
+            .reorderable(true)
+            .removable(true)
+            .show_index(true);
+        assert_eq!(list.row_text(1), "1 [ ] b");
+        list.act(ListAction::Down);
+        list.act(ListAction::Check);
+        assert_eq!(
+            list.last,
+            Some(ListEvent::Check {
+                item: 1,
+                checked: true
+            })
+        );
+        assert_eq!(list.row_text(1), "1 [X] b");
+        list.act(ListAction::Remove);
+        assert_eq!(list.checks, Some(vec![true, true]));
+        list.act(ListAction::MoveUp);
+        list.act(ListAction::Check);
+        assert_eq!(list.checks, Some(vec![false, true]));
+        assert_eq!(list.items, vec!["c", "a"]);
+    }
+
+    #[test]
+    fn x_does_nothing_without_checkboxes() {
+        let mut list = list(&["a"]);
+        list.act(ListAction::Check);
+        assert_eq!(list.events, 0);
     }
 
     #[test]

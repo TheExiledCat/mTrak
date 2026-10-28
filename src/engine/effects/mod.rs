@@ -9,14 +9,17 @@ use crate::{
         midi::{PULSES_PER_QUARTER, VELOCITY_MAX},
         note::NotePitch,
     },
-    engine::effects::eq::EqEffect,
+    engine::effects::{arp::ArpeggiatorEffect, eq::EqEffect, harmonizer::Harmonizer},
+    tui::framework::core_extensions::Boxed,
 };
 
 /// A new effect of `settings`' kind, with its saved values. Values the effect doesn't take
 /// are clamped, and parameters without a saved value keep their default.
 pub fn create_effect(settings: &EffectSettings) -> Box<dyn MidiEffect> {
     let mut effect: Box<dyn MidiEffect> = match settings.kind {
-        EffectKind::Eq => Box::new(EqEffect::new()),
+        EffectKind::Eq => EqEffect::new().boxed(),
+        EffectKind::Arp => ArpeggiatorEffect::new().boxed(),
+        EffectKind::Harmonize => Harmonizer::new().boxed(),
     };
     for (index, (param, value)) in effect.params().iter().zip(&settings.values).enumerate() {
         effect.set_param(index, param.kind.clamp(*value));
@@ -56,9 +59,31 @@ pub fn set_saved_param(settings: &mut EffectSettings, param: usize, value: u8) -
 pub fn create_chain(effects: &[EffectSettings]) -> MidiEffectChain {
     let mut chain = MidiEffectChain::new();
     for settings in effects {
-        chain.push(create_effect(settings));
+        let effect = create_effect(settings);
+        chain.push(match settings.enabled {
+            true => effect,
+            false => Bypassed(effect).boxed(),
+        });
     }
     return chain;
+}
+
+/// A disabled effect: it keeps its place and settings in the chain, but lets every message
+/// through untouched.
+struct Bypassed(Box<dyn MidiEffect>);
+impl MidiEffect for Bypassed {
+    fn params(&self) -> &'static [Param] {
+        return self.0.params();
+    }
+    fn param(&self, index: usize) -> u8 {
+        return self.0.param(index);
+    }
+    fn set_param(&mut self, index: usize, value: u8) {
+        self.0.set_param(index, value);
+    }
+    fn process(&mut self, message: Message, _timing: Option<Timing>, out: &mut Vec<Message>) {
+        out.push(message);
+    }
 }
 
 /// How a parameter's value is shown and which values it takes.
@@ -66,6 +91,9 @@ pub fn create_chain(effects: &[EffectSettings]) -> MidiEffectChain {
 pub enum ParamKind {
     /// A number from `min` to `max`, shown in hex like the rest of the tracker.
     Number { min: u8, max: u8 },
+    /// A number from `min` to `max` stored as a two's complement byte, shown in hex with a
+    /// sign like transpose.
+    SignedNumber { min: i8, max: i8 },
     /// 0 for off, 1 for on.
     Toggle,
     /// An index into these names.
@@ -78,6 +106,7 @@ impl ParamKind {
     pub fn clamp(&self, value: u8) -> u8 {
         return match *self {
             ParamKind::Number { min, max } => value.clamp(min, max),
+            ParamKind::SignedNumber { min, max } => (value as i8).clamp(min, max) as u8,
             ParamKind::Toggle => value.min(1),
             ParamKind::Choice(names) => value.min(names.len().saturating_sub(1) as u8),
             ParamKind::Pitch => value.min(VELOCITY_MAX),
@@ -126,6 +155,10 @@ pub trait MidiEffect: Send {
     /// Called once on every clock pulse while playing, 24 per beat, for effects that make
     /// messages of their own over time. It runs before the pulse's own messages are processed.
     fn tick(&mut self, timing: Timing, out: &mut Vec<Message>) {}
+    /// Called on every clock pulse while playing, after the pulse's own messages. Notes due on
+    /// this pulse are best started here: a note on the same pulse may replace them, and
+    /// starting them in `tick` would have them cut off right away.
+    fn after_pulse(&mut self, timing: Timing, out: &mut Vec<Message>) {}
     /// Forgets anything held, e.g. on stop, panic or when playback starts, writing the messages
     /// that release notes it still has sounding.
     fn reset(&mut self, out: &mut Vec<Message>) {}
@@ -180,6 +213,16 @@ impl MidiEffectChain {
         for effect in &mut self.chain {
             messages = process_all(effect.as_mut(), messages, Some(timing));
             effect.tick(timing, &mut messages);
+        }
+        out.extend(messages);
+    }
+
+    /// What an effect makes after a pulse goes through the effects after it.
+    pub fn after_pulse(&mut self, timing: Timing, out: &mut Vec<Message>) {
+        let mut messages = vec![];
+        for effect in &mut self.chain {
+            messages = process_all(effect.as_mut(), messages, Some(timing));
+            effect.after_pulse(timing, &mut messages);
         }
         out.extend(messages);
     }
@@ -247,6 +290,8 @@ pub fn note_event(message: &Message) -> Option<NoteEvent> {
 
 #[cfg(test)]
 mod tests {
+    use strum::IntoEnumIterator;
+
     use super::*;
 
     /// Moves notes up by `semitones` and plays each one again `delay` ticks later.
@@ -355,6 +400,10 @@ mod tests {
         let number = ParamKind::Number { min: 2, max: 10 };
         assert_eq!(number.clamp(0), 2);
         assert_eq!(number.clamp(20), 10);
+        let signed = ParamKind::SignedNumber { min: -12, max: 12 };
+        assert_eq!(signed.clamp(0xF0), 0xF4);
+        assert_eq!(signed.clamp(0x20), 12);
+        assert_eq!(signed.clamp(0xFE), 0xFE);
         assert_eq!(ParamKind::Toggle.clamp(5), 1);
         assert_eq!(ParamKind::Choice(&["a", "b", "c"]).clamp(7), 2);
         assert_eq!(ParamKind::Pitch.clamp(0xFF), 127);
@@ -374,7 +423,7 @@ mod tests {
 
     #[test]
     fn every_effect_starts_at_its_defaults_and_keeps_what_is_set() {
-        for kind in EffectKind::ALL {
+        for kind in EffectKind::iter() {
             let mut effect = create_effect(&EffectSettings::new(kind, Vec::new()));
             for (index, param) in effect.params().iter().enumerate() {
                 assert_eq!(
@@ -446,11 +495,25 @@ mod tests {
     #[test]
     fn chains_are_built_in_the_saved_order() {
         let mut quiet = default_settings(EffectKind::Eq);
-        quiet.values[3] = 0x40;
+        quiet.values[3] = -0x40i8 as u8;
         let chain = create_chain(&[default_settings(EffectKind::Eq), quiet]);
         assert_eq!(chain.len(), 2);
-        assert_eq!(chain.get(0).unwrap().param(3), 0x80);
-        assert_eq!(chain.get(1).unwrap().param(3), 0x40);
+        assert_eq!(chain.get(0).unwrap().param(3), 0);
+        assert_eq!(chain.get(1).unwrap().param(3), -0x40i8 as u8);
+    }
+
+    #[test]
+    fn disabled_effects_keep_their_place_and_let_messages_through() {
+        let mut quiet = default_settings(EffectKind::Eq);
+        quiet.values[3] = i8::MIN as u8;
+        quiet.enabled = false;
+        let mut chain = create_chain(&[quiet]);
+        assert_eq!(chain.len(), 1);
+        chain.set_param(0, 3, 0x40);
+        assert_eq!(chain.get(0).unwrap().param(3), 0x40);
+        let mut out = vec![];
+        chain.process(note_on(60), None, &mut out);
+        assert_eq!(out, vec![note_on(60)]);
     }
 
     #[test]

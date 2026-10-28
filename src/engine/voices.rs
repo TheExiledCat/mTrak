@@ -3,11 +3,9 @@ use num::FromPrimitive;
 
 use crate::{
     data::midi::{MIDI_CHANNEL_MAX, scale_velocity},
+    engine::notes::{Countdown, HeldNotes, MIDI_CHANNEL_COUNT, PITCH_COUNT},
     tui::constants::TRACK_COUNT,
 };
-
-const PITCH_COUNT: usize = 128;
-const MIDI_CHANNEL_COUNT: usize = MIDI_CHANNEL_MAX as usize + 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Voice {
@@ -21,15 +19,15 @@ struct Voice {
 /// A note replaced by a legato note that keeps sounding for a few more ticks.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Lingering {
+    track: usize,
     voice: Voice,
-    ticks: u8,
 }
 
 /// Tracks which note each track is playing, so note offs reach the right channel and pitch.
 pub struct Voices {
     tracks: [Option<Voice>; TRACK_COUNT as usize],
-    lingering: [Option<Lingering>; TRACK_COUNT as usize],
-    held: [[u8; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
+    lingering: Countdown<Lingering>,
+    held: HeldNotes,
     channel_volumes: [u8; MIDI_CHANNEL_COUNT],
     velocity: u8,
     channel_transposes: [i8; MIDI_CHANNEL_COUNT],
@@ -46,8 +44,8 @@ impl Voices {
     pub fn new() -> Self {
         return Self {
             tracks: [None; TRACK_COUNT as usize],
-            lingering: [None; TRACK_COUNT as usize],
-            held: [[0; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
+            lingering: Countdown::new(),
+            held: HeldNotes::new(),
             channel_volumes: [0xFF; MIDI_CHANNEL_COUNT],
             velocity: 0xFF,
             channel_transposes: [0; MIDI_CHANNEL_COUNT],
@@ -94,13 +92,14 @@ impl Voices {
             self.note_off(previous, out);
             return;
         }
-        if let Some(lingering) = self.lingering[track].take() {
+        for lingering in self.lingering.remove(|lingering| lingering.track == track) {
             self.note_off(lingering.voice, out);
         }
-        self.lingering[track] = Some(Lingering {
+        let lingering = Lingering {
+            track,
             voice: previous,
-            ticks: overlap,
-        });
+        };
+        self.lingering.push(lingering, overlap as u32);
     }
 
     /// Stops the track's note; the note off is only sent once no other track holds that pitch.
@@ -115,23 +114,15 @@ impl Voices {
         if let Some(voice) = self.tracks.get_mut(track).and_then(Option::take) {
             self.note_off(voice, out);
         }
-        if let Some(lingering) = self.lingering.get_mut(track).and_then(Option::take) {
+        for lingering in self.lingering.remove(|lingering| lingering.track == track) {
             self.note_off(lingering.voice, out);
         }
     }
 
     /// Counts down notes ringing after a legato note and releases the ones that are done.
     pub fn tick(&mut self, out: &mut Vec<Message>) {
-        for track in 0..self.lingering.len() {
-            let Some(lingering) = &mut self.lingering[track] else {
-                continue;
-            };
-            lingering.ticks = lingering.ticks.saturating_sub(1);
-            if lingering.ticks == 0 {
-                let voice = lingering.voice;
-                self.lingering[track] = None;
-                self.note_off(voice, out);
-            }
+        for lingering in self.lingering.tick() {
+            self.note_off(lingering.voice, out);
         }
     }
 
@@ -158,12 +149,12 @@ impl Voices {
                 self.tracks[track] = None;
                 self.note_off(voice, out);
             }
-            if let Some(lingering) = self.lingering[track]
-                && is_muted(&lingering.voice)
-            {
-                self.lingering[track] = None;
-                self.note_off(lingering.voice, out);
-            }
+        }
+        for lingering in self
+            .lingering
+            .remove(|lingering| is_muted(&lingering.voice))
+        {
+            self.note_off(lingering.voice, out);
         }
     }
 
@@ -214,23 +205,18 @@ impl Voices {
             self.velocity,
             u8::MAX,
         );
-        let held = &mut self.held[channel as usize][pitch as usize];
-        *held = held.saturating_add(1);
         self.tracks[track] = Some(Voice {
             channel,
             pitch,
             played,
         });
-        out.push(Message::NoteOn(to_channel(channel), pitch, velocity));
+        self.held.note_on(to_channel(channel), pitch, velocity, out);
     }
 
     /// The note off is only sent once no other track holds that pitch.
     fn note_off(&mut self, voice: Voice, out: &mut Vec<Message>) {
-        let held = &mut self.held[voice.channel as usize][voice.pitch as usize];
-        *held = held.saturating_sub(1);
-        if *held == 0 {
-            out.push(Message::NoteOff(to_channel(voice.channel), voice.pitch, 0));
-        }
+        self.held
+            .note_off(to_channel(voice.channel), voice.pitch, 0, out);
     }
 }
 

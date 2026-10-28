@@ -1131,6 +1131,20 @@ impl AppState {
         effects.insert(to, settings);
         self.send_effect_chain(channel);
     }
+    /// Turns an effect on or off without losing its place or settings.
+    pub fn set_effect_enabled(&mut self, channel: u8, effect: usize, enabled: bool) {
+        let Some(settings) = self.project.instruments[channel as usize]
+            .effects
+            .get(effect)
+        else {
+            return;
+        };
+        if settings.enabled == enabled {
+            return;
+        }
+        self.project_mut().instruments[channel as usize].effects[effect].enabled = enabled;
+        self.send_effect_chain(channel);
+    }
     /// Replaces an instrument's whole chain, e.g. to undo changes made in a dialog.
     pub fn set_effects(&mut self, channel: u8, effects: Vec<EffectSettings>) {
         self.project_mut().instruments[channel as usize].effects = effects;

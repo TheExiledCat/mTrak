@@ -67,10 +67,11 @@ The first instrument plays on MIDI channel 1, the last on channel 16.
 
 The effects on an instrument's channel, in the order notes go through them. Each one is:
 
-| Field    | Type          | Contents                                                     |
-| -------- | ------------- | ------------------------------------------------------------ |
-| `kind`   | string        | Which effect it is, see below                                |
-| `values` | array of ints | Each of the effect's parameters, `0`-`255`, in the order below |
+| Field     | Type          | Contents                                                     |
+| --------- | ------------- | ------------------------------------------------------------ |
+| `kind`    | string        | Which effect it is: `Eq`, `Arp` or `Harmonize`, see below    |
+| `values`  | array of ints | Each of the effect's parameters, `0`-`255`, in the order below |
+| `enabled` | bool          | `false` if the effect is turned off: notes pass it unchanged, and it keeps its place and values |
 
 mTrak clamps a value to what its parameter takes, gives parameters without a value their
 default, and ignores values past the effect's last parameter.
@@ -82,12 +83,36 @@ below a cutoff. A note whose velocity reaches 0 isn't played. Its values:
 | ----- | ------------------------ | -------------------------------------------------------------- | ------- |
 | 0     | Low band up to           | A MIDI note, `0`-`127`; notes up to it are in the low band     | `42`    |
 | 1     | Mid band up to           | A MIDI note; notes above the low band up to it are in the mid band | `84` |
-| 2     | Low velocity             | Scales the low band's velocity, `0x80` leaves it unchanged     | `0x80`  |
-| 3     | Mid velocity             | The same for the mid band                                      | `0x80`  |
-| 4     | High velocity            | The same for notes above the mid band                          | `0x80`  |
+| 2     | Low velocity             | Scales the low band's velocity, a two's complement signed byte: `0` leaves it unchanged, `0x80` (-128) silences it, `0x7F` (127) about doubles it | `0` |
+| 3     | Mid velocity             | The same for the mid band                                      | `0`     |
+| 4     | High velocity            | The same for notes above the mid band                          | `0`     |
 | 5     | High pass                | A MIDI note; notes below it get quieter                        | `0`     |
 | 6     | Low pass                 | A MIDI note; notes above it get quieter                        | `127`   |
 | 7     | Filter slope             | The velocity notes lose per octave past a cutoff               | `8`     |
+
+The `Arp` effect plays a held note as a looping sequence of steps, one note at a time. It only
+runs while the song plays; when stopped, notes pass it unchanged. Its values, where the signed
+ones are two's complement bytes (`0xF4` is -12):
+
+| Index | Parameter    | Values                                                                 | Default |
+| ----- | ------------ | ---------------------------------------------------------------------- | ------- |
+| 0-7   | Step 1-8     | Signed semitones added to the held note; `0` plays the held note itself | `0`     |
+| 8     | Length       | How many steps play before it starts over, `1`-`8`                     | `4`     |
+| 9     | Rate         | How long each step lasts in ticks, `1`-`255`                           | `6`     |
+| 10    | Gate         | Signed ticks. Negative: each next note starts that much before the last one ends, at most one tick less than the rate. Positive: each note ends that much after the next one starts. `0`: each note ends as the next starts | `0` |
+
+A step whose note falls outside `0`-`127` is a rest.
+
+The `Harmonize` effect plays a chord for each note: the note itself and its intervals, from
+low to high. Its values:
+
+| Index | Parameter    | Values                                                                 | Default |
+| ----- | ------------ | ---------------------------------------------------------------------- | ------- |
+| 0-6   | Interval 1-7 | Signed semitones from the note, two's complement; `0` is unused        | `0`     |
+| 7     | Inversion    | `0`-`7`; each one raises the chord's lowest note an octave             | `0`     |
+| 8     | Legato       | Ticks between each chord note and the next, from low to high, `0`-`255`; only while the song plays | `0` |
+
+Chord notes outside `0`-`127` aren't played, and a note in the chord twice is played once.
 
 ### Patterns
 

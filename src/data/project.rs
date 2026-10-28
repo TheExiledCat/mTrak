@@ -213,8 +213,9 @@ mod tests {
         bass.transpose = 12;
         bass.effects = vec![EffectSettings::new(
             EffectKind::Eq,
-            vec![30, 90, 0x40, 0x80, 0xC0, 24, 100, 16],
+            vec![30, 90, 0xC0, 0x00, 0x40, 24, 100, 16],
         )];
+        bass.effects[0].enabled = false;
 
         let first = project
             .patterns

@@ -5,8 +5,13 @@ use crate::{
     engine::effects::{MidiEffect, Param, ParamKind, Timing, note_event},
 };
 
-/// The band velocity that leaves notes unchanged; lower values cut, higher ones boost.
+/// Band velocities are signed: 0 leaves notes unchanged, -128 silences them and 127 about
+/// doubles them. This is added to get the scale for `scale_velocity`.
 const BAND_UNITY: u8 = 0x80;
+const BAND: ParamKind = ParamKind::SignedNumber {
+    min: i8::MIN,
+    max: i8::MAX,
+};
 const SEMITONES_PER_OCTAVE: u16 = 12;
 const BYTE: ParamKind = ParamKind::Number {
     min: 0,
@@ -35,18 +40,18 @@ const PARAMS: &[Param] = &[
     },
     Param {
         name: "Low velocity",
-        kind: BYTE,
-        default: BAND_UNITY,
+        kind: BAND,
+        default: 0,
     },
     Param {
         name: "Mid velocity",
-        kind: BYTE,
-        default: BAND_UNITY,
+        kind: BAND,
+        default: 0,
     },
     Param {
         name: "High velocity",
-        kind: BYTE,
-        default: BAND_UNITY,
+        kind: BAND,
+        default: 0,
     },
     Param {
         name: "High pass",
@@ -68,10 +73,10 @@ const PARAMS: &[Param] = &[
 pub struct EqEffect {
     low_frequency: u8,
     high_frequency: u8,
-    /// Scales the velocity of notes in each band, `BAND_UNITY` leaves them unchanged.
-    low_velocity: u8,
-    mid_velocity: u8,
-    high_velocity: u8,
+    /// Scales the velocity of notes in each band, 0 leaves them unchanged.
+    low_velocity: i8,
+    mid_velocity: i8,
+    high_velocity: i8,
     /// Notes below this pitch lose `filter_velocity_per_octave` for each octave below it.
     high_pass_cutoff: u8,
     /// Notes above this pitch lose `filter_velocity_per_octave` for each octave above it.
@@ -83,35 +88,23 @@ impl EqEffect {
         return Self {
             low_frequency: PARAMS[LOW_FREQUENCY].default,
             high_frequency: PARAMS[HIGH_FREQUENCY].default,
-            low_velocity: PARAMS[LOW_VELOCITY].default,
-            mid_velocity: PARAMS[MID_VELOCITY].default,
-            high_velocity: PARAMS[HIGH_VELOCITY].default,
+            low_velocity: PARAMS[LOW_VELOCITY].default as i8,
+            mid_velocity: PARAMS[MID_VELOCITY].default as i8,
+            high_velocity: PARAMS[HIGH_VELOCITY].default as i8,
             high_pass_cutoff: PARAMS[HIGH_PASS_CUTOFF].default,
             low_pass_cutoff: PARAMS[LOW_PASS_CUTOFF].default,
             filter_velocity_per_octave: PARAMS[FILTER_VELOCITY_PER_OCTAVE].default,
         };
     }
 
-    fn field(&mut self, index: usize) -> Option<&mut u8> {
-        return Some(match index {
-            LOW_FREQUENCY => &mut self.low_frequency,
-            HIGH_FREQUENCY => &mut self.high_frequency,
-            LOW_VELOCITY => &mut self.low_velocity,
-            MID_VELOCITY => &mut self.mid_velocity,
-            HIGH_VELOCITY => &mut self.high_velocity,
-            HIGH_PASS_CUTOFF => &mut self.high_pass_cutoff,
-            LOW_PASS_CUTOFF => &mut self.low_pass_cutoff,
-            FILTER_VELOCITY_PER_OCTAVE => &mut self.filter_velocity_per_octave,
-            _ => return None,
-        });
-    }
-
-    fn band_velocity(&self, pitch: u8) -> u8 {
-        return match pitch {
+    /// The scale for `scale_velocity` of a pitch's band, out of `BAND_UNITY`.
+    fn band_scale(&self, pitch: u8) -> u8 {
+        let velocity = match pitch {
             pitch if pitch <= self.low_frequency => self.low_velocity,
             pitch if pitch <= self.high_frequency => self.mid_velocity,
             _ => self.high_velocity,
         };
+        return BAND_UNITY.wrapping_add_signed(velocity);
     }
 
     /// The velocity the filters take off a pitch, per semitone past the cutoff and rounded up
@@ -138,9 +131,9 @@ impl MidiEffect for EqEffect {
         return match index {
             LOW_FREQUENCY => self.low_frequency,
             HIGH_FREQUENCY => self.high_frequency,
-            LOW_VELOCITY => self.low_velocity,
-            MID_VELOCITY => self.mid_velocity,
-            HIGH_VELOCITY => self.high_velocity,
+            LOW_VELOCITY => self.low_velocity as u8,
+            MID_VELOCITY => self.mid_velocity as u8,
+            HIGH_VELOCITY => self.high_velocity as u8,
             HIGH_PASS_CUTOFF => self.high_pass_cutoff,
             LOW_PASS_CUTOFF => self.low_pass_cutoff,
             FILTER_VELOCITY_PER_OCTAVE => self.filter_velocity_per_octave,
@@ -148,8 +141,16 @@ impl MidiEffect for EqEffect {
         };
     }
     fn set_param(&mut self, index: usize, value: u8) {
-        if let Some(field) = self.field(index) {
-            *field = value;
+        match index {
+            LOW_FREQUENCY => self.low_frequency = value,
+            HIGH_FREQUENCY => self.high_frequency = value,
+            LOW_VELOCITY => self.low_velocity = value as i8,
+            MID_VELOCITY => self.mid_velocity = value as i8,
+            HIGH_VELOCITY => self.high_velocity = value as i8,
+            HIGH_PASS_CUTOFF => self.high_pass_cutoff = value,
+            LOW_PASS_CUTOFF => self.low_pass_cutoff = value,
+            FILTER_VELOCITY_PER_OCTAVE => self.filter_velocity_per_octave = value,
+            _ => {}
         }
     }
     fn process(&mut self, message: Message, _timing: Option<Timing>, out: &mut Vec<Message>) {
@@ -163,7 +164,7 @@ impl MidiEffect for EqEffect {
             return;
         }
         let pitch = note.pitch.0;
-        let velocity = scale_velocity(note.velocity, self.band_velocity(pitch), BAND_UNITY);
+        let velocity = scale_velocity(note.velocity, self.band_scale(pitch), BAND_UNITY);
         note.velocity = velocity.saturating_sub(self.filter_cut(pitch));
         if note.velocity == 0 {
             return;
@@ -202,11 +203,20 @@ mod tests {
     #[test]
     fn bands_scale_their_notes() {
         let mut eq = EqEffect::new();
-        eq.low_velocity = BAND_UNITY / 2;
-        eq.high_velocity = 0xC0;
+        eq.low_velocity = -0x40;
+        eq.high_velocity = 0x40;
         assert_eq!(play(&mut eq, note_on(30, 100)), vec![note_on(30, 50)]);
         assert_eq!(play(&mut eq, note_on(60, 100)), vec![note_on(60, 100)]);
         assert_eq!(play(&mut eq, note_on(100, 80)), vec![note_on(100, 120)]);
+    }
+
+    #[test]
+    fn band_velocities_reach_silence_and_about_double() {
+        let mut eq = EqEffect::new();
+        eq.low_velocity = i8::MIN;
+        eq.high_velocity = i8::MAX;
+        assert!(play(&mut eq, note_on(30, 100)).is_empty());
+        assert_eq!(play(&mut eq, note_on(100, 50)), vec![note_on(100, 100)]);
     }
 
     #[test]
@@ -235,7 +245,7 @@ mod tests {
         let mut eq = EqEffect::new();
         eq.high_pass_cutoff = 60;
         eq.filter_velocity_per_octave = 120;
-        eq.low_velocity = 0;
+        eq.low_velocity = i8::MIN;
         let off = Message::NoteOff(Channel::Ch1, 30, 0);
         assert_eq!(play(&mut eq, off.clone()), vec![off]);
     }

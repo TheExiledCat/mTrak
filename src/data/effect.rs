@@ -1,16 +1,20 @@
 use serde::{Deserialize, Serialize};
+use strum::EnumIter;
 
 /// Every effect an instrument can have. Saved by name, so variants can be reordered.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+/// `EffectKind::iter()` lists the ones that can be added; disabled ones are WIP.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, EnumIter)]
 pub enum EffectKind {
     Eq,
+    Arp,
+    Harmonize,
 }
 impl EffectKind {
-    pub const ALL: [EffectKind; 1] = [EffectKind::Eq];
-
     pub fn name(&self) -> &'static str {
         return match self {
             EffectKind::Eq => "EQ",
+            EffectKind::Arp => "Arp",
+            EffectKind::Harmonize => "Chord",
         };
     }
 }
@@ -21,9 +25,14 @@ impl EffectKind {
 pub struct EffectSettings {
     pub kind: EffectKind,
     pub values: Vec<u8>,
+    pub enabled: bool,
 }
 impl EffectSettings {
     pub fn new(kind: EffectKind, values: Vec<u8>) -> Self {
-        return Self { kind, values };
+        return Self {
+            kind,
+            values,
+            enabled: true,
+        };
     }
 }
