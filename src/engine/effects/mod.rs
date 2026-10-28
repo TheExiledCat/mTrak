@@ -1,4 +1,5 @@
 pub mod arp;
+pub mod echo;
 pub mod eq;
 pub mod harmonizer;
 pub mod lfo;
@@ -11,7 +12,8 @@ use crate::{
         note::NotePitch,
     },
     engine::effects::{
-        arp::ArpeggiatorEffect, eq::EqEffect, harmonizer::Harmonizer, lfo::LfoEffect,
+        arp::ArpeggiatorEffect, echo::EchoEffect, eq::EqEffect, harmonizer::Harmonizer,
+        lfo::LfoEffect,
     },
     tui::framework::core_extensions::Boxed,
 };
@@ -24,6 +26,7 @@ pub fn create_effect(settings: &EffectSettings) -> Box<dyn MidiEffect> {
         EffectKind::Arp => ArpeggiatorEffect::new().boxed(),
         EffectKind::Harmonize => Harmonizer::new().boxed(),
         EffectKind::Lfo => LfoEffect::new().boxed(),
+        EffectKind::Echo => EchoEffect::new().boxed(),
     };
     for (index, (param, value)) in effect.params().iter().zip(&settings.values).enumerate() {
         effect.set_param(index, param.kind.clamp(*value));

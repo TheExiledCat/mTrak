@@ -69,7 +69,7 @@ The effects on an instrument's channel, in the order notes go through them. Each
 
 | Field     | Type          | Contents                                                     |
 | --------- | ------------- | ------------------------------------------------------------ |
-| `kind`    | string        | Which effect it is: `Eq`, `Arp`, `Harmonize` or `Lfo`, see below |
+| `kind`    | string        | Which effect it is: `Eq`, `Arp`, `Harmonize`, `Lfo` or `Echo`, see below |
 | `values`  | array of ints | Each of the effect's parameters, `0`-`255`, in the order below |
 | `enabled` | bool          | `false` if the effect is turned off: notes pass it unchanged, and it keeps its place and values |
 
@@ -130,6 +130,15 @@ note with retrigger on. Its values:
 | 6     | CC center | The CC's value in the middle of the wave, `0`-`127`                       | `64`    |
 
 When playback stops, the bend or CC the wave moved last is set back to its middle.
+
+The `Echo` effect plays each note again and again, each repeat as long as the note was held
+and quieter than the one before, until its velocity reaches 0. It only runs while the song
+plays; when stopped, notes pass it unchanged. Its values:
+
+| Index | Parameter | Values                                                                    | Default |
+| ----- | --------- | ------------------------------------------------------------------------- | ------- |
+| 0     | Rate      | Ticks between the repeats, `1`-`255`                                      | `12`    |
+| 1     | Feedback  | Each repeat's velocity is the one before times this / 256, rounded down, `0`-`255`; `0` plays no repeats | `128` |
 
 ### Patterns
 

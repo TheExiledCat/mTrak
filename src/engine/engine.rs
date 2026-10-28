@@ -1403,7 +1403,7 @@ mod tests {
     };
     use crate::{
         data::effect::EffectKind,
-        engine::effects::{MidiEffect, Param, arp, create_effect, default_settings, eq},
+        engine::effects::{MidiEffect, Param, arp, create_effect, default_settings, echo, eq},
     };
 
     /// Drives an engine without a MIDI port and collects every message it would send.
@@ -4010,5 +4010,55 @@ mod tests {
                 .messages()
                 .contains(&Message::NoteOff(Channel::Ch3, 67, 0))
         );
+    }
+
+    /// Every note on and off on channel 3 is for a pitch that's off and on, and once stopped
+    /// nothing is left sounding.
+    fn assert_channel_3_notes_pair_up(notes: &[Message]) {
+        let mut sounding = std::collections::HashSet::new();
+        for (index, message) in notes.iter().enumerate() {
+            match *message {
+                Message::NoteOn(_, pitch, _) => {
+                    assert!(
+                        sounding.insert(pitch),
+                        "{pitch} played while on, at {index}: {notes:?}"
+                    )
+                }
+                Message::NoteOff(_, pitch, _) => {
+                    assert!(
+                        sounding.remove(&pitch),
+                        "{pitch} released while off, at {index}: {notes:?}"
+                    )
+                }
+                _ => {}
+            }
+        }
+        assert!(sounding.is_empty(), "{sounding:?} left sounding: {notes:?}");
+    }
+
+    #[test]
+    fn an_echo_on_a_looping_pattern_releases_every_note() {
+        let mut harness = Harness::new(vec![pattern(0x20, &[(0, 0, note("C-4 2 40"))])]);
+        let mut settings = default_settings(EffectKind::Echo);
+        settings.values[echo::FEEDBACK_PARAM] = 0xF0;
+        let mut chain = MidiEffectChain::new();
+        chain.push(create_effect(&settings));
+        harness
+            .engine
+            .apply(EngineCommand::SetEffectChain { channel: 2, chain });
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        for _ in 0..0x20 * 4 {
+            harness.next_row();
+        }
+        harness.engine.apply(EngineCommand::Stop);
+        let notes = channel_3_notes(harness.messages());
+        let offs = notes
+            .iter()
+            .filter(|message| matches!(message, Message::NoteOff(..)))
+            .count();
+        assert!(offs > 4, "{notes:?}");
+        assert_channel_3_notes_pair_up(&notes);
     }
 }

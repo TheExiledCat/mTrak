@@ -12,7 +12,7 @@ use crate::{
     tui::{
         app::AppState,
         framework::{
-            keymap::{Action, Key, KeyActions, KeyHint, Keymap},
+            keymap::{Action, HelpEntry, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
         },
         glyphs,
@@ -44,8 +44,9 @@ pub enum ListEvent {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ListAction {
-    Up,
-    Down,
+    /// Not `Up` and `Down`, so they rebind apart from the dropdown's.
+    PrevItem,
+    NextItem,
     Open,
     Remove,
     MoveUp,
@@ -159,10 +160,20 @@ impl List {
         return self;
     }
 
+    /// Every key a list can have, for the shortcuts screen and keybinds.toml.
+    pub fn help_entries() -> Vec<HelpEntry> {
+        let list = List::new("", Vec::<String>::new())
+            .add_button("")
+            .removable(true)
+            .reorderable(true)
+            .checkboxes(Vec::new());
+        return list.keys.help_entries(List::describe);
+    }
+
     fn bindings(&self) -> Keymap<ListAction> {
         let mut keys = Keymap::new("dialog")
-            .bind(Key::plain(KeyCode::Up), ListAction::Up, "Select")
-            .bind(Key::plain(KeyCode::Down), ListAction::Down, "Select");
+            .bind(Key::plain(KeyCode::Up), ListAction::PrevItem, "Select")
+            .bind(Key::plain(KeyCode::Down), ListAction::NextItem, "Select");
         if self.selectable || self.add_label.is_some() {
             keys = keys.bind(Key::char(' '), ListAction::Open, "Open");
         }
@@ -208,8 +219,8 @@ impl List {
 
     fn act(&mut self, action: ListAction) {
         match action {
-            ListAction::Up if self.selected > self.first_row() => self.selected -= 1,
-            ListAction::Down if self.selected + 1 < self.rows() => self.selected += 1,
+            ListAction::PrevItem if self.selected > self.first_row() => self.selected -= 1,
+            ListAction::NextItem if self.selected + 1 < self.rows() => self.selected += 1,
             ListAction::Open if self.on_item() => self.emit(ListEvent::Open(self.selected)),
             ListAction::Open if self.add_label.is_some() && self.selected == self.items.len() => {
                 self.emit(ListEvent::Add)
@@ -293,8 +304,8 @@ impl KeyActions for List {
 
     fn describe(action: ListAction) -> &'static str {
         return match action {
-            ListAction::Up => "Previous item",
-            ListAction::Down => "Next item",
+            ListAction::PrevItem => "Previous item",
+            ListAction::NextItem => "Next item",
             ListAction::Open => "Open an item, or add one",
             ListAction::Remove => "Remove an item",
             ListAction::MoveUp => "Move an item up",
@@ -396,17 +407,17 @@ mod tests {
     #[test]
     fn up_and_down_stay_in_the_list() {
         let mut list = list(&["a", "b"]);
-        list.act(ListAction::Up);
+        list.act(ListAction::PrevItem);
         assert_eq!(list.selected, 0);
-        list.act(ListAction::Down);
-        list.act(ListAction::Down);
+        list.act(ListAction::NextItem);
+        list.act(ListAction::NextItem);
         assert_eq!(list.selected, 1);
     }
 
     #[test]
     fn space_opens_the_selected_item() {
         let mut list = list(&["a", "b"]);
-        list.act(ListAction::Down);
+        list.act(ListAction::NextItem);
         list.act(ListAction::Open);
         assert_eq!(list.last, Some(ListEvent::Open(1)));
     }
@@ -415,7 +426,7 @@ mod tests {
     fn the_add_row_comes_after_the_items() {
         let mut list = list(&["a"]).add_button("Add");
         assert_eq!(list.get_height(), 2);
-        list.act(ListAction::Down);
+        list.act(ListAction::NextItem);
         assert_eq!(list.row_text(1), "+ Add");
         list.act(ListAction::Open);
         assert_eq!(list.last, Some(ListEvent::Add));
@@ -426,7 +437,7 @@ mod tests {
         let mut list = list(&["a", "b"]).selectable(false).add_button("Add");
         list.set_focused(true);
         assert_eq!(list.selected, 2);
-        list.act(ListAction::Up);
+        list.act(ListAction::PrevItem);
         assert_eq!(list.selected, 2);
         assert!(!self::list(&["a"]).selectable(false).focusable());
     }
@@ -437,7 +448,7 @@ mod tests {
         list.act(ListAction::Remove);
         assert_eq!(list.items.len(), 2);
         let mut list = list.removable(true);
-        list.act(ListAction::Down);
+        list.act(ListAction::NextItem);
         list.act(ListAction::Remove);
         assert_eq!(list.items, vec!["a"]);
         assert_eq!(list.last, Some(ListEvent::Remove(1)));
@@ -461,7 +472,7 @@ mod tests {
     fn the_add_row_never_moves() {
         let mut list = list(&["a"]).reorderable(true).add_button("Add");
         list.act(ListAction::MoveDown);
-        list.act(ListAction::Down);
+        list.act(ListAction::NextItem);
         list.act(ListAction::MoveUp);
         assert_eq!(list.items, vec!["a"]);
         assert_eq!(list.events, 0);
@@ -486,7 +497,7 @@ mod tests {
             .removable(true)
             .show_index(true);
         assert_eq!(list.row_text(1), "1 [ ] b");
-        list.act(ListAction::Down);
+        list.act(ListAction::NextItem);
         list.act(ListAction::Check);
         assert_eq!(
             list.last,

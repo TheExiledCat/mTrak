@@ -362,6 +362,7 @@ impl Dialog {
                 .entries(checkbox.keys.help_entries(Checkbox::describe))
                 .entries(buttons.keys.help_entries(Buttons::describe))
                 .entries(number.keys.help_entries(NumberBox::describe))
+                .entries(List::help_entries())
                 .entry(
                     "0-9 / A-F",
                     "Pick the dropdown option at that index, from 0",
@@ -1836,6 +1837,32 @@ mod tests {
             transpose.label(&state.config),
             "Transpose (semitones, -128 to +127)"
         );
+    }
+
+    #[test]
+    fn every_dialog_key_is_listed_and_rebinds_on_its_own() {
+        let mut sections = vec![];
+        Dialog::help(&mut sections);
+        let ids: Vec<String> = sections[0]
+            .entries
+            .iter()
+            .filter_map(|entry| entry.binding.as_ref().map(|b| b.id.clone()))
+            .collect();
+        for action in [
+            "prev_item",
+            "next_item",
+            "open",
+            "remove",
+            "move_up",
+            "move_down",
+            "check",
+        ] {
+            assert!(ids.contains(&format!("dialog.{action}")), "dialog.{action}");
+        }
+        let mut unique = ids.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "{ids:?}");
     }
 
     #[test]

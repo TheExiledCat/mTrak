@@ -2,13 +2,13 @@ use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
 /// Every effect an instrument can have. Saved by name, so variants can be reordered.
-/// `EffectKind::iter()` lists the ones that can be added; disabled ones are WIP.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, EnumIter)]
 pub enum EffectKind {
     Eq,
     Arp,
     Harmonize,
     Lfo,
+    Echo,
 }
 impl EffectKind {
     pub fn name(&self) -> &'static str {
@@ -17,6 +17,7 @@ impl EffectKind {
             EffectKind::Arp => "Arp",
             EffectKind::Harmonize => "Chord",
             EffectKind::Lfo => "LFO",
+            EffectKind::Echo => "Echo",
         };
     }
 }
