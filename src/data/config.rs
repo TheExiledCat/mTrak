@@ -133,6 +133,10 @@ pub struct Config {
     pub midi_input: Option<String>,
     /// The MIDI output port projects that don't name one connect to.
     pub midi_output: Option<String>,
+    /// Show and type the numbers in dialogs in hex, else in decimal.
+    pub hex_values: bool,
+    /// Show the range of a number field after its label in dialogs.
+    pub show_value_ranges: bool,
     /// Number the pattern editor's rows in hex, else in decimal from 00 to 99 and round again.
     pub hex_line_numbers: bool,
     /// Show dashes in empty instrument and volume columns.
@@ -150,6 +154,8 @@ impl Default for Config {
             update_check: true,
             midi_input: None,
             midi_output: None,
+            hex_values: true,
+            show_value_ranges: true,
             hex_line_numbers: true,
             show_dashes: true,
             track_numbers: true,
@@ -174,6 +180,10 @@ impl Config {
                 "update_check" => config.update_check = parse_bool(&entry.value).map_err(error)?,
                 "midi_input" => config.midi_input = port(&entry.value),
                 "midi_output" => config.midi_output = port(&entry.value),
+                "hex_values" => config.hex_values = parse_bool(&entry.value).map_err(error)?,
+                "show_value_ranges" => {
+                    config.show_value_ranges = parse_bool(&entry.value).map_err(error)?;
+                }
                 "hex_line_numbers" => {
                     config.hex_line_numbers = parse_bool(&entry.value).map_err(error)?;
                 }
@@ -203,6 +213,8 @@ impl Config {
             update_check,
             midi_input,
             midi_output,
+            hex_values,
+            show_value_ranges,
             hex_line_numbers,
             show_dashes,
             track_numbers,
@@ -229,6 +241,11 @@ impl Config {
              # The MIDI ports a project connects to when it doesn't name its own, \"\" for none.\n\
              midi_input = {midi_input}\n\
              midi_output = {midi_output}\n\
+             \n\
+             # Numbers in dialogs in hex, or in decimal when false.\n\
+             hex_values = {hex_values}\n\
+             # The range of each number in dialogs after its name, e.g. Volume (00-FF).\n\
+             show_value_ranges = {show_value_ranges}\n\
              \n\
              # Pattern editor: row numbers in hex, or in decimal from 00 to 99 when false.\n\
              hex_line_numbers = {hex_line_numbers}\n\
@@ -271,6 +288,8 @@ mod tests {
                 update_check: false,
                 midi_input: Some("Keys".to_owned()),
                 midi_output: Some("USB \\MIDI \"Out\"".to_owned()),
+                hex_values: false,
+                show_value_ranges: false,
                 hex_line_numbers: false,
                 show_dashes: false,
                 track_numbers: false,

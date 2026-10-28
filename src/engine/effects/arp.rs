@@ -1,17 +1,18 @@
 use midi::{Channel, Message};
 
 use crate::{
-    data::midi::VELOCITY_MAX,
+    data::midi::PITCH_MAX,
     engine::{
         effects::{MidiEffect, Param, ParamKind, Timing, note_event},
         notes::{Countdown, HeldNotes},
     },
 };
 
-const STEP_COUNT: usize = 8;
-const LENGTH_PARAM: usize = STEP_COUNT;
-const RATE_PARAM: usize = LENGTH_PARAM + 1;
-const GATE_PARAM: usize = RATE_PARAM + 1;
+/// The steps are the first params, so step `n` is param `n`.
+pub const STEP_COUNT: usize = 8;
+pub const LENGTH_PARAM: usize = STEP_COUNT;
+pub const RATE_PARAM: usize = LENGTH_PARAM + 1;
+pub const GATE_PARAM: usize = RATE_PARAM + 1;
 const STEP_NAMES: [&str; STEP_COUNT] = [
     "Step 1", "Step 2", "Step 3", "Step 4", "Step 5", "Step 6", "Step 7", "Step 8",
 ];
@@ -131,7 +132,7 @@ impl ArpeggiatorEffect {
         arp.played += 1;
         let (channel, root) = (arp.channel, arp.root);
         let pitch = root as i16 + step as i16;
-        if (0..=VELOCITY_MAX as i16).contains(&pitch) {
+        if (0..=PITCH_MAX as i16).contains(&pitch) {
             let pitch = pitch as u8;
             arp.sounding.push(pitch);
             self.notes.note_on(channel, pitch, arp.velocity, out);
@@ -391,6 +392,89 @@ mod tests {
         let sent = run(&mut arp, 2);
         assert_eq!(sent[1], vec![off(60)]);
         assert_eq!(sent[2], vec![on(60)]);
+    }
+
+    #[test]
+    fn a_shorter_length_takes_effect_on_the_next_step() {
+        let mut arp = arp(&[0, 7, 3], 3, 1, 0);
+        let mut sent = run(&mut arp, 1);
+        arp.set_param(LENGTH_PARAM, 1);
+        for pulse in 2..=3 {
+            let mut out = vec![];
+            run_pulse(&mut arp, pulse, &mut out);
+            sent.push(out);
+        }
+        assert_eq!(
+            sent[1..],
+            [
+                vec![off(60), on(67)],
+                vec![off(67), on(60)],
+                vec![off(60), on(60)],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_new_rate_starts_after_the_step_already_waiting() {
+        let mut arp = arp(&[0, 7], 2, 4, 0);
+        let mut sent = run(&mut arp, 0);
+        arp.set_param(RATE_PARAM, 1);
+        for pulse in 1..=5 {
+            let mut out = vec![];
+            run_pulse(&mut arp, pulse, &mut out);
+            sent.push(out);
+        }
+        assert!(sent[1..4].iter().all(Vec::is_empty));
+        assert_eq!(sent[4], vec![off(60), on(67)]);
+        assert_eq!(sent[5], vec![off(67), on(60)]);
+    }
+
+    #[test]
+    fn a_pitch_two_arps_share_is_released_by_the_last_one() {
+        let mut arp = arp(&[0, 7], 2, 2, 0);
+        run(&mut arp, 2);
+        let timing = Some(Timing::new(2));
+        let mut out = vec![];
+        arp.process(on(67), timing, &mut out);
+        assert_eq!(out, vec![on(67)]);
+        out.clear();
+        arp.process(off(67), timing, &mut out);
+        assert!(out.is_empty());
+        arp.process(off(60), timing, &mut out);
+        assert_eq!(out, vec![off(67)]);
+    }
+
+    #[test]
+    fn a_note_on_without_velocity_stops_the_arp() {
+        let mut arp = arp(&[0, 7], 2, 2, 0);
+        run(&mut arp, 2);
+        let mut out = vec![];
+        let release = Message::NoteOn(Channel::Ch1, 60, 0);
+        arp.process(release, Some(Timing::new(2)), &mut out);
+        assert_eq!(out, vec![off(67)]);
+        assert!(arp.arps.is_empty());
+    }
+
+    #[test]
+    fn roots_on_other_channels_have_their_own_arps() {
+        let mut arp = arp(&[0, 7], 2, 2, 0);
+        run(&mut arp, 0);
+        let mut out = vec![];
+        let other = Message::NoteOn(Channel::Ch2, 60, 100);
+        arp.process(other, Some(Timing::new(0)), &mut out);
+        out.clear();
+        arp.process(off(60), Some(Timing::new(0)), &mut out);
+        assert_eq!(out, vec![off(60)]);
+        out.clear();
+        run_pulse(&mut arp, 1, &mut out);
+        run_pulse(&mut arp, 2, &mut out);
+        assert_eq!(
+            out,
+            vec![
+                Message::NoteOff(Channel::Ch2, 60, 0),
+                Message::NoteOn(Channel::Ch2, 67, 100),
+            ]
+        );
     }
 
     #[test]

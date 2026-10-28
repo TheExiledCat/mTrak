@@ -6,6 +6,8 @@ use num::FromPrimitive;
 pub const MIDI_CHANNEL_MAX: u8 = 0xF;
 pub const PULSES_PER_QUARTER: u32 = 24;
 pub const VELOCITY_MAX: u8 = 0x7F;
+/// The highest pitch MIDI can send. The tracker's own range (`NotePitch`) starts higher.
+pub const PITCH_MAX: u8 = 0x7F;
 pub const VOLUME_MAX: u8 = 0x80;
 pub const DEFAULT_BPM: u8 = 125;
 pub const DEFAULT_SPEED: u8 = 6;

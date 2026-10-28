@@ -6,7 +6,7 @@ use crate::{
     data::{
         config::TITLE,
         effect::EffectKind,
-        midi::VELOCITY_MAX,
+        midi::PITCH_MAX,
         note::NotePitch,
         pattern::{ClearOption, ClearTarget},
     },
@@ -19,7 +19,6 @@ use crate::{
                 Buttons, Checkbox, Dialog, DialogComponent, DialogResult, InfoLevel, Label, Link,
                 List, ListEvent, NumberBox, Select, TextPrompt,
             },
-            keymap::KeyActions,
         },
         glyphs,
     },
@@ -164,12 +163,10 @@ pub fn open_clear_dialog(state: &mut AppState) {
     state.open_dialog(dialog);
 }
 
-/// Previews changes live; cancelling restores the old values.
+/// Changes are made right away, so it can only be closed with Enter.
 pub fn open_instrument_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
-    let original = state.project().instruments[instrument as usize].clone();
-    let had_changes = state.has_changes();
-    let settings = &original;
+    let settings = &state.project().instruments[instrument as usize];
     let dialog = Dialog::new(
         format!("Instrument {:1X}", instrument),
         vec![
@@ -177,16 +174,20 @@ pub fn open_instrument_dialog(state: &mut AppState) {
                 .initial(&settings.name)
                 .boxed(),
             NumberBox::new("volume", "Volume", 2)
+                .show_range()
                 .value(settings.volume as i32)
                 .boxed(),
             NumberBox::new("pitch_wheel_range", "Bend range (semitones)", 2)
+                .show_range()
                 .value(settings.pitch_wheel_range as i32)
                 .boxed(),
             NumberBox::new("default_cc", "Default CC", 2)
+                .show_range()
                 .range(0, 0x7F)
                 .value(settings.default_cc as i32)
                 .boxed(),
             NumberBox::new("transpose", "Transpose (semitones)", 2)
+                .show_range()
                 .range(i8::MIN as i32, i8::MAX as i32)
                 .value(settings.transpose as i32)
                 .boxed(),
@@ -194,6 +195,7 @@ pub fn open_instrument_dialog(state: &mut AppState) {
         ],
     )
     .hide_behind_child()
+    .cancellable(false)
     .focus_first()
     .on_update(move |state, fields| {
         apply_instrument(state, instrument, fields);
@@ -205,15 +207,6 @@ pub fn open_instrument_dialog(state: &mut AppState) {
     .on_submit(move |state, result| {
         apply_instrument(state, instrument, &result);
         return Ok(());
-    })
-    .on_cancel(move |state| {
-        state.project_mut().instruments[instrument as usize].name = original.name;
-        state.set_global_volume(instrument, original.volume);
-        state.set_bend_range(instrument, original.pitch_wheel_range);
-        state.set_default_cc(instrument, original.default_cc);
-        state.set_instrument_transpose(instrument, original.transpose);
-        state.set_effects(instrument, original.effects);
-        state.restore_has_changes(had_changes);
     });
     state.open_dialog(dialog);
 }
@@ -236,7 +229,7 @@ fn apply_instrument(state: &mut AppState, instrument: u8, result: &DialogResult)
     }
 }
 /// The active instrument's effects, in the order notes go through them. Changes are made
-/// right away.
+/// right away, so it can only be closed with Enter.
 fn open_effects_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
     let list = List::new("effects", effect_names(state, instrument))
@@ -252,6 +245,7 @@ fn open_effects_dialog(state: &mut AppState) {
         vec![list.boxed()],
     )
     .hide_behind_child()
+    .cancellable(false)
     .focus_first()
     .on_update(move |state, fields| {
         match fields.list_event("effects") {
@@ -304,7 +298,8 @@ fn open_add_effect_dialog(state: &mut AppState, instrument: u8) {
     state.open_dialog(dialog);
 }
 
-/// One field per parameter of an effect, previewed live; cancelling restores the old values.
+/// One field per parameter of an effect. Changes are made right away, so it can only be closed
+/// with Enter.
 fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
     let Some(settings) = state.project().instruments[instrument as usize]
         .effects
@@ -313,7 +308,6 @@ fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
     else {
         return;
     };
-    let had_changes = state.has_changes();
     let params = effect_params(settings.kind);
     let values: Vec<u8> = params
         .iter()
@@ -326,6 +320,7 @@ fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
         .map(|(param, value)| param_field(param, *value))
         .collect();
     let dialog = Dialog::new(format!("{} {:X}", settings.kind.name(), effect), fields)
+        .cancellable(false)
         .on_update(move |state, fields| {
             let changed = params
                 .iter()
@@ -336,12 +331,6 @@ fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
                 state.set_effect_param(instrument, effect, index, value);
             }
             return Ok(());
-        })
-        .on_cancel(move |state| {
-            for (index, value) in values.iter().enumerate() {
-                state.set_effect_param(instrument, effect, index, *value);
-            }
-            state.restore_has_changes(had_changes);
         });
     state.open_dialog(dialog);
 }
@@ -351,6 +340,7 @@ fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
         ParamKind::Number { min, max } => {
             let digits = if max > 0xF { 2 } else { 1 };
             NumberBox::new(param.name, param.name, digits)
+                .show_range()
                 .range(min as i32, max as i32)
                 .value(value as i32)
                 .boxed()
@@ -362,6 +352,7 @@ fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
                 1
             };
             NumberBox::new(param.name, param.name, digits)
+                .show_range()
                 .range(min as i32, max as i32)
                 .value(value as i8 as i32)
                 .boxed()
@@ -374,7 +365,7 @@ fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
             .selected(value as usize)
             .boxed(),
         ParamKind::Pitch => {
-            let pitches = (0..=VELOCITY_MAX).map(|pitch| NotePitch(pitch).to_string());
+            let pitches = (0..=PITCH_MAX).map(|pitch| NotePitch(pitch).to_string());
             Select::new(param.name, pitches.collect())
                 .label(param.name)
                 .selected(value as usize)
@@ -446,23 +437,23 @@ pub fn open_about_dialog(state: &mut AppState) {
     state.open_dialog(dialog);
 }
 
-/// Previews changes live; cancelling restores the old values.
+/// Changes are made right away, so it can only be closed with Enter.
 pub fn open_global_dialog(state: &mut AppState) {
-    let velocity = state.project().global_velocity;
-    let transpose = state.project().transpose;
-    let had_changes = state.has_changes();
     let dialog = Dialog::new(
         "Global",
         vec![
             NumberBox::new("velocity", "Velocity", 2)
+                .show_range()
                 .value(state.project().global_velocity as i32)
                 .boxed(),
             NumberBox::new("transpose", "Transpose (semitones)", 2)
+                .show_range()
                 .range(i8::MIN as i32, i8::MAX as i32)
                 .value(state.project().transpose as i32)
                 .boxed(),
         ],
     )
+    .cancellable(false)
     .focus_first()
     .on_update(|state, fields| {
         apply_globals(state, fields);
@@ -471,11 +462,6 @@ pub fn open_global_dialog(state: &mut AppState) {
     .on_submit(|state, result| {
         apply_globals(state, &result);
         return Ok(());
-    })
-    .on_cancel(move |state| {
-        state.set_global_velocity(velocity);
-        state.set_transpose(transpose);
-        state.restore_has_changes(had_changes);
     });
     state.open_dialog(dialog);
 }
@@ -486,5 +472,117 @@ fn apply_globals(state: &mut AppState, result: &DialogResult) {
     }
     if let Some(transpose) = result.number("transpose") {
         state.set_transpose(transpose as i8);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+    use super::*;
+    use crate::{
+        data::project::Project,
+        tui::{
+            framework::{dialog::DialogValue, widget::MtrakWidget},
+            theme::Theme,
+        },
+    };
+
+    /// The values `param_value` reads from a field made by `param_field` as `keys` are pressed.
+    fn edit(param: Param, value: u8, keys: &[KeyCode]) -> Vec<u8> {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut dialog = Dialog::new("", vec![param_field(&param, value)])
+            .focus_first()
+            .on_update({
+                let seen = seen.clone();
+                move |_, fields| {
+                    seen.borrow_mut().extend(param_value(&param, fields));
+                    return Ok(());
+                }
+            });
+        for key in keys {
+            let event = Event::Key(KeyEvent::new(*key, KeyModifiers::NONE));
+            dialog.handle_event(&mut state, &event);
+        }
+        return seen.take();
+    }
+
+    #[test]
+    fn signed_params_are_edited_as_signed_numbers() {
+        let param = Param {
+            name: "Step",
+            kind: ParamKind::SignedNumber { min: -12, max: 12 },
+            default: 0,
+        };
+        let keys = [KeyCode::Down, KeyCode::Up, KeyCode::Up];
+        assert_eq!(edit(param, -1i8 as u8, &keys), vec![0xFE, 0xFF, 0x00]);
+        assert!(edit(param, -12i8 as u8, &[KeyCode::Down]).is_empty());
+    }
+
+    #[test]
+    fn number_params_stay_in_their_range() {
+        let param = Param {
+            name: "Rate",
+            kind: ParamKind::Number { min: 1, max: 0xFF },
+            default: 6,
+        };
+        let keys = [KeyCode::Down, KeyCode::Down];
+        assert_eq!(edit(param, 2, &keys), vec![1]);
+        assert!(edit(param, 0xFF, &[KeyCode::Up]).is_empty());
+    }
+
+    #[test]
+    fn pitch_params_are_picked_by_note() {
+        let param = Param {
+            name: "Pitch",
+            kind: ParamKind::Pitch,
+            default: 60,
+        };
+        let field = param_field(&param, 60);
+        let Some((_, DialogValue::Choice(choice))) = field.value() else {
+            panic!("a pitch is a choice");
+        };
+        assert_eq!(choice, 60);
+    }
+
+    #[test]
+    fn every_effect_param_has_a_field_that_reads_back_its_default() {
+        for kind in EffectKind::iter() {
+            for param in effect_params(kind) {
+                let field = param_field(param, param.default);
+                let (id, value) = field.value().unwrap();
+                assert_eq!(id, param.name);
+                let read = match (param.kind, value) {
+                    (ParamKind::SignedNumber { .. }, DialogValue::Number(n)) => n as i8 as u8,
+                    (_, DialogValue::Number(n)) => n as u8,
+                    (_, DialogValue::Choice(i)) => i as u8,
+                    (_, DialogValue::Bool(b)) => b as u8,
+                    (_, value) => panic!("{} has an unexpected field: {value:?}", param.name),
+                };
+                assert_eq!(read, param.default, "{} {}", kind.name(), param.name);
+            }
+        }
+    }
+
+    #[test]
+    fn instrument_and_global_dialogs_only_close_with_enter() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        for open in [open_instrument_dialog, open_global_dialog] {
+            open(&mut state);
+        }
+        let instrument = state.active_instrument;
+        open_effects_dialog(&mut state);
+        state.add_effect(instrument, EffectKind::Arp);
+        open_effect_dialog(&mut state, instrument, 0);
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        for mut dialog in state.take_pending_dialogs() {
+            dialog.handle_event(&mut state, &press(KeyCode::Esc));
+            assert!(!dialog.is_closed());
+            dialog.handle_event(&mut state, &press(KeyCode::Enter));
+            assert!(dialog.is_closed());
+        }
     }
 }

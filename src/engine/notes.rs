@@ -1,9 +1,9 @@
 use midi::{Channel, Message};
 use num::FromPrimitive;
 
-use crate::data::midi::MIDI_CHANNEL_MAX;
+use crate::data::midi::{MIDI_CHANNEL_MAX, PITCH_MAX};
 
-pub const PITCH_COUNT: usize = 128;
+pub const PITCH_COUNT: usize = PITCH_MAX as usize + 1;
 pub const MIDI_CHANNEL_COUNT: usize = MIDI_CHANNEL_MAX as usize + 1;
 
 /// How many times each pitch is held on each channel, so a pitch played twice is only

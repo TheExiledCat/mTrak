@@ -97,6 +97,12 @@ pub fn open_config_dialog(state: &mut AppState) {
             Checkbox::new("update", "Check for updates")
                 .checked(state.config.update_check)
                 .boxed(),
+            Checkbox::new("hex_values", "Values are hex")
+                .checked(state.config.hex_values)
+                .boxed(),
+            Checkbox::new("value_ranges", "Show value ranges")
+                .checked(state.config.show_value_ranges)
+                .boxed(),
             Label::new("Pattern editor").boxed(),
             Select::new("line_numbers", line_number_names)
                 .label("Line numbers")
@@ -254,6 +260,10 @@ fn settings(result: &DialogResult, theme: ThemeSetting, ports: &Ports) -> Config
         midi_output: result
             .choice("midi_out")
             .and_then(|i| ports.output[i].clone()),
+        hex_values: result.bool("hex_values").unwrap_or(defaults.hex_values),
+        show_value_ranges: result
+            .bool("value_ranges")
+            .unwrap_or(defaults.show_value_ranges),
         hex_line_numbers: result.bool("hex").unwrap_or(defaults.hex_line_numbers),
         show_dashes: result.bool("dashes").unwrap_or(defaults.show_dashes),
         track_numbers: result

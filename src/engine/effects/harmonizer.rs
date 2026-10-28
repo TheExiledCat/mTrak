@@ -1,16 +1,20 @@
 use midi::{Channel, Message};
 
 use crate::{
-    data::{midi::VELOCITY_MAX, note::NotePitch},
+    data::{
+        midi::PITCH_MAX,
+        note::{NotePitch, SEMITONES_PER_OCTAVE},
+    },
     engine::{
         effects::{MidiEffect, NoteEvent, Param, ParamKind, Timing, note_event},
         notes::{Countdown, HeldNotes},
     },
 };
 
-const INTERVALS_COUNT: usize = 7;
-const INVERSION_PARAM: usize = INTERVALS_COUNT;
-const LEGATO_PARAM: usize = INVERSION_PARAM + 1;
+/// The intervals are the first params, so interval `n` is param `n`.
+pub const INTERVALS_COUNT: usize = 7;
+pub const INVERSION_PARAM: usize = INTERVALS_COUNT;
+pub const LEGATO_PARAM: usize = INVERSION_PARAM + 1;
 const NO_INTERVAL: i8 = 0;
 const INTERVAL_NAMES: [&str; INTERVALS_COUNT] = [
     "Interval 1",
@@ -91,7 +95,8 @@ impl Harmonizer {
         };
     }
 
-    /// The root and its intervals, with the lowest raised an octave once per inversion.
+    /// The root and its intervals, with the lowest raised an octave once per inversion. A
+    /// chord has one inversion fewer than it has notes, so higher settings play its last one.
     fn chord(&self, root: u8) -> Vec<u8> {
         let mut pitches = vec![root as i16];
         for interval in self.intervals {
@@ -99,13 +104,15 @@ impl Harmonizer {
                 pitches.push(root as i16 + interval as i16);
             }
         }
-        for _ in 0..self.inversion {
+        pitches.sort_unstable();
+        pitches.dedup();
+        for _ in 0..(self.inversion as usize).min(pitches.len() - 1) {
             let lowest = pitches.iter_mut().min().unwrap();
-            *lowest += 12;
+            *lowest += SEMITONES_PER_OCTAVE as i16;
         }
         let mut pitches: Vec<u8> = pitches
             .into_iter()
-            .filter(|pitch| (0..=VELOCITY_MAX as i16).contains(pitch))
+            .filter(|pitch| (0..=PITCH_MAX as i16).contains(pitch))
             .map(|pitch| pitch as u8)
             .collect();
         pitches.sort_unstable();
@@ -252,7 +259,13 @@ mod tests {
         assert_eq!(harmonizer(&[4, 7], 0).chord(60), vec![60, 64, 67]);
         assert_eq!(harmonizer(&[4, 7], 1).chord(60), vec![64, 67, 72]);
         assert_eq!(harmonizer(&[4, 7], 2).chord(60), vec![67, 72, 76]);
-        assert_eq!(harmonizer(&[4, 7], 3).chord(60), vec![72, 76, 79]);
+    }
+
+    #[test]
+    fn inversions_stop_at_the_chords_last_one() {
+        assert_eq!(harmonizer(&[4, 7], 7).chord(60), vec![67, 72, 76]);
+        assert_eq!(harmonizer(&[], 7).chord(60), vec![60]);
+        assert_eq!(harmonizer(&[7, 7], 2).chord(60), vec![67, 72]);
     }
 
     #[test]

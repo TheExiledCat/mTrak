@@ -1,15 +1,18 @@
 pub mod arp;
 pub mod eq;
 pub mod harmonizer;
+pub mod lfo;
 use midi::{Channel, Message, U7};
 
 use crate::{
     data::{
         effect::{EffectKind, EffectSettings},
-        midi::{PULSES_PER_QUARTER, VELOCITY_MAX},
+        midi::{PITCH_MAX, PULSES_PER_QUARTER},
         note::NotePitch,
     },
-    engine::effects::{arp::ArpeggiatorEffect, eq::EqEffect, harmonizer::Harmonizer},
+    engine::effects::{
+        arp::ArpeggiatorEffect, eq::EqEffect, harmonizer::Harmonizer, lfo::LfoEffect,
+    },
     tui::framework::core_extensions::Boxed,
 };
 
@@ -20,6 +23,7 @@ pub fn create_effect(settings: &EffectSettings) -> Box<dyn MidiEffect> {
         EffectKind::Eq => EqEffect::new().boxed(),
         EffectKind::Arp => ArpeggiatorEffect::new().boxed(),
         EffectKind::Harmonize => Harmonizer::new().boxed(),
+        EffectKind::Lfo => LfoEffect::new().boxed(),
     };
     for (index, (param, value)) in effect.params().iter().zip(&settings.values).enumerate() {
         effect.set_param(index, param.kind.clamp(*value));
@@ -109,7 +113,7 @@ impl ParamKind {
             ParamKind::SignedNumber { min, max } => (value as i8).clamp(min, max) as u8,
             ParamKind::Toggle => value.min(1),
             ParamKind::Choice(names) => value.min(names.len().saturating_sub(1) as u8),
-            ParamKind::Pitch => value.min(VELOCITY_MAX),
+            ParamKind::Pitch => value.min(PITCH_MAX),
         };
     }
 }
@@ -293,6 +297,7 @@ mod tests {
     use strum::IntoEnumIterator;
 
     use super::*;
+    use crate::engine::effects::eq::{FILTER_VELOCITY_PER_OCTAVE, LOW_FREQUENCY, MID_VELOCITY};
 
     /// Moves notes up by `semitones` and plays each one again `delay` ticks later.
     struct Echo {
@@ -406,19 +411,18 @@ mod tests {
         assert_eq!(signed.clamp(0xFE), 0xFE);
         assert_eq!(ParamKind::Toggle.clamp(5), 1);
         assert_eq!(ParamKind::Choice(&["a", "b", "c"]).clamp(7), 2);
-        assert_eq!(ParamKind::Pitch.clamp(0xFF), 127);
+        assert_eq!(ParamKind::Pitch.clamp(0xFF), PITCH_MAX);
     }
 
     #[test]
     fn chain_sets_clamped_params_and_ignores_bad_indices() {
         let mut chain = MidiEffectChain::new();
         chain.push(create_effect(&default_settings(EffectKind::Eq)));
-        let filter = chain.get(0).unwrap().params().len() - 1;
-        chain.set_param(0, 0, 0xFF);
-        assert_eq!(chain.get(0).unwrap().param(0), 127);
+        chain.set_param(0, LOW_FREQUENCY, 0xFF);
+        assert_eq!(chain.get(0).unwrap().param(LOW_FREQUENCY), PITCH_MAX);
         chain.set_param(0, 99, 1);
-        chain.set_param(5, 0, 1);
-        assert_eq!(chain.get(0).unwrap().param(filter), 8);
+        chain.set_param(5, FILTER_VELOCITY_PER_OCTAVE, 1);
+        assert_eq!(chain.get(0).unwrap().param(FILTER_VELOCITY_PER_OCTAVE), 8);
     }
 
     #[test]
@@ -452,8 +456,8 @@ mod tests {
         assert_eq!(effect.param(1), 127, "a pitch above 127 is clamped");
         assert_eq!(effect.param(2), 0x40);
         assert_eq!(
-            effect.param(3),
-            defaults[3],
+            effect.param(MID_VELOCITY),
+            defaults[MID_VELOCITY],
             "a value that wasn't saved is the default"
         );
     }
@@ -472,14 +476,18 @@ mod tests {
     #[test]
     fn saved_params_are_clamped() {
         let mut settings = default_settings(EffectKind::Eq);
-        assert_eq!(set_saved_param(&mut settings, 0, 0xFF), Some(127));
-        assert_eq!(settings.values[0], 127);
+        let saved = set_saved_param(&mut settings, LOW_FREQUENCY, 0xFF);
+        assert_eq!(saved, Some(PITCH_MAX));
+        assert_eq!(settings.values[LOW_FREQUENCY], PITCH_MAX);
     }
 
     #[test]
     fn saved_params_fill_in_the_defaults_of_missing_values() {
         let mut settings = EffectSettings::new(EffectKind::Eq, vec![30]);
-        assert_eq!(set_saved_param(&mut settings, 3, 0x40), Some(0x40));
+        assert_eq!(
+            set_saved_param(&mut settings, MID_VELOCITY, 0x40),
+            Some(0x40)
+        );
         let defaults = default_settings(EffectKind::Eq).values;
         assert_eq!(settings.values, vec![30, defaults[1], defaults[2], 0x40]);
     }
@@ -495,25 +503,110 @@ mod tests {
     #[test]
     fn chains_are_built_in_the_saved_order() {
         let mut quiet = default_settings(EffectKind::Eq);
-        quiet.values[3] = -0x40i8 as u8;
+        quiet.values[MID_VELOCITY] = -0x40i8 as u8;
         let chain = create_chain(&[default_settings(EffectKind::Eq), quiet]);
         assert_eq!(chain.len(), 2);
-        assert_eq!(chain.get(0).unwrap().param(3), 0);
-        assert_eq!(chain.get(1).unwrap().param(3), -0x40i8 as u8);
+        assert_eq!(chain.get(0).unwrap().param(MID_VELOCITY), 0);
+        assert_eq!(chain.get(1).unwrap().param(MID_VELOCITY), -0x40i8 as u8);
     }
 
     #[test]
     fn disabled_effects_keep_their_place_and_let_messages_through() {
         let mut quiet = default_settings(EffectKind::Eq);
-        quiet.values[3] = i8::MIN as u8;
+        quiet.values[MID_VELOCITY] = i8::MIN as u8;
         quiet.enabled = false;
         let mut chain = create_chain(&[quiet]);
         assert_eq!(chain.len(), 1);
-        chain.set_param(0, 3, 0x40);
-        assert_eq!(chain.get(0).unwrap().param(3), 0x40);
+        chain.set_param(0, MID_VELOCITY, 0x40);
+        assert_eq!(chain.get(0).unwrap().param(MID_VELOCITY), 0x40);
         let mut out = vec![];
         chain.process(note_on(60), None, &mut out);
         assert_eq!(out, vec![note_on(60)]);
+    }
+
+    fn settings(kind: EffectKind, values: &[(usize, u8)]) -> EffectSettings {
+        let mut settings = default_settings(kind);
+        for (param, value) in values {
+            set_saved_param(&mut settings, *param, *value);
+        }
+        return settings;
+    }
+
+    /// An arp of steps 0 and 7, a step every 2 ticks.
+    fn fifth_arp() -> EffectSettings {
+        return settings(
+            EffectKind::Arp,
+            &[(1, 7), (arp::LENGTH_PARAM, 2), (arp::RATE_PARAM, 2)],
+        );
+    }
+
+    /// A pulse as the engine runs it.
+    fn run_pulse(chain: &mut MidiEffectChain, pulse: u32) -> Vec<Message> {
+        let mut out = vec![];
+        chain.tick(Timing::new(pulse), &mut out);
+        chain.after_pulse(Timing::new(pulse), &mut out);
+        return out;
+    }
+
+    #[test]
+    fn steps_an_arp_plays_later_go_through_the_effects_after_it() {
+        let quiet = settings(EffectKind::Eq, &[(MID_VELOCITY, -0x40i8 as u8)]);
+        let mut chain = create_chain(&[fifth_arp(), quiet]);
+        let mut out = vec![];
+        chain.process(note_on(60), Some(Timing::new(0)), &mut out);
+        assert_eq!(out, vec![Message::NoteOn(Channel::Ch1, 60, 50)]);
+        run_pulse(&mut chain, 1);
+        assert_eq!(
+            run_pulse(&mut chain, 2),
+            vec![
+                Message::NoteOff(Channel::Ch1, 60, 0),
+                Message::NoteOn(Channel::Ch1, 67, 50),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_chord_into_an_arp_gives_each_chord_note_its_own_arp() {
+        let chord = settings(EffectKind::Harmonize, &[(0, 4)]);
+        let mut chain = create_chain(&[chord, fifth_arp()]);
+        let mut out = vec![];
+        chain.process(note_on(60), Some(Timing::new(0)), &mut out);
+        assert_eq!(out, vec![note_on(60), note_on(64)]);
+        run_pulse(&mut chain, 1);
+        let stepped = run_pulse(&mut chain, 2);
+        assert!(stepped.contains(&note_on(67)));
+        assert!(stepped.contains(&note_on(71)));
+        out.clear();
+        chain.process(Message::NoteOff(Channel::Ch1, 60, 0), None, &mut out);
+        out.sort_by_key(|message| note_event(message).unwrap().pitch.0);
+        assert_eq!(
+            out,
+            vec![
+                Message::NoteOff(Channel::Ch1, 67, 0),
+                Message::NoteOff(Channel::Ch1, 71, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_disabled_arp_lets_notes_through_while_playing() {
+        let mut arp = fifth_arp();
+        arp.enabled = false;
+        let mut chain = create_chain(&[arp]);
+        let mut out = vec![];
+        chain.process(note_on(60), Some(Timing::new(0)), &mut out);
+        for pulse in 1..=4 {
+            out.extend(run_pulse(&mut chain, pulse));
+        }
+        chain.process(
+            Message::NoteOff(Channel::Ch1, 60, 0),
+            Some(Timing::new(4)),
+            &mut out,
+        );
+        assert_eq!(
+            out,
+            vec![note_on(60), Message::NoteOff(Channel::Ch1, 60, 0)]
+        );
     }
 
     #[test]

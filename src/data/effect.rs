@@ -8,6 +8,7 @@ pub enum EffectKind {
     Eq,
     Arp,
     Harmonize,
+    Lfo,
 }
 impl EffectKind {
     pub fn name(&self) -> &'static str {
@@ -15,6 +16,7 @@ impl EffectKind {
             EffectKind::Eq => "EQ",
             EffectKind::Arp => "Arp",
             EffectKind::Harmonize => "Chord",
+            EffectKind::Lfo => "LFO",
         };
     }
 }

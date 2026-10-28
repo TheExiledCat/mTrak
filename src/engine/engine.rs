@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Arc, Mutex,
+        Arc,
         mpsc::{Receiver, RecvTimeoutError, Sender},
     },
     time::{Duration, Instant},
@@ -34,6 +34,7 @@ use crate::{
             retrig_velocity,
         },
         effects::{MidiEffectChain, Timing},
+        notes::MIDI_CHANNEL_COUNT,
     },
     tui::constants::TRACK_COUNT,
 };
@@ -163,8 +164,8 @@ pub struct MtrakEngine {
     playback_command_handler: PlaybackCommandHandler,
     /// Pulses since the current pattern's first row, for effects' timing.
     pattern_pulse: u32,
-    /// Each instrument's live effects, shared with the UI so it can change their settings.
-    effect_chains: [Arc<Mutex<MidiEffectChain>>; MIDI_CHANNEL_MAX as usize + 1],
+    /// Each instrument's live effects. The UI sends a new chain when it changes them.
+    effect_chains: [MidiEffectChain; MIDI_CHANNEL_COUNT],
 }
 
 impl MtrakEngine {
@@ -210,7 +211,7 @@ impl MtrakEngine {
             midi_command_handler: MidiCommandHandler::new(),
             playback_command_handler: PlaybackCommandHandler::new(),
             pattern_pulse: 0,
-            effect_chains: std::array::from_fn(|_| Arc::default()),
+            effect_chains: std::array::from_fn(|_| MidiEffectChain::new()),
         };
     }
 
@@ -296,9 +297,7 @@ impl MtrakEngine {
                 param,
                 value,
             } => {
-                if let Some(Ok(mut chain)) =
-                    self.effect_chains.get(channel as usize).map(|c| c.lock())
-                {
+                if let Some(chain) = self.effect_chains.get_mut(channel as usize) {
                     chain.set_param(effect, param, value);
                 }
             }
@@ -1246,18 +1245,12 @@ impl MtrakEngine {
             .set_output_connected(self.output_connection.is_some());
     }
     /// Swaps in an instrument's effect chain, releasing the notes the old one still holds.
-    fn set_effect_chain(&mut self, channel: usize, chain: Arc<Mutex<MidiEffectChain>>) {
+    fn set_effect_chain(&mut self, channel: usize, chain: MidiEffectChain) {
         let Some(slot) = self.effect_chains.get_mut(channel) else {
             return;
         };
-        if Arc::ptr_eq(slot, &chain) {
-            return;
-        }
-        let old = std::mem::replace(slot, chain);
         let mut out = vec![];
-        if let Ok(mut old) = old.lock() {
-            old.reset(&mut out);
-        }
+        std::mem::replace(slot, chain).reset(&mut out);
         self.output_messages(out);
     }
 
@@ -1270,10 +1263,8 @@ impl MtrakEngine {
     fn tick_effects(&mut self) {
         let timing = Timing::new(self.pattern_pulse);
         let mut out = vec![];
-        for chain in &self.effect_chains {
-            if let Ok(mut chain) = chain.lock() {
-                chain.tick(timing, &mut out);
-            }
+        for chain in &mut self.effect_chains {
+            chain.tick(timing, &mut out);
         }
         self.output_messages(out);
     }
@@ -1282,10 +1273,8 @@ impl MtrakEngine {
     fn finish_effects(&mut self) {
         let timing = Timing::new(self.pattern_pulse);
         let mut out = vec![];
-        for chain in &self.effect_chains {
-            if let Ok(mut chain) = chain.lock() {
-                chain.after_pulse(timing, &mut out);
-            }
+        for chain in &mut self.effect_chains {
+            chain.after_pulse(timing, &mut out);
         }
         self.output_messages(out);
     }
@@ -1293,26 +1282,22 @@ impl MtrakEngine {
     /// Resets every instrument's effects and sends the releases they make.
     fn reset_effects(&mut self) {
         let mut out = vec![];
-        for chain in &self.effect_chains {
-            if let Ok(mut chain) = chain.lock() {
-                chain.reset(&mut out);
-            }
+        for chain in &mut self.effect_chains {
+            chain.reset(&mut out);
         }
         self.output_messages(out);
     }
 
     /// Runs each channel message through its instrument's effects.
-    fn apply_effects(&self, event: MidiEvent) -> MidiEvent {
+    fn apply_effects(&mut self, event: MidiEvent) -> MidiEvent {
         return match event {
             MidiEvent::Message(message) => {
                 let Some(channel) = message_channel(&message) else {
                     return MidiEvent::Message(message);
                 };
-                let Ok(mut chain) = self.effect_chains[channel as usize].lock() else {
-                    return MidiEvent::Message(message);
-                };
+                let timing = self.timing();
                 let mut out = vec![];
-                chain.process(message, self.timing(), &mut out);
+                self.effect_chains[channel as usize].process(message, timing, &mut out);
                 match out.len() {
                     1 => MidiEvent::Message(out.remove(0)),
                     _ => MidiEvent::Aggregate(out.into_iter().map(MidiEvent::Message).collect()),
@@ -1407,7 +1392,7 @@ pub fn velocity(volume: Option<u8>, glide: Option<u8>) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
+    use std::sync::{Mutex, mpsc};
 
     use midi::Channel;
 
@@ -1418,7 +1403,7 @@ mod tests {
     };
     use crate::{
         data::effect::EffectKind,
-        engine::effects::{MidiEffect, Param, create_effect, default_settings},
+        engine::effects::{MidiEffect, Param, arp, create_effect, default_settings, eq},
     };
 
     /// Drives an engine without a MIDI port and collects every message it would send.
@@ -3752,10 +3737,9 @@ mod tests {
         let seen = Arc::new(Mutex::new(Seen::default()));
         let mut chain = MidiEffectChain::new();
         chain.push(Box::new(OctaveUp { seen: seen.clone() }));
-        harness.engine.apply(EngineCommand::SetEffectChain {
-            channel: 2,
-            chain: Arc::new(Mutex::new(chain)),
-        });
+        harness
+            .engine
+            .apply(EngineCommand::SetEffectChain { channel: 2, chain });
         return seen;
     }
 
@@ -3898,15 +3882,13 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(2, &[])]);
         let mut chain = MidiEffectChain::new();
         chain.push(create_effect(&default_settings(EffectKind::Eq)));
-        let chain = Arc::new(Mutex::new(chain));
-        harness.engine.apply(EngineCommand::SetEffectChain {
-            channel: 2,
-            chain: chain.clone(),
-        });
+        harness
+            .engine
+            .apply(EngineCommand::SetEffectChain { channel: 2, chain });
         harness.engine.apply(EngineCommand::SetEffectParam {
             channel: 2,
             effect: 0,
-            param: 3,
+            param: eq::MID_VELOCITY,
             value: -0x40i8 as u8,
         });
         harness.engine.apply(EngineCommand::PlayNote {
@@ -3915,10 +3897,8 @@ mod tests {
             pitch: 60,
             velocity: 100,
         });
-        assert_eq!(
-            chain.lock().unwrap().get(0).unwrap().param(3),
-            -0x40i8 as u8
-        );
+        let eq = harness.engine.effect_chains[2].get(0).unwrap();
+        assert_eq!(eq.param(eq::MID_VELOCITY), -0x40i8 as u8);
         assert_eq!(
             harness.messages(),
             vec![Message::NoteOn(Channel::Ch3, 60, 50)]
@@ -3931,11 +3911,104 @@ mod tests {
         octave_up_on_channel_3(&mut harness);
         harness.engine.apply(EngineCommand::SetEffectChain {
             channel: 2,
-            chain: Arc::default(),
+            chain: MidiEffectChain::new(),
         });
         assert_eq!(
             harness.messages(),
             vec![Message::NoteOff(Channel::Ch3, 0, 0)]
+        );
+    }
+
+    /// Notes on channel 3 in `messages`.
+    fn channel_3_notes(messages: Vec<Message>) -> Vec<Message> {
+        return messages
+            .into_iter()
+            .filter(|message| {
+                matches!(
+                    message,
+                    Message::NoteOn(Channel::Ch3, ..) | Message::NoteOff(Channel::Ch3, ..)
+                )
+            })
+            .collect();
+    }
+
+    /// Puts an arp of steps 0 and 7, a step every `rate` ticks, on channel 3.
+    fn arp_on_channel_3(harness: &mut Harness, rate: u8) {
+        let mut settings = default_settings(EffectKind::Arp);
+        settings.values[1] = 7;
+        settings.values[arp::LENGTH_PARAM] = 2;
+        settings.values[arp::RATE_PARAM] = rate;
+        let mut chain = MidiEffectChain::new();
+        chain.push(create_effect(&settings));
+        harness
+            .engine
+            .apply(EngineCommand::SetEffectChain { channel: 2, chain });
+    }
+
+    #[test]
+    fn an_arp_in_step_with_a_looping_pattern_plays_its_root_once_as_it_loops() {
+        let mut harness = Harness::new(vec![pattern(0x20, &[(0, 0, note("C-4 2 40"))])]);
+        arp_on_channel_3(&mut harness, DEFAULT_SPEED);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        for _ in 0..0x1F {
+            harness.next_row();
+        }
+        for _ in 1..DEFAULT_SPEED {
+            harness.engine.pulse();
+        }
+        harness.messages();
+        harness.engine.pulse();
+        assert_eq!(harness.engine.position.row, 0);
+        assert_eq!(
+            channel_3_notes(harness.messages()),
+            vec![
+                Message::NoteOff(Channel::Ch3, 67, 0),
+                Message::NoteOn(Channel::Ch3, 60, 0x40),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_arp_steps_between_rows_while_its_root_is_held() {
+        let mut harness = Harness::new(vec![pattern(4, &[(0, 0, note("C-4 2 40"))])]);
+        arp_on_channel_3(&mut harness, 2);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        let mut notes = channel_3_notes(harness.messages());
+        harness.next_row();
+        notes.extend(channel_3_notes(harness.messages()));
+        assert_eq!(
+            notes,
+            vec![
+                Message::NoteOn(Channel::Ch3, 60, 0x40),
+                Message::NoteOff(Channel::Ch3, 60, 0),
+                Message::NoteOn(Channel::Ch3, 67, 0x40),
+                Message::NoteOff(Channel::Ch3, 67, 0),
+                Message::NoteOn(Channel::Ch3, 60, 0x40),
+                Message::NoteOff(Channel::Ch3, 60, 0),
+                Message::NoteOn(Channel::Ch3, 67, 0x40),
+            ]
+        );
+    }
+
+    #[test]
+    fn stopping_releases_what_an_arp_has_sounding() {
+        let mut harness = Harness::new(vec![pattern(4, &[(0, 0, note("C-4 2 40"))])]);
+        arp_on_channel_3(&mut harness, 2);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        harness.engine.pulse();
+        harness.engine.pulse();
+        harness.messages();
+        harness.engine.apply(EngineCommand::Stop);
+        assert!(
+            harness
+                .messages()
+                .contains(&Message::NoteOff(Channel::Ch3, 67, 0))
         );
     }
 }

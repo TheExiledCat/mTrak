@@ -10,6 +10,7 @@ use ratatui::{
 };
 
 use crate::{
+    data::config::Config,
     error::Result,
     tui::{
         app::AppState,
@@ -883,21 +884,27 @@ impl DialogComponent for TextPrompt {
     }
 }
 
-/// A hex number input that Up and Down step within its range.
+/// A number input that Up and Down step within its range. It's in hex or decimal as the
+/// config's `hex_values` says, switching along with it.
 pub struct NumberBox {
     id: &'static str,
     label: String,
+    /// How many digits the value has in hex.
     digits: usize,
     min: i32,
     max: i32,
     negative: bool,
+    /// The digits of the value without its sign, in hex or decimal as `hex` says.
     text: String,
+    hex: bool,
+    show_range: bool,
     focused: bool,
     keys: Keymap<NumberBoxAction>,
 }
 
-/// How far Left and Right move a number box with `steps`.
-const BIG_STEP: i32 = 0x10;
+/// How far Left and Right move a number box with `steps`, in hex and in decimal.
+const BIG_STEP_HEX: i32 = 0x10;
+const BIG_STEP_DECIMAL: i32 = 10;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NumberBoxAction {
@@ -920,6 +927,8 @@ impl NumberBox {
             max: (1 << (4 * digits)) - 1,
             negative: false,
             text: String::new(),
+            hex: true,
+            show_range: false,
             focused: false,
             keys: Keymap::new("dialog")
                 .bind(Key::plain(KeyCode::Up), NumberBoxAction::Increment, "+/-")
@@ -942,6 +951,13 @@ impl NumberBox {
         return self;
     }
 
+    /// Shows the range after the label, e.g. `Volume (00-FF)`, in hex or decimal like the
+    /// value, while the config's `show_value_ranges` is on.
+    pub fn show_range(mut self) -> Self {
+        self.show_range = true;
+        return self;
+    }
+
     /// Lets Left and Right move the value in bigger steps.
     pub fn steps(mut self) -> Self {
         self.keys = self
@@ -953,15 +969,75 @@ impl NumberBox {
 
     /// The typed value, kept within the range.
     fn number(&self) -> i32 {
-        let magnitude = i32::from_str_radix(&self.text, 16).unwrap_or(0);
+        let magnitude = i32::from_str_radix(&self.text, self.radix()).unwrap_or(0);
         let value = if self.negative { -magnitude } else { magnitude };
         return value.clamp(self.min, self.max);
     }
 
     fn set(&mut self, value: i32) {
         let value = value.clamp(self.min, self.max);
+        let width = self.width();
         self.negative = value < 0;
-        self.text = format!("{:0width$X}", value.unsigned_abs(), width = self.digits);
+        self.text = match self.hex {
+            true => format!("{:0width$X}", value.unsigned_abs()),
+            false => format!("{:0width$}", value.unsigned_abs()),
+        };
+    }
+
+    fn radix(&self) -> u32 {
+        return if self.hex { 16 } else { 10 };
+    }
+
+    /// How many digits the value is shown with: as asked for in hex, and as many as the
+    /// range needs in decimal.
+    fn width(&self) -> usize {
+        if self.hex {
+            return self.digits;
+        }
+        let largest = self.min.unsigned_abs().max(self.max.unsigned_abs());
+        return largest.to_string().len();
+    }
+
+    /// Switches to hex or decimal if the config changed, keeping the value.
+    fn follow_config(&mut self, state: &AppState) {
+        if self.hex != state.config.hex_values {
+            let value = self.number();
+            self.hex = state.config.hex_values;
+            self.set(value);
+        }
+    }
+
+    /// `value` as the box shows it: signed if the range goes below 0, and in hex padded to
+    /// the box's digits or in decimal.
+    fn format(&self, value: i32) -> String {
+        let sign = match (value < 0, self.min < 0) {
+            (true, _) => "-",
+            (false, true) => "+",
+            (false, false) => "",
+        };
+        let magnitude = value.unsigned_abs();
+        return match self.hex {
+            true => format!("{sign}{magnitude:0width$X}", width = self.digits),
+            false => format!("{sign}{magnitude}"),
+        };
+    }
+
+    /// The label, with the range when `show_range` and the config's `show_value_ranges` are
+    /// on. A label that ends in brackets gets the range inside them.
+    fn label(&self, config: &Config) -> String {
+        if !self.show_range || !config.show_value_ranges {
+            return self.label.clone();
+        }
+        let separator = if self.min < 0 { " to " } else { "-" };
+        let range = format!(
+            "{}{separator}{}",
+            self.format(self.min),
+            self.format(self.max)
+        );
+        return match self.label.strip_suffix(')') {
+            Some(label) => format!("{label}, {range})"),
+            None => format!("{} ({range})", self.label),
+        };
     }
 
     /// Arrows showing which ways Up and Down can still move the value.
@@ -978,8 +1054,8 @@ impl NumberBox {
     /// Applies a typed key, returning whether it was one the box takes.
     fn type_key(&mut self, code: KeyCode) -> bool {
         match code {
-            KeyCode::Char(c) if c.is_ascii_hexdigit() => {
-                if self.text.len() >= self.digits {
+            KeyCode::Char(c) if c.is_digit(self.radix()) => {
+                if self.text.len() >= self.width() {
                     self.text.remove(0);
                 }
                 self.text.push(c.to_ascii_uppercase());
@@ -1003,11 +1079,16 @@ impl KeyActions for NumberBox {
 
     fn perform(&mut self, action: NumberBoxAction, _state: &mut AppState) -> Result<()> {
         let value = self.number();
+        let big_step = if self.hex {
+            BIG_STEP_HEX
+        } else {
+            BIG_STEP_DECIMAL
+        };
         self.set(match action {
             NumberBoxAction::Increment => value.saturating_add(1),
             NumberBoxAction::Decrement => value.saturating_sub(1),
-            NumberBoxAction::StepUp => value.saturating_add(BIG_STEP),
-            NumberBoxAction::StepDown => value.saturating_sub(BIG_STEP),
+            NumberBoxAction::StepUp => value.saturating_add(big_step),
+            NumberBoxAction::StepDown => value.saturating_sub(big_step),
         });
         return Ok(());
     }
@@ -1024,6 +1105,7 @@ impl KeyActions for NumberBox {
 
 impl MtrakWidget for NumberBox {
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
+        self.follow_config(state);
         if self.dispatch(state, event) {
             return true;
         }
@@ -1045,7 +1127,9 @@ impl MtrakWidget for NumberBox {
     }
 
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
-        let mut spans = label_spans(state, &self.label, self.focused).to_vec();
+        self.follow_config(state);
+        let label = self.label(&state.config);
+        let mut spans = label_spans(state, &label, self.focused).to_vec();
         let sign = match (self.negative, self.min < 0) {
             (true, _) => "-",
             (false, true) => "+",
@@ -1662,6 +1746,96 @@ mod tests {
         assert_eq!(number.number(), -2);
         assert_eq!(number.text, "02");
         assert!(number.negative);
+    }
+
+    /// A state with numbers in dialogs in hex or decimal.
+    fn state_with_hex_values(hex: bool) -> AppState {
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        state.config.hex_values = hex;
+        return state;
+    }
+
+    #[test]
+    fn number_box_follows_the_config_keeping_its_value() {
+        let mut number = number_box(2).range(-0x80, 0x7F).value(-0x1A);
+        number.follow_config(&state_with_hex_values(false));
+        assert_eq!((number.text.as_str(), number.negative), ("026", true));
+        assert_eq!(number.number(), -26);
+        number.follow_config(&state_with_hex_values(true));
+        assert_eq!(number.text, "1A");
+    }
+
+    #[test]
+    fn decimal_number_boxes_take_decimal_digits_as_wide_as_the_range() {
+        let mut number = number_box(2).value(0x10);
+        number.follow_config(&state_with_hex_values(false));
+        assert_eq!(number.text, "016");
+        type_keys(&mut number, "2a");
+        assert_eq!(number.number(), 162);
+        type_keys(&mut number, "99");
+        assert_eq!(number.number(), 255, "kept in range");
+        let mut small = number_box(1).range(0, 7);
+        small.follow_config(&state_with_hex_values(false));
+        type_keys(&mut small, "5");
+        assert_eq!(small.text, "5");
+    }
+
+    #[test]
+    fn number_box_big_steps_are_round_in_either_base() {
+        let mut state = state_with_hex_values(true);
+        let mut number = number_box(2).steps().value(0);
+        number.follow_config(&state);
+        number.perform(NumberBoxAction::StepUp, &mut state).unwrap();
+        assert_eq!(number.number(), 0x10);
+        let mut state = state_with_hex_values(false);
+        number.follow_config(&state);
+        number.perform(NumberBoxAction::StepUp, &mut state).unwrap();
+        assert_eq!(number.number(), 26);
+    }
+
+    #[test]
+    fn number_box_labels_show_the_range_when_asked() {
+        let config = Config::default();
+        let volume = NumberBox::new("v", "Volume", 2);
+        assert_eq!(volume.label(&config), "Volume");
+        let mut volume = volume.show_range();
+        assert_eq!(volume.label(&config), "Volume (00-FF)");
+        let state = state_with_hex_values(false);
+        volume.follow_config(&state);
+        assert_eq!(volume.label(&state.config), "Volume (0-255)");
+        let cc = NumberBox::new("c", "Default CC", 2)
+            .range(0, 0x7F)
+            .show_range();
+        assert_eq!(cc.label(&config), "Default CC (00-7F)");
+    }
+
+    #[test]
+    fn value_ranges_can_be_turned_off_in_the_config() {
+        let config = Config {
+            show_value_ranges: false,
+            ..Config::default()
+        };
+        let volume = NumberBox::new("v", "Volume", 2).show_range();
+        assert_eq!(volume.label(&config), "Volume");
+    }
+
+    #[test]
+    fn signed_ranges_go_inside_the_labels_own_brackets() {
+        let mut transpose = NumberBox::new("t", "Transpose (semitones)", 2)
+            .range(-0x80, 0x7F)
+            .show_range();
+        assert_eq!(
+            transpose.label(&Config::default()),
+            "Transpose (semitones, -80 to +7F)"
+        );
+        let state = state_with_hex_values(false);
+        transpose.follow_config(&state);
+        assert_eq!(
+            transpose.label(&state.config),
+            "Transpose (semitones, -128 to +127)"
+        );
     }
 
     #[test]

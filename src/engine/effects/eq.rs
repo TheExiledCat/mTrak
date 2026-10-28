@@ -1,7 +1,10 @@
 use midi::Message;
 
 use crate::{
-    data::{midi::scale_velocity, note::NotePitch},
+    data::{
+        midi::scale_velocity,
+        note::{NotePitch, SEMITONES_PER_OCTAVE},
+    },
     engine::effects::{MidiEffect, Param, ParamKind, Timing, note_event},
 };
 
@@ -12,20 +15,19 @@ const BAND: ParamKind = ParamKind::SignedNumber {
     min: i8::MIN,
     max: i8::MAX,
 };
-const SEMITONES_PER_OCTAVE: u16 = 12;
 const BYTE: ParamKind = ParamKind::Number {
     min: 0,
     max: u8::MAX,
 };
 
-const LOW_FREQUENCY: usize = 0;
-const HIGH_FREQUENCY: usize = 1;
-const LOW_VELOCITY: usize = 2;
-const MID_VELOCITY: usize = 3;
-const HIGH_VELOCITY: usize = 4;
-const HIGH_PASS_CUTOFF: usize = 5;
-const LOW_PASS_CUTOFF: usize = 6;
-const FILTER_VELOCITY_PER_OCTAVE: usize = 7;
+pub const LOW_FREQUENCY: usize = 0;
+pub const HIGH_FREQUENCY: usize = 1;
+pub const LOW_VELOCITY: usize = 2;
+pub const MID_VELOCITY: usize = 3;
+pub const HIGH_VELOCITY: usize = 4;
+pub const HIGH_PASS_CUTOFF: usize = 5;
+pub const LOW_PASS_CUTOFF: usize = 6;
+pub const FILTER_VELOCITY_PER_OCTAVE: usize = 7;
 
 const PARAMS: &[Param] = &[
     Param {
@@ -114,7 +116,7 @@ impl EqEffect {
         let above = pitch.saturating_sub(self.low_pass_cutoff);
         let semitones = below.max(above) as u16;
         return (semitones * self.filter_velocity_per_octave as u16)
-            .div_ceil(SEMITONES_PER_OCTAVE)
+            .div_ceil(SEMITONES_PER_OCTAVE as u16)
             .min(u8::MAX as u16) as u8;
     }
 }

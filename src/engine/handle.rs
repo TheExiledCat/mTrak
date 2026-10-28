@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         mpsc::{self, Receiver, Sender},
     },
@@ -72,7 +72,7 @@ pub enum EngineCommand {
     /// Replaces an instrument's live effects.
     SetEffectChain {
         channel: u8,
-        chain: Arc<Mutex<MidiEffectChain>>,
+        chain: MidiEffectChain,
     },
     /// Sets parameter `param` of the effect at `effect` in an instrument's chain.
     SetEffectParam {
@@ -257,7 +257,7 @@ impl EngineHandle {
     pub fn set_global_velocity(&self, velocity: u8) {
         self.send(EngineCommand::SetGlobalVelocity(velocity));
     }
-    pub fn set_effect_chain(&self, channel: u8, chain: Arc<Mutex<MidiEffectChain>>) {
+    pub fn set_effect_chain(&self, channel: u8, chain: MidiEffectChain) {
         self.send(EngineCommand::SetEffectChain { channel, chain });
     }
     pub fn set_effect_param(&self, channel: u8, effect: usize, param: usize, value: u8) {

@@ -69,7 +69,7 @@ The effects on an instrument's channel, in the order notes go through them. Each
 
 | Field     | Type          | Contents                                                     |
 | --------- | ------------- | ------------------------------------------------------------ |
-| `kind`    | string        | Which effect it is: `Eq`, `Arp` or `Harmonize`, see below    |
+| `kind`    | string        | Which effect it is: `Eq`, `Arp`, `Harmonize` or `Lfo`, see below |
 | `values`  | array of ints | Each of the effect's parameters, `0`-`255`, in the order below |
 | `enabled` | bool          | `false` if the effect is turned off: notes pass it unchanged, and it keeps its place and values |
 
@@ -109,10 +109,27 @@ low to high. Its values:
 | Index | Parameter    | Values                                                                 | Default |
 | ----- | ------------ | ---------------------------------------------------------------------- | ------- |
 | 0-6   | Interval 1-7 | Signed semitones from the note, two's complement; `0` is unused        | `0`     |
-| 7     | Inversion    | `0`-`7`; each one raises the chord's lowest note an octave             | `0`     |
+| 7     | Inversion    | `0`-`7`; each one raises the chord's lowest note an octave. A chord has one inversion fewer than it has notes; higher values play its last one | `0` |
 | 8     | Legato       | Ticks between each chord note and the next, from low to high, `0`-`255`; only while the song plays | `0` |
 
 Chord notes outside `0`-`127` aren't played, and a note in the chord twice is played once.
+
+The `Lfo` effect moves a value up and down in a repeating wave. Velocity changes each note as
+it starts; pitch bend and CC are sent on every tick while notes are held, and before each
+note. The wave follows the pattern, starting with its first row, or starts over with every
+note with retrigger on. Its values:
+
+| Index | Parameter | Values                                                                    | Default |
+| ----- | --------- | ------------------------------------------------------------------------- | ------- |
+| 0     | Rate      | How long one cycle of the wave lasts in ticks, `1`-`255`                  | `6`     |
+| 1     | Depth     | How far the wave reaches either way, a two's complement signed byte: in velocity or CC steps; for pitch bend, `127` (or `-127`) reaches the ends of the bend range. Negative flips the wave | `0x20` |
+| 2     | Shape     | `0` sine, `1` triangle, `2` saw up, `3` saw down, `4` square, `5` random (a new value every cycle) | `0` |
+| 3     | Retrigger | `1` to start the wave over with every note, `0` to follow the pattern      | `0`     |
+| 4     | Target    | `0` velocity, `1` pitch bend, `2` a CC                                     | `0`     |
+| 5     | CC        | The CC the wave moves, `0`-`127`, for target `2`                          | `1`     |
+| 6     | CC center | The CC's value in the middle of the wave, `0`-`127`                       | `64`    |
+
+When playback stops, the bend or CC the wave moved last is set back to its middle.
 
 ### Patterns
 

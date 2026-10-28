@@ -9,7 +9,8 @@
 //!
 //! To change the project format, raise [`PROJECT_VERSION`] and add a migration to
 //! [`MIGRATIONS`] for the version before it, turning its payload into the new one. Every
-//! version from [`FIRST_MESSAGEPACK_VERSION`] up to the current one must have one.
+//! version from [`FIRST_MESSAGEPACK_VERSION`] up to the current one must have one. A migration
+//! is named after the versions it goes between, e.g. `v3_to_v4`.
 
 use rmpv::Value;
 
@@ -19,7 +20,7 @@ pub type Migration = fn(Value) -> Result<Value>;
 
 /// Each file version before the current one, with the migration that turns its payload into
 /// the next version's.
-const MIGRATIONS: &[(u16, Migration)] = &[(3, add_instrument_effects)];
+const MIGRATIONS: &[(u16, Migration)] = &[(3, v3_to_v4)];
 
 /// The first file version written as MessagePack. Older files used bincode, which can't be
 /// migrated as it doesn't store field names.
@@ -32,7 +33,7 @@ pub fn migrate(payload: Value, version: u16) -> Result<Value> {
 }
 
 /// Version 4 gave instruments a chain of effects, which is empty for older projects.
-fn add_instrument_effects(mut payload: Value) -> Result<Value> {
+fn v3_to_v4(mut payload: Value) -> Result<Value> {
     let Some(Value::Array(instruments)) = map_field(&mut payload, "instruments") else {
         return Err(MTrakError::InvalidProject(
             "the project has no instruments".into(),
@@ -127,7 +128,7 @@ mod tests {
     fn version_3_instruments_get_an_empty_effect_chain() {
         let instrument = payload(vec![("name", Value::from("Bass"))]);
         let old = payload(vec![("instruments", Value::Array(vec![instrument; 2]))]);
-        let migrated = add_instrument_effects(old).unwrap();
+        let migrated = v3_to_v4(old).unwrap();
         let Some(Value::Array(instruments)) = field(&migrated, "instruments") else {
             panic!("the instruments are gone");
         };
@@ -140,7 +141,7 @@ mod tests {
     #[test]
     fn version_3_without_instruments_is_an_error() {
         assert!(matches!(
-            add_instrument_effects(payload(vec![])),
+            v3_to_v4(payload(vec![])),
             Err(MTrakError::InvalidProject(_))
         ));
     }
