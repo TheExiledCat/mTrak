@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.7.1 - 2026-10-29
+
+### Added
+
+- **Remap** (`Ctrl+K` in the util list) moves notes to another instrument or pitch, in the
+  marked block (or the cell under the cursor), the track, the pattern or the whole song. One
+  `Ctrl+Z` undoes it, even across the whole song.
+  - **Instruments:** gives every cell of one instrument another instrument number, e.g. after
+    moving a synth to another MIDI channel. Tick `Copy their settings` to also give the new
+    instrument the old one's name, volume, bend range, default CC, transpose and effects; the
+    old instrument gets the new one's settings in return.
+  - **Pitches:** plays every note of one pitch at another, for one instrument or all of them,
+    e.g. to move a drum to another key on a drum kit.
+- **Info** (`Ctrl+F` in the util list) shows the project's name, which you can edit there, its
+  file and size on disk, its tempo, how long the song plays (following `F` tempo changes), and
+  how many patterns, notes, note offs, commands, instruments and effects it uses.
+
 ## v0.7.0 - 2026-10-29
 
 ### Added
