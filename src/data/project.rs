@@ -1,12 +1,14 @@
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
     data::{
+        commands::{CommandKind, PlaybackAction},
         instrument::Instrument,
-        midi::{DEFAULT_BPM, DEFAULT_SPEED, MIDI_CHANNEL_MAX},
+        midi::{DEFAULT_BPM, DEFAULT_SPEED, MIDI_CHANNEL_MAX, PULSES_PER_QUARTER},
         migration::{self, FIRST_MESSAGEPACK_VERSION, PROJECT_VERSION},
+        note::{Note, NoteKind},
         pattern::{Pattern, PatternId, PatternStore},
     },
     error::{MTrakError, Result},
@@ -61,6 +63,27 @@ pub struct Project {
     pub instruments: [Instrument; MIDI_CHANNEL_MAX as usize + 1],
     pub patterns: PatternStore,
 }
+/// Numbers about a project, for the Info dialog.
+pub struct ProjectStats {
+    /// How big the project is saved, in bytes.
+    pub file_size: usize,
+    /// Different patterns the song plays.
+    pub patterns_in_song: usize,
+    /// Patterns the song plays that have nothing in them.
+    pub empty_in_song: usize,
+    /// Patterns with something in them that the song doesn't play.
+    pub outside_song: usize,
+    /// Rows the song plays, counting repeats.
+    pub song_rows: u32,
+    /// How long the song plays, following its tempo commands.
+    pub song_length: Duration,
+    pub notes: usize,
+    pub note_offs: usize,
+    pub commands: usize,
+    pub instruments_used: usize,
+    pub effects: usize,
+}
+
 impl Project {
     pub fn empty() -> Self {
         return Project {
@@ -109,6 +132,53 @@ impl Project {
         self.sequence.remove(sequence_index);
         return self.sequence.len();
     }
+
+    pub fn stats(&self) -> ProjectStats {
+        let mut stats = ProjectStats {
+            file_size: self.encode().map_or(0, |bytes| bytes.len()),
+            patterns_in_song: 0,
+            empty_in_song: 0,
+            outside_song: 0,
+            song_rows: 0,
+            song_length: Duration::ZERO,
+            notes: 0,
+            note_offs: 0,
+            commands: 0,
+            instruments_used: 0,
+            effects: self.instruments.iter().map(|i| i.effects.len()).sum(),
+        };
+        let in_song: HashSet<PatternId> = self.sequence.iter().map(|row| row.pattern_id).collect();
+        stats.patterns_in_song = in_song.len();
+        let mut instruments = HashSet::new();
+        for (id, pattern) in self.patterns.get_patterns().iter().enumerate() {
+            let mut used = false;
+            for note in pattern.rows.iter().flat_map(|row| &row.tracks) {
+                match note.kind {
+                    NoteKind::On(_) => stats.notes += 1,
+                    NoteKind::Off => stats.note_offs += 1,
+                    NoteKind::Empty => {}
+                }
+                if note.command.kind != CommandKind::None {
+                    stats.commands += 1;
+                }
+                if let Some(instrument) = note.instrument_id {
+                    instruments.insert(instrument);
+                }
+                used |= *note != Note::empty();
+            }
+            match (in_song.contains(&PatternId(id as u8)), used) {
+                (true, false) => stats.empty_in_song += 1,
+                (false, true) => stats.outside_song += 1,
+                _ => {}
+            }
+        }
+        stats.instruments_used = instruments.len();
+        let (rows, length) = self.play_time();
+        stats.song_rows = rows;
+        stats.song_length = length;
+        return stats;
+    }
+
     fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.is_empty() {
             return Err(MTrakError::InvalidProject("the file is empty".into()));
@@ -144,6 +214,39 @@ impl Project {
             .map_err(|e| MTrakError::InvalidProject(e.to_string()))?;
         return Ok(rmp_serde::from_slice(&bytes)?);
     }
+
+    /// The rows the song plays and how long it takes, following its tempo commands like the
+    /// engine does: a command changes the tempo from its own row on, the last track's winning,
+    /// and the change carries over into the patterns after it.
+    fn play_time(&self) -> (u32, Duration) {
+        let (mut bpm, mut speed) = (self.bpm, self.speed);
+        let (mut rows, mut seconds) = (0, 0.0);
+        for position in &self.sequence {
+            let Some(pattern) = self.patterns.get_pattern_by_id(position.pattern_id) else {
+                continue;
+            };
+            for _ in 0..position.repeats {
+                for row in &pattern.rows {
+                    for note in &row.tracks {
+                        let CommandKind::Playback(command) = note.command.kind else {
+                            continue;
+                        };
+                        match command.decode(note.command.value) {
+                            PlaybackAction::ResetTempo => (bpm, speed) = (self.bpm, self.speed),
+                            PlaybackAction::SetSpeed(new) => speed = new,
+                            PlaybackAction::SetBpm(new) => bpm = new,
+                            _ => {}
+                        }
+                    }
+                    rows += 1;
+                    let beats = speed.max(1) as f64 / PULSES_PER_QUARTER as f64;
+                    seconds += beats * 60.0 / bpm.max(1) as f64;
+                }
+            }
+        }
+        return (rows, Duration::from_secs_f64(seconds));
+    }
+
     fn encode(&self) -> Result<Vec<u8>> {
         let payload = rmp_serde::to_vec_named(self)?;
         let mut bytes = Vec::with_capacity(LENGTH_END + payload.len());
@@ -295,6 +398,110 @@ mod tests {
         let mut bytes = Vec::new();
         rmpv::encode::write_value(&mut bytes, value).unwrap();
         return bytes;
+    }
+
+    #[test]
+    fn stats_tell_empty_patterns_in_the_song_from_full_ones_outside_it() {
+        let mut project = Project::empty();
+        project
+            .patterns
+            .create_pattern_id_if_not_exists(PatternId(3));
+        let note = Note::new(NoteKind::On(NotePitch(60)), None, None, Default::default());
+        let pattern = project
+            .patterns
+            .get_pattern_by_id_mut(PatternId(3))
+            .unwrap();
+        pattern.set_event(0, 0, note);
+        let stats = project.stats();
+        assert_eq!(stats.patterns_in_song, 1);
+        assert_eq!(stats.empty_in_song, 1);
+        assert_eq!(
+            stats.outside_song, 1,
+            "pattern 3; patterns 1 and 2 are empty"
+        );
+    }
+
+    #[test]
+    fn song_length_follows_tempo_commands_across_patterns() {
+        let mut project = Project::empty();
+        project.bpm = 120;
+        project.speed = 6;
+        project.insert_sequence(1, PatternId(1));
+        let tempo = |value: &str| {
+            Note::new(
+                NoteKind::Empty,
+                None,
+                None,
+                format!("F{value}").parse().unwrap(),
+            )
+        };
+        project
+            .patterns
+            .create_pattern_id_if_not_exists(PatternId(1));
+        let first = project
+            .patterns
+            .get_pattern_by_id_mut(PatternId(0))
+            .unwrap();
+        first.set_length(4);
+        first.set_event(2, 1, tempo("03"));
+        let second = project
+            .patterns
+            .get_pattern_by_id_mut(PatternId(1))
+            .unwrap();
+        second.set_length(4);
+        second.set_event(1, 0, tempo("00"));
+        second.set_event(3, 0, tempo("3C"));
+        second.set_event(3, 1, tempo("F0"));
+        // a row at speed 6 and 120 BPM is 1/8 s; the speed 3 rows are half that, and so is
+        // the last row at 240 BPM, the last track's command
+        let stats = project.stats();
+        assert_eq!(stats.song_rows, 8);
+        let expected = 2.0 * 0.125 + 3.0 * 0.0625 + 2.0 * 0.125 + 0.0625;
+        assert!(
+            (stats.song_length.as_secs_f64() - expected).abs() < 1e-6,
+            "{:?}",
+            stats.song_length
+        );
+    }
+
+    #[test]
+    fn stats_count_what_the_project_holds() {
+        let mut project = Project::empty();
+        project.bpm = 120;
+        project.speed = 6;
+        let pattern = project
+            .patterns
+            .get_pattern_by_id_mut(PatternId(0))
+            .unwrap();
+        pattern.set_length(8);
+        let note = Note::new(
+            NoteKind::On(NotePitch(60)),
+            Some(2),
+            None,
+            Default::default(),
+        );
+        pattern.set_event(0, 0, note);
+        pattern.set_event(
+            1,
+            0,
+            Note::new(NoteKind::Off, None, None, Default::default()),
+        );
+        pattern.set_event(
+            2,
+            1,
+            Note::new(NoteKind::Empty, Some(4), None, "S10".parse().unwrap()),
+        );
+        project.sequence[0].repeats = 2;
+        project.instruments[2].effects = vec![EffectSettings::new(EffectKind::Arp, vec![])];
+        let stats = project.stats();
+        assert_eq!((stats.notes, stats.note_offs, stats.commands), (1, 1, 1));
+        assert_eq!((stats.instruments_used, stats.effects), (2, 1));
+        assert_eq!(
+            (stats.patterns_in_song, stats.empty_in_song, stats.song_rows),
+            (1, 0, 16)
+        );
+        assert_eq!(stats.song_length, Duration::from_secs(2));
+        assert_eq!(stats.file_size, project.encode().unwrap().len());
     }
 
     /// Writes the current version's test project. Run it with

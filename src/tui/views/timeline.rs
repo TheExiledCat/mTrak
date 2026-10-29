@@ -16,7 +16,7 @@ use crate::{
         config::LineNumbers,
         midi::{MIDI_CHANNEL_MAX, VELOCITY_MAX, VOLUME_MAX},
         note::{Note, NoteKind, NotePitch},
-        pattern::{self, ClearOption, ClearTarget, PatternId},
+        pattern::{self, ClearOption, ClearTarget, PatternId, Remap, RemapScope},
     },
     engine::engine::{PlayMode, velocity},
     error::{MTrakError, Result},
@@ -878,6 +878,17 @@ impl TimeLineView {
             self.block_anchor = None;
         }
     }
+    fn remap(&mut self, state: &mut AppState, scope: RemapScope, remap: Remap, swap: bool) {
+        let pattern = state.active_pattern();
+        let block = match scope {
+            RemapScope::Block => Some(self.marked_block(state).unwrap_or(self.cursor_block())),
+            RemapScope::Track => Some(pattern.track_block(self.track_index)),
+            RemapScope::Pattern => Some(pattern.block()),
+            RemapScope::Song => None,
+        };
+        let changed = state.remap(block, remap, swap);
+        state.notify(remapped(changed, remap, swap));
+    }
     //returns the marked block area, if any
     fn marked_block(&self, state: &AppState) -> Option<pattern::Block> {
         let (pattern, anchor_track, anchor_row) = self.block_anchor?;
@@ -1226,6 +1237,9 @@ impl MtrakWidget for TimeLineView {
         if let Some((option, target, instrument)) = state.take_clear_request() {
             self.clear(state, option, target, instrument);
         }
+        if let Some((scope, remap, swap)) = state.take_remap_request() {
+            self.remap(state, scope, remap, swap);
+        }
         let jump = state.take_cursor_jump();
         let status = state.engine.status();
         let mode = status.play_mode();
@@ -1390,6 +1404,19 @@ impl MtrakWidget for TimeLineView {
             self.render_pattern_boundary_line(state, area.width, y, buf);
         }
     }
+}
+
+fn remapped(cells: usize, remap: Remap, swap: bool) -> String {
+    let (from, to, what) = match remap {
+        Remap::Instrument { from, to } => (format!("{from:X}"), format!("{to:X}"), "cell"),
+        Remap::Pitch { from, to, .. } => (from.to_string(), to.to_string(), "note"),
+    };
+    let swapped = if swap { ", settings copied" } else { "" };
+    return match cells {
+        0 => format!("Nothing to remap from {from}{swapped}"),
+        1 => format!("Remapped 1 {what} from {from} to {to}{swapped}"),
+        n => format!("Remapped {n} {what}s from {from} to {to}{swapped}"),
+    };
 }
 
 #[cfg(test)]
