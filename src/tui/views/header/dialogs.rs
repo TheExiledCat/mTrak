@@ -8,7 +8,8 @@ use crate::{
         effect::EffectKind,
         midi::{CC_MAX, PITCH_MAX, cc_name},
         note::NotePitch,
-        pattern::{ClearOption, ClearTarget},
+        pattern::{ClearOption, ClearTarget, Remap, RemapScope},
+        project::ProjectStats,
     },
     engine::effects::{Param, ParamKind, ValueLabel, effect_params},
     tui::{
@@ -22,6 +23,7 @@ use crate::{
         },
         glyphs,
     },
+    util::time::duration_to_hh_mm_ss_string,
 };
 
 /// The year mTrak was started, for the copyright line in the About dialog.
@@ -31,6 +33,10 @@ const REPOSITORY_URL: &str = "https://github.com/TheExiledCat/mTrak";
 
 const CC_MAPPING_ID: &str = "cc_mapping";
 const CC_NAME_WIDTH: usize = 16;
+/// In the order of `remap_scope`.
+const REMAP_SCOPES: [&str; 4] = ["Block", "Track", "Pattern", "Song"];
+/// C-4, where the pitch remap starts.
+const MIDDLE_C: u8 = 60;
 
 pub fn open_midi_dialog(state: &mut AppState) {
     let mut in_names = state.get_midi_in_port_names();
@@ -126,13 +132,7 @@ pub fn open_clear_dialog(state: &mut AppState) {
     let options = vec!["Block", "Track", "Pattern"];
     let targets = vec!["All", "Note", "Vel", "Cmd"];
     // All goes last so the digits match the instrument numbers
-    let mut instruments: Vec<String> = state
-        .project()
-        .instruments
-        .iter()
-        .enumerate()
-        .map(|(i, instrument)| format!("{i:X} {}", instrument.name).trim_end().to_owned())
-        .collect();
+    let mut instruments = instrument_names(state);
     let all_instruments = instruments.len();
     instruments.push("All".to_owned());
     let dialog = Dialog::new(
@@ -170,6 +170,77 @@ pub fn open_clear_dialog(state: &mut AppState) {
         return Ok(());
     });
 
+    state.open_dialog(dialog);
+}
+
+pub fn open_remap_dialog(state: &mut AppState) {
+    let dialog = Dialog::new(
+        "Remap",
+        vec![
+            Select::new("kind", vec!["Instruments", "Pitches"])
+                .label("Remap")
+                .boxed(),
+        ],
+    )
+    .focus_first()
+    .on_submit(|state, result| {
+        match result.choice("kind") {
+            Some(0) => open_remap_instruments_dialog(state),
+            Some(_) => open_remap_pitches_dialog(state),
+            None => {}
+        }
+        return Ok(());
+    });
+    state.open_dialog(dialog);
+}
+
+/// The name is saved as it's typed, so Esc closes it like Enter.
+pub fn open_info_dialog(state: &mut AppState) {
+    let project = state.project();
+    let stats = project.stats();
+    let file = state
+        .project_path
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .map_or("Not saved yet".to_owned(), |name| {
+            name.to_string_lossy().into_owned()
+        });
+    let name = TextPrompt::new("name", "Name").initial(project.name.as_deref().unwrap_or_default());
+    let lines = [
+        format!("File: {file}"),
+        format!("Size: {}", file_size(stats.file_size)),
+        format!("Tempo: {} BPM, speed {}", project.bpm, project.speed),
+        format!(
+            "Song: {}, {} rows, {}",
+            count(project.sequence.len(), "position"),
+            stats.song_rows,
+            duration_to_hh_mm_ss_string(&stats.song_length)
+        ),
+        format!("Patterns: {}", pattern_counts(&stats)),
+        format!("Notes: {}, note offs: {}", stats.notes, stats.note_offs),
+        format!("Commands: {}", stats.commands),
+        format!(
+            "Instruments: {} of {} used",
+            stats.instruments_used,
+            project.instruments.len()
+        ),
+        format!("Effects: {}", stats.effects),
+    ];
+    let mut components = vec![name.boxed() as Box<dyn DialogComponent>];
+    components.extend(
+        lines
+            .into_iter()
+            .map(|line| Label::new(line).boxed() as Box<dyn DialogComponent>),
+    );
+    let dialog = Dialog::new("Info", components)
+        .close_on_esc()
+        .focus_first()
+        .on_update(|state, fields| {
+            if let Some(name) = fields.text("name") {
+                set_project_name(state, name);
+            }
+            return Ok(());
+        });
     state.open_dialog(dialog);
 }
 
@@ -318,6 +389,146 @@ pub fn open_global_dialog(state: &mut AppState) {
         return Ok(());
     });
     state.open_dialog(dialog);
+}
+
+/// Gives the cells that use one instrument another, e.g. after moving a synth to another MIDI
+/// channel. Copying the settings gives the new instrument the old one's, and the old one the new
+/// one's.
+fn open_remap_instruments_dialog(state: &mut AppState) {
+    let instrument = state.active_instrument as usize;
+    let dialog = Dialog::new(
+        "Remap instruments",
+        vec![
+            Select::new("scope", REMAP_SCOPES.to_vec())
+                .label("Selection")
+                .boxed(),
+            Select::new("from", instrument_names(state))
+                .label("From")
+                .selected(instrument)
+                .boxed(),
+            Select::new("to", instrument_names(state))
+                .label("To")
+                .selected(instrument)
+                .boxed(),
+            Checkbox::new("swap", "Copy their settings").boxed(),
+        ],
+    )
+    .focus_first()
+    .on_submit(|state, result| {
+        let from = result.choice("from").unwrap_or(0) as u8;
+        let to = result.choice("to").unwrap_or(0) as u8;
+        if from != to {
+            let remap = Remap::Instrument { from, to };
+            let swap = result.bool("swap").unwrap_or(false);
+            state.request_remap(remap_scope(&result), remap, swap);
+        }
+        return Ok(());
+    });
+    state.open_dialog(dialog);
+}
+
+/// Plays the notes of one pitch at another, e.g. to move a drum to another key.
+fn open_remap_pitches_dialog(state: &mut AppState) {
+    let pitches: Vec<String> = (NotePitch::MIN..=NotePitch::MAX)
+        .map(|pitch| NotePitch(pitch).to_string())
+        .collect();
+    let middle_c = (MIDDLE_C - NotePitch::MIN) as usize;
+    let mut instruments = instrument_names(state);
+    let all_instruments = instruments.len();
+    instruments.push("All".to_owned());
+    let dialog = Dialog::new(
+        "Remap pitches",
+        vec![
+            Select::new("scope", REMAP_SCOPES.to_vec())
+                .label("Selection")
+                .boxed(),
+            Select::new("from", pitches.clone())
+                .label("From")
+                .selected(middle_c)
+                .boxed(),
+            Select::new("to", pitches)
+                .label("To")
+                .selected(middle_c)
+                .boxed(),
+            Select::new("instrument", instruments)
+                .label("Instrument")
+                .selected(all_instruments)
+                .boxed(),
+        ],
+    )
+    .focus_first()
+    .on_submit(move |state, result| {
+        let pitch = |id| NotePitch(NotePitch::MIN + result.choice(id).unwrap_or(0) as u8);
+        let (from, to) = (pitch("from"), pitch("to"));
+        if from != to {
+            let instrument = result
+                .choice("instrument")
+                .filter(|&choice| choice != all_instruments)
+                .map(|i| i as u8);
+            let remap = Remap::Pitch {
+                from,
+                to,
+                instrument,
+            };
+            state.request_remap(remap_scope(&result), remap, false);
+        }
+        return Ok(());
+    });
+    state.open_dialog(dialog);
+}
+
+fn remap_scope(result: &DialogResult) -> RemapScope {
+    return match result.choice("scope").unwrap_or(0) {
+        0 => RemapScope::Block,
+        1 => RemapScope::Track,
+        2 => RemapScope::Pattern,
+        _ => RemapScope::Song,
+    };
+}
+
+/// An empty name leaves the project untitled.
+fn set_project_name(state: &mut AppState, name: &str) {
+    let name = Some(name.trim().to_owned()).filter(|name| !name.is_empty());
+    if state.project().name != name {
+        state.project_mut().name = name;
+    }
+}
+
+fn instrument_names(state: &AppState) -> Vec<String> {
+    return state
+        .project()
+        .instruments
+        .iter()
+        .enumerate()
+        .map(|(i, instrument)| format!("{i:X} {}", instrument.name).trim_end().to_owned())
+        .collect();
+}
+
+/// The patterns the song plays, how many of them are empty, and the ones with something in
+/// them that it doesn't play.
+fn pattern_counts(stats: &ProjectStats) -> String {
+    let mut text = format!("{} in the song", stats.patterns_in_song);
+    if stats.empty_in_song > 0 {
+        text += &format!(", {} empty", stats.empty_in_song);
+    }
+    if stats.outside_song > 0 {
+        text += &format!(", {} more not in it", stats.outside_song);
+    }
+    return text;
+}
+
+fn count(n: usize, thing: &str) -> String {
+    return match n {
+        1 => format!("1 {thing}"),
+        n => format!("{n} {thing}s"),
+    };
+}
+
+fn file_size(bytes: usize) -> String {
+    return match bytes {
+        0..1024 => format!("{bytes} bytes"),
+        _ => format!("{:.1} KB ({bytes} bytes)", bytes as f64 / 1024.0),
+    };
 }
 
 fn apply_instrument(state: &mut AppState, instrument: u8, result: &DialogResult) {
@@ -777,6 +988,117 @@ mod tests {
         assert_eq!(type_keys(&mut dialog, &[KeyCode::Down]), Some(0));
         assert_eq!(type_keys(&mut dialog, &[KeyCode::Down]), Some(1));
         assert_eq!(type_keys(&mut dialog, &[KeyCode::Up, KeyCode::Up]), None);
+    }
+
+    #[test]
+    fn remap_asks_for_the_instruments_picked() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        state.active_instrument = 1;
+        open_remap_dialog(&mut state);
+        let mut chooser = state.take_pending_dialogs().remove(0);
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        chooser.handle_event(&mut state, &press(KeyCode::Enter));
+        let mut dialog = state.take_pending_dialogs().remove(0);
+        let keys = [
+            KeyCode::Down,
+            KeyCode::Down,
+            KeyCode::Down,
+            KeyCode::Tab,
+            KeyCode::Tab,
+            KeyCode::Down,
+            KeyCode::Tab,
+            KeyCode::Char(' '),
+            KeyCode::Enter,
+        ];
+        for code in keys {
+            dialog.handle_event(&mut state, &press(code));
+        }
+        let remap = Remap::Instrument { from: 1, to: 2 };
+        assert_eq!(
+            state.take_remap_request(),
+            Some((RemapScope::Song, remap, true))
+        );
+    }
+
+    #[test]
+    fn remap_asks_for_the_pitches_picked() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        open_remap_dialog(&mut state);
+        let mut chooser = state.take_pending_dialogs().remove(0);
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        chooser.handle_event(&mut state, &press(KeyCode::Down));
+        chooser.handle_event(&mut state, &press(KeyCode::Enter));
+        let mut dialog = state.take_pending_dialogs().remove(0);
+        for code in [KeyCode::Tab, KeyCode::Tab, KeyCode::Up, KeyCode::Enter] {
+            dialog.handle_event(&mut state, &press(code));
+        }
+        let remap = Remap::Pitch {
+            from: NotePitch(MIDDLE_C),
+            to: NotePitch(MIDDLE_C - 1),
+            instrument: None,
+        };
+        assert_eq!(
+            state.take_remap_request(),
+            Some((RemapScope::Block, remap, false))
+        );
+    }
+
+    #[test]
+    fn remapping_an_instrument_to_itself_does_nothing() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        open_remap_instruments_dialog(&mut state);
+        let mut dialog = state.take_pending_dialogs().remove(0);
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        dialog.handle_event(&mut state, &enter);
+        assert_eq!(state.take_remap_request(), None);
+    }
+
+    #[test]
+    fn the_name_in_info_is_saved_as_it_is_typed() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        state.project_mut().name = Some("Demo".to_owned());
+        open_info_dialog(&mut state);
+        let mut dialog = state.take_pending_dialogs().remove(0);
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        dialog.handle_event(&mut state, &press(KeyCode::Char('s')));
+        assert_eq!(state.project().name.as_deref(), Some("Demos"));
+        for _ in 0..5 {
+            dialog.handle_event(&mut state, &press(KeyCode::Backspace));
+        }
+        assert_eq!(state.project().name, None);
+        dialog.handle_event(&mut state, &press(KeyCode::Esc));
+        assert!(dialog.is_closed());
+    }
+
+    #[test]
+    fn info_shows_the_projects_numbers() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        state.project_mut().name = Some("Demo".to_owned());
+        open_info_dialog(&mut state);
+        let mut dialog = state.take_pending_dialogs().remove(0);
+        let area = ratatui::layout::Rect::new(0, 0, 80, 20);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        dialog.render(&state, area, &mut buf);
+        let text: String = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        for expected in [
+            "Name: Demo",
+            "File: Not saved yet",
+            "Tempo: 125 BPM, speed 6",
+            "Song: 1 position, 64 rows, 00:00:07",
+            "Instruments: 0 of 16 used",
+            "Patterns: 1 in the song, 1 empty",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        assert_eq!(file_size(512), "512 bytes");
+        assert_eq!(file_size(2048), "2.0 KB (2048 bytes)");
     }
 
     #[test]

@@ -29,7 +29,10 @@ use crate::{
             bytes_to_message, non_note_on_channel,
         },
         note::{Note, NoteKind, NotePitch},
-        pattern::{self, Block, ClearOption, ClearTarget, Pattern, PatternId, PatternRow},
+        pattern::{
+            self, Block, ClearOption, ClearTarget, Pattern, PatternId, PatternRow, Remap,
+            RemapScope,
+        },
         project::{Project, SequenceRow},
     },
     engine::{
@@ -309,6 +312,12 @@ enum AppStateAction {
         previous: u8,
         new: u8,
     },
+    SwapInstruments {
+        a: u8,
+        b: u8,
+    },
+    /// Several actions that undo and redo as one, staying on the pattern that's open.
+    Group(Vec<AppStateAction>),
 }
 impl AppStateAction {
     fn apply(&mut self, state: &mut AppState, undo: bool) {
@@ -375,6 +384,20 @@ impl AppStateAction {
                 state.project.bpm = bpm;
                 state.engine.set_bpm(bpm);
             }
+            AppStateAction::SwapInstruments { a, b } => {
+                state.project.instruments.swap(*a as usize, *b as usize);
+                state.send_instrument(*a);
+                state.send_instrument(*b);
+            }
+            AppStateAction::Group(actions) => {
+                let active = state.active_pattern;
+                if undo {
+                    actions.iter_mut().rev().for_each(|a| a.apply(state, true));
+                } else {
+                    actions.iter_mut().for_each(|a| a.apply(state, false));
+                }
+                state.active_pattern = active;
+            }
         }
     }
     fn cursor_jump(&self) -> Option<CursorJump> {
@@ -398,6 +421,7 @@ impl AppStateAction {
                 block: *block,
                 column: None,
             }),
+            AppStateAction::Group(actions) => actions.iter().find_map(|a| a.cursor_jump()),
             _ => None,
         };
     }
@@ -459,6 +483,7 @@ pub struct AppState {
     help_requested: bool,
     commands_requested: bool,
     clear_request: Option<(ClearOption, ClearTarget, Option<u8>)>,
+    remap_request: Option<(RemapScope, Remap, bool)>,
     project_load_request: Option<PathBuf>,
     open_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
     save_file_request: Option<(Box<Submit>, PathBuf, String, Vec<String>)>, //starting directory, title, extension filters
@@ -531,24 +556,11 @@ impl AppState {
             help_requested: false,
             commands_requested: false,
             clear_request: None,
+            remap_request: None,
             project_load_request: None,
         };
-        for (channel, instrument) in state.project.instruments.iter().enumerate() {
-            state
-                .engine
-                .set_global_volume(channel as u8, instrument.volume);
-            state
-                .engine
-                .set_default_cc(channel as u8, instrument.default_cc);
-            state
-                .engine
-                .set_bend_range(channel as u8, instrument.pitch_wheel_range);
-            state
-                .engine
-                .set_channel_transpose(channel as u8, instrument.transpose);
-        }
         for channel in 0..state.project.instruments.len() {
-            state.send_effect_chain(channel as u8);
+            state.send_instrument(channel as u8);
         }
         state.engine.set_transpose(state.project.transpose);
         state.engine.set_bpm(state.project.bpm);
@@ -922,6 +934,69 @@ impl AppState {
     pub fn take_clear_request(&mut self) -> Option<(ClearOption, ClearTarget, Option<u8>)> {
         return self.clear_request.take();
     }
+    /// Asks the pattern editor to remap the cells in `scope`, as it knows the cursor and the
+    /// marked block. `swap_settings` also swaps the settings of the two instruments.
+    pub fn request_remap(&mut self, scope: RemapScope, remap: Remap, swap_settings: bool) {
+        self.remap_request = Some((scope, remap, swap_settings));
+    }
+    pub fn take_remap_request(&mut self) -> Option<(RemapScope, Remap, bool)> {
+        return self.remap_request.take();
+    }
+    /// Remaps `block` of the open pattern, or every pattern if `None`, and swaps the settings of
+    /// an instrument remap's two instruments if asked, all as one undo step. Returns how many
+    /// cells changed.
+    pub fn remap(&mut self, block: Option<Block>, remap: Remap, swap_settings: bool) -> usize {
+        let mut changed = 0;
+        let mut actions = Vec::new();
+        match block {
+            Some(block) => {
+                let pattern = self.active_pattern;
+                let previous = self.active_pattern().read_block(block);
+                let cells = remap.apply(self.pattern_mut(pattern), block);
+                if cells > 0 {
+                    changed += cells;
+                    actions.push(AppStateAction::EditBlock {
+                        pattern,
+                        block,
+                        other_cells: previous,
+                    });
+                }
+            }
+            None => {
+                for id in 0..self.project.patterns.get_patterns().len() {
+                    let id = PatternId(id as u8);
+                    let Some(pattern) = self.project.patterns.get_pattern_by_id(id) else {
+                        continue;
+                    };
+                    let mut remapped = pattern.clone();
+                    let cells = remap.apply(&mut remapped, pattern.block());
+                    if cells == 0 {
+                        continue;
+                    }
+                    changed += cells;
+                    let previous = std::mem::replace(self.pattern_mut(id), remapped);
+                    actions.push(AppStateAction::EditPattern {
+                        pattern: id,
+                        other: previous,
+                    });
+                }
+            }
+        }
+        if let Remap::Instrument { from, to } = remap
+            && swap_settings
+            && from != to
+        {
+            let mut swap = AppStateAction::SwapInstruments { a: from, b: to };
+            swap.apply(self, false);
+            actions.push(swap);
+        }
+        match actions.len() {
+            0 => {}
+            1 => self.track(actions.remove(0)),
+            _ => self.track(AppStateAction::Group(actions)),
+        }
+        return changed;
+    }
     pub fn next_pattern(&mut self) {
         self.active_pattern.0 = self.active_pattern.0.saturating_add(1);
         self.ensure_pattern(self.active_pattern);
@@ -1231,6 +1306,16 @@ impl AppState {
             .find(|p| client.port_name(p).is_ok_and(|n| n == name));
     }
 
+    fn send_instrument(&self, channel: u8) {
+        let instrument = &self.project.instruments[channel as usize];
+        self.engine.set_global_volume(channel, instrument.volume);
+        self.engine.set_default_cc(channel, instrument.default_cc);
+        self.engine
+            .set_bend_range(channel, instrument.pitch_wheel_range);
+        self.engine
+            .set_channel_transpose(channel, instrument.transpose);
+        self.send_effect_chain(channel);
+    }
     fn send_effect_chain(&self, channel: u8) {
         let effects = &self.project.instruments[channel as usize].effects;
         self.engine.set_effect_chain(channel, create_chain(effects));
@@ -1638,6 +1723,90 @@ mod tests {
         state.set_effect_param_cc(1, 0, 1, None);
         assert_eq!(state.project().instruments[1].effects[0].param_cc(1), None);
         assert!(state.has_changes);
+    }
+
+    #[test]
+    fn remapping_the_song_undoes_in_one_step_and_keeps_the_open_pattern() {
+        let mut state = effect_state();
+        let mut note = Note::new(
+            NoteKind::On(NotePitch(60)),
+            Some(1),
+            None,
+            Default::default(),
+        );
+        for id in [0, 2] {
+            state
+                .project
+                .patterns
+                .create_pattern_id_if_not_exists(PatternId(id));
+            state.pattern_mut(PatternId(id)).set_event(0, 0, note);
+        }
+        state.active_pattern = PatternId(1);
+        let remap = |from, to| Remap::Instrument { from, to };
+        assert_eq!(state.remap(None, remap(1, 3), false), 2);
+        note.instrument_id = Some(3);
+        let cell = |state: &AppState, id| {
+            *state
+                .project
+                .patterns
+                .get_pattern_by_id(PatternId(id))
+                .unwrap()
+                .get_event(0, 0)
+                .unwrap()
+        };
+        assert_eq!((cell(&state, 0), cell(&state, 2)), (note, note));
+        assert!(state.undo());
+        assert_eq!(cell(&state, 0).instrument_id, Some(1));
+        assert_eq!(cell(&state, 2).instrument_id, Some(1));
+        assert!(state.active_pattern == PatternId(1));
+        assert!(state.redo());
+        assert_eq!(cell(&state, 2), note);
+        assert_eq!(state.remap(None, remap(9, 4), false), 0);
+    }
+
+    #[test]
+    fn swapping_settings_goes_with_the_remap_and_undoes_with_it() {
+        let mut state = effect_state();
+        state.project_mut().instruments[1].name = "Bass".into();
+        state.add_effect(1, EffectKind::Echo);
+        state.project_mut().instruments[3].name = "Lead".into();
+        let note = Note::new(
+            NoteKind::On(NotePitch(60)),
+            Some(1),
+            None,
+            Default::default(),
+        );
+        let pattern = state.active_pattern;
+        state.pattern_mut(pattern).set_event(0, 0, note);
+        let block = state.active_pattern().block();
+        let remap = Remap::Instrument { from: 1, to: 3 };
+        assert_eq!(state.remap(Some(block), remap, true), 1);
+        let names = |state: &AppState| {
+            let instruments = &state.project().instruments;
+            (instruments[1].name.clone(), instruments[3].name.clone())
+        };
+        assert_eq!(names(&state), ("Lead".into(), "Bass".into()));
+        assert_eq!(state.project().instruments[3].effects.len(), 1);
+        assert!(state.undo());
+        let jump = state
+            .take_cursor_jump()
+            .expect("the undo jumps to the remapped block");
+        assert_eq!(
+            (jump.block.row, jump.block.height),
+            (block.row, block.height)
+        );
+        assert_eq!(names(&state), ("Bass".into(), "Lead".into()));
+        assert_eq!(state.active_pattern().get_event(0, 0), Some(&note));
+        assert!(!state.undo(), "the swap and the remap were one step");
+    }
+
+    #[test]
+    fn settings_can_be_swapped_without_notes_to_remap() {
+        let mut state = effect_state();
+        state.project_mut().instruments[2].name = "Pad".into();
+        let remap = Remap::Instrument { from: 2, to: 5 };
+        assert_eq!(state.remap(None, remap, true), 0);
+        assert_eq!(state.project().instruments[5].name, "Pad");
     }
 
     #[test]

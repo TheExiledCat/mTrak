@@ -16,8 +16,8 @@ use crate::{
         views::header::{
             config_dialog::open_config_dialog,
             dialogs::{
-                open_about_dialog, open_clear_dialog, open_global_dialog, open_instrument_dialog,
-                open_midi_dialog,
+                open_about_dialog, open_clear_dialog, open_global_dialog, open_info_dialog,
+                open_instrument_dialog, open_midi_dialog, open_remap_dialog,
             },
         },
     },
@@ -30,6 +30,8 @@ pub enum UtilListAction {
     Midi,
     Config,
     Clear,
+    Remap,
+    Info,
     About,
     Extend,
 }
@@ -47,9 +49,11 @@ impl UtilList {
             .bind(Key::ctrl('r'), Instruments, "Instrument")
             .bind(Key::ctrl('e'), Global, "Global")
             .bind(Key::alt('z'), Clear, "Clear")
+            .bind(Key::ctrl('k'), Remap, "Remap")
             .bind(Key::ctrl('o'), Midi, "Midi")
             .bind(Key::ctrl('p'), Config, "Config")
             .bind(Key::ctrl('x'), Extend, "Extend")
+            .bind(Key::ctrl('f'), Info, "Info")
             .bind(Key::ctrl('t'), About, "About");
         return Self { keymap };
     }
@@ -122,6 +126,8 @@ impl KeyActions for UtilList {
             UtilListAction::Config => open_config_dialog(state),
             UtilListAction::About => open_about_dialog(state),
             UtilListAction::Clear => open_clear_dialog(state),
+            UtilListAction::Remap => open_remap_dialog(state),
+            UtilListAction::Info => open_info_dialog(state),
             UtilListAction::Extend => state.header_collapsed = !state.header_collapsed,
         }
         return Ok(());
@@ -135,6 +141,8 @@ impl KeyActions for UtilList {
             UtilListAction::Config => "Edit the settings in config.toml",
             UtilListAction::About => "About mTrak",
             UtilListAction::Clear => "Clear part of the current pattern",
+            UtilListAction::Remap => "Move notes to another instrument or pitch",
+            UtilListAction::Info => "Show the project's size and how much is in it",
             UtilListAction::Extend => "Collapse or expand the header to show more of the pattern",
         };
     }

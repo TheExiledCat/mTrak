@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use crate::{
     data::{
         midi::MIDI_CHANNEL_MAX,
-        note::{Note, NoteKind},
+        note::{Note, NoteKind, NotePitch},
     },
     error::{MTrakError, Result},
     tui::constants,
@@ -36,6 +36,40 @@ impl Block {
     }
     pub fn rows(&self) -> Range<usize> {
         return self.row as usize..self.row as usize + self.height as usize;
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RemapScope {
+    Block,
+    Track,
+    Pattern,
+    Song,
+}
+/// What a remap changes in the cells it goes over.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Remap {
+    Instrument {
+        from: u8,
+        to: u8,
+    },
+    /// Only notes of `instrument`, if given.
+    Pitch {
+        from: NotePitch,
+        to: NotePitch,
+        instrument: Option<u8>,
+    },
+}
+impl Remap {
+    /// Remaps the cells in `block`, returning how many changed.
+    pub fn apply(&self, pattern: &mut Pattern, block: Block) -> usize {
+        return match *self {
+            Remap::Instrument { from, to } => pattern.remap_instrument(block, from, to),
+            Remap::Pitch {
+                from,
+                to,
+                instrument,
+            } => pattern.remap_pitch(block, from, to, instrument),
+        };
     }
 }
 #[derive(Clone, Copy)]
@@ -215,6 +249,65 @@ impl Pattern {
                 }
             }
         }
+    }
+    /// Gives the cells in `block` that use instrument `from` instrument `to`, returning how many
+    /// changed.
+    pub fn remap_instrument(&mut self, block: Block, from: u8, to: u8) -> usize {
+        let mut changed = 0;
+        for row in block.rows() {
+            for track in block.tracks() {
+                let Some(&note) = self.get_event(row, track) else {
+                    continue;
+                };
+                if note.instrument_id != Some(from) || from == to {
+                    continue;
+                }
+                self.set_event(
+                    row,
+                    track,
+                    Note {
+                        instrument_id: Some(to),
+                        ..note
+                    },
+                );
+                changed += 1;
+            }
+        }
+        return changed;
+    }
+    /// Plays the notes of pitch `from` in `block` at pitch `to` instead, only for `instrument`
+    /// if given, returning how many changed.
+    pub fn remap_pitch(
+        &mut self,
+        block: Block,
+        from: NotePitch,
+        to: NotePitch,
+        instrument: Option<u8>,
+    ) -> usize {
+        let mut changed = 0;
+        for row in block.rows() {
+            for track in block.tracks() {
+                let Some(&note) = self.get_event(row, track) else {
+                    continue;
+                };
+                if note.kind != NoteKind::On(from)
+                    || from == to
+                    || instrument.is_some_and(|i| note.instrument_id != Some(i))
+                {
+                    continue;
+                }
+                self.set_event(
+                    row,
+                    track,
+                    Note {
+                        kind: NoteKind::On(to),
+                        ..note
+                    },
+                );
+                changed += 1;
+            }
+        }
+        return changed;
     }
     /// Shifts every track down one row from `row`, leaving an empty row at `row`.
     /// The last row falls off the end of the pattern.
@@ -400,7 +493,7 @@ mod tests {
     use super::*;
     use crate::data::{
         commands::{Command, CommandKind},
-        note::{NoteKind, NotePitch},
+        note::NoteKind,
     };
 
     fn note() -> Note {
@@ -447,6 +540,62 @@ mod tests {
         pattern.clear_instrument(pattern.block(), ClearTarget::All, Some(2));
         assert_eq!(pattern.get_event(0, 0), Some(&first));
         assert_eq!(pattern.get_event(1, 0), Some(&Note::empty()));
+    }
+
+    #[test]
+    fn remapping_moves_only_the_instruments_cells_inside_the_block() {
+        let mut pattern = Pattern::new(3);
+        let with = |instrument| Note {
+            instrument_id: Some(instrument),
+            velocity: Some(0x40),
+            ..note()
+        };
+        pattern.set_event(0, 0, with(1));
+        pattern.set_event(1, 0, with(2));
+        pattern.set_event(2, 0, with(1));
+        pattern.set_event(0, 1, with(1));
+        let block = Block {
+            track: 0,
+            width: 1,
+            row: 0,
+            height: 2,
+        };
+        assert_eq!(pattern.remap_instrument(block, 1, 5), 1);
+        assert_eq!(pattern.get_event(0, 0), Some(&with(5)));
+        assert_eq!(pattern.get_event(1, 0), Some(&with(2)));
+        assert_eq!(pattern.get_event(2, 0), Some(&with(1)), "outside the block");
+        assert_eq!(pattern.get_event(0, 1), Some(&with(1)), "outside the block");
+        assert_eq!(pattern.remap_instrument(pattern.block(), 2, 2), 0);
+    }
+
+    #[test]
+    fn remapping_a_pitch_moves_only_that_pitch_of_the_instrument() {
+        let mut pattern = Pattern::new(3);
+        let at = |pitch, instrument| Note {
+            kind: NoteKind::On(NotePitch(pitch)),
+            instrument_id: Some(instrument),
+            ..Note::empty()
+        };
+        pattern.set_event(0, 0, at(36, 9));
+        pattern.set_event(1, 0, at(36, 2));
+        pattern.set_event(2, 0, at(38, 9));
+        let remap = Remap::Pitch {
+            from: NotePitch(36),
+            to: NotePitch(35),
+            instrument: Some(9),
+        };
+        let block = pattern.block();
+        assert_eq!(remap.apply(&mut pattern, block), 1);
+        assert_eq!(pattern.get_event(0, 0), Some(&at(35, 9)));
+        assert_eq!(pattern.get_event(1, 0), Some(&at(36, 2)));
+        assert_eq!(pattern.get_event(2, 0), Some(&at(38, 9)));
+        let any = Remap::Pitch {
+            from: NotePitch(36),
+            to: NotePitch(40),
+            instrument: None,
+        };
+        assert_eq!(any.apply(&mut pattern, block), 1);
+        assert_eq!(pattern.get_event(1, 0), Some(&at(40, 2)));
     }
 
     #[test]
