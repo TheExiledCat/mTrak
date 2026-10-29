@@ -32,6 +32,9 @@ Settings that aren't part of a project.
 | `update_check` | `true` or `false`                                       | `true`  | Look for a new version on startup                               |
 | `midi_input`   | A port name, or `""` for none                           | `""`    | The MIDI input a project connects to when it doesn't name one   |
 | `midi_output`  | A port name, or `""` for none                           | `""`    | The MIDI output a project connects to when it doesn't name one  |
+| `soft_thru`    | `true` or `false`                                       | `false` | Play the MIDI input's CCs, pitch bend, aftertouch and program changes on the active instrument, like its notes. Also in the MIDI dialog, see [SYNC.md](SYNC.md#soft-thru) |
+| `hex_values`   | `true` or `false`                                       | `true`  | Numbers in dialogs, like volumes and effect settings, in hex, or in decimal when `false`. Instrument numbers stay hex, as in the pattern |
+| `show_value_ranges` | `true` or `false`                                  | `false` | The range of each number in dialogs after its name, e.g. `Volume (00-FF)`, in hex or decimal as `hex_values` says |
 | `line_numbers` | `left`, `right`, `both` or `none`                       | `left`  | Which sides of the pattern editor show the row numbers; `none` gives the room to the tracks |
 | `hex_line_numbers` | `true` or `false`                                   | `true`  | Row numbers in hex, or in decimal from `00` to `99` and round again, so they stay two digits |
 | `show_dashes`  | `true` or `false`                                       | `true`  | Dashes in empty instrument and volume columns; blank when `false` |

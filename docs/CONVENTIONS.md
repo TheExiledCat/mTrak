@@ -68,6 +68,16 @@ order.
   `FileBrowserAction`.
 - Unused parameters required by a trait are prefixed with `_` (`_state: &AppState`). Unused
   fields in a pattern are `_`.
+- A trait whose methods have default implementations gets `#[allow(unused_variables)]`, so the
+  defaults keep their plain parameter names, which show up in signatures and completions:
+
+  ```rust
+  #[allow(unused_variables)]
+  pub trait MidiEffect: Send {
+      fn process(&mut self, message: Message, out: &mut Vec<Message>);
+      fn tick(&mut self, out: &mut Vec<Message>) {}
+  }
+  ```
 
 ## Imports
 

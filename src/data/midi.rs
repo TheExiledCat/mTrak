@@ -6,6 +6,11 @@ use num::FromPrimitive;
 pub const MIDI_CHANNEL_MAX: u8 = 0xF;
 pub const PULSES_PER_QUARTER: u32 = 24;
 pub const VELOCITY_MAX: u8 = 0x7F;
+/// The highest pitch MIDI can send. The tracker's own range (`NotePitch`) starts higher.
+pub const PITCH_MAX: u8 = 0x7F;
+pub const CC_MAX: u8 = 0x7F;
+pub const BEND_CENTER: u16 = 0x2000;
+pub const BEND_MAX: u16 = 0x3FFF;
 pub const VOLUME_MAX: u8 = 0x80;
 pub const DEFAULT_BPM: u8 = 125;
 pub const DEFAULT_SPEED: u8 = 6;
@@ -14,6 +19,14 @@ pub const MAX_SPEED: u8 = 0x1F;
 
 pub fn pulse_duration(bpm: u8) -> Duration {
     return Duration::from_secs_f64(60.0 / (bpm.max(1) as f64 * PULSES_PER_QUARTER as f64));
+}
+/// Multiplies a velocity by `scale / max`, rounding up so a scaled note never drops to a
+/// velocity of 0, which MIDI treats as a note off. A scale above `max` boosts the velocity, up
+/// to `VELOCITY_MAX`.
+pub fn scale_velocity(velocity: u8, scale: u8, max: u8) -> u8 {
+    return (velocity as u16 * scale as u16)
+        .div_ceil(max.max(1) as u16)
+        .min(VELOCITY_MAX as u16) as u8;
 }
 #[derive(Clone)]
 pub enum MidiEvent {
@@ -106,6 +119,108 @@ pub fn raw_message_to_bytes(msg: RawMessage) -> Vec<u8> {
         }
     }
 }
+/// A bend `offset` steps of depth from the center: 127 either way reaches the end of the range.
+pub fn bend_by(channel: Channel, offset: f32) -> Message {
+    // the range reaches a step further down than up
+    let reach = if offset < 0.0 {
+        BEND_CENTER
+    } else {
+        BEND_MAX - BEND_CENTER
+    };
+    let bend = BEND_CENTER as i32 + (offset / i8::MAX as f32 * reach as f32).round() as i32;
+    return Message::PitchBend(channel, bend.clamp(0, BEND_MAX as i32) as u16);
+}
+
+pub fn cc_by(channel: Channel, cc: u8, from: u8, offset: f32) -> Message {
+    let value = from as i32 + offset.round() as i32;
+    return Message::ControlChange(channel, cc, value.clamp(0, CC_MAX as i32) as u8);
+}
+
+/// The name the MIDI spec gives a CC. `None` for the ones it leaves undefined.
+pub fn cc_name(cc: u8) -> Option<String> {
+    if (32..64).contains(&cc) {
+        return cc_name(cc - 32).map(|name| format!("{name} LSB"));
+    }
+    let name = match cc {
+        0 => "Bank select",
+        1 => "Mod wheel",
+        2 => "Breath",
+        4 => "Foot pedal",
+        5 => "Portamento time",
+        6 => "Data entry",
+        7 => "Volume",
+        8 => "Balance",
+        10 => "Pan",
+        11 => "Expression",
+        12 => "Effect 1",
+        13 => "Effect 2",
+        16 => "General 1",
+        17 => "General 2",
+        18 => "General 3",
+        19 => "General 4",
+        64 => "Sustain",
+        65 => "Portamento",
+        66 => "Sostenuto",
+        67 => "Soft pedal",
+        68 => "Legato",
+        69 => "Hold 2",
+        70 => "Variation",
+        71 => "Resonance",
+        72 => "Release time",
+        73 => "Attack time",
+        74 => "Cutoff",
+        75 => "Decay time",
+        76 => "Vibrato rate",
+        77 => "Vibrato depth",
+        78 => "Vibrato delay",
+        79 => "Sound control 10",
+        80 => "General 5",
+        81 => "General 6",
+        82 => "General 7",
+        83 => "General 8",
+        84 => "Portamento control",
+        88 => "Velocity LSB",
+        91 => "Reverb",
+        92 => "Tremolo",
+        93 => "Chorus",
+        94 => "Detune",
+        95 => "Phaser",
+        96 => "Data increment",
+        97 => "Data decrement",
+        98 => "NRPN LSB",
+        99 => "NRPN MSB",
+        100 => "RPN LSB",
+        101 => "RPN MSB",
+        120 => "All sound off",
+        121 => "Reset controllers",
+        122 => "Local control",
+        123 => "All notes off",
+        124 => "Omni off",
+        125 => "Omni on",
+        126 => "Mono on",
+        127 => "Poly on",
+        _ => return None,
+    };
+    return Some(name.to_owned());
+}
+
+/// A channel message other than a note, moved to `channel`. `None` for notes and system
+/// messages.
+pub fn non_note_on_channel(message: Message, channel: Channel) -> Option<Message> {
+    return Some(match message {
+        Message::PolyphonicPressure(_, note, pressure) => {
+            Message::PolyphonicPressure(channel, note, pressure)
+        }
+        Message::ControlChange(_, controller, value) => {
+            Message::ControlChange(channel, controller, value)
+        }
+        Message::ProgramChange(_, program) => Message::ProgramChange(channel, program),
+        Message::ChannelPressure(_, pressure) => Message::ChannelPressure(channel, pressure),
+        Message::PitchBend(_, bend) => Message::PitchBend(channel, bend),
+        _ => return None,
+    });
+}
+
 pub fn bytes_to_message(bytes: &[u8]) -> Option<Message> {
     let (&status, data) = bytes.split_first()?;
     let channel = Channel::from_u8(status & 0x0F)?;
@@ -135,6 +250,72 @@ mod tests {
     use midi::ToRawMessages;
 
     use super::*;
+
+    #[test]
+    fn ccs_have_their_spec_names() {
+        assert_eq!(cc_name(1).as_deref(), Some("Mod wheel"));
+        assert_eq!(cc_name(33).as_deref(), Some("Mod wheel LSB"));
+        assert_eq!(cc_name(74).as_deref(), Some("Cutoff"));
+        assert_eq!(cc_name(3), None);
+        assert_eq!(cc_name(35), None);
+        assert_eq!(cc_name(110), None);
+    }
+
+    #[test]
+    fn mod_wheel_bytes_read_as_cc_1() {
+        assert_eq!(
+            bytes_to_message(&[0xB2, 0x01, 0x40]),
+            Some(Message::ControlChange(Channel::Ch3, 1, 0x40))
+        );
+        assert_eq!(
+            bytes_to_message(&[0xB2, 0x21, 0x10]),
+            Some(Message::ControlChange(Channel::Ch3, 0x21, 0x10))
+        );
+    }
+
+    #[test]
+    fn non_note_messages_move_to_the_channel() {
+        let moved = |message| non_note_on_channel(message, Channel::Ch5);
+        assert_eq!(
+            moved(Message::ControlChange(Channel::Ch1, 74, 9)),
+            Some(Message::ControlChange(Channel::Ch5, 74, 9))
+        );
+        assert_eq!(
+            moved(Message::PitchBend(Channel::Ch2, 0x1234)),
+            Some(Message::PitchBend(Channel::Ch5, 0x1234))
+        );
+        assert_eq!(
+            moved(Message::ChannelPressure(Channel::Ch1, 3)),
+            Some(Message::ChannelPressure(Channel::Ch5, 3))
+        );
+        assert_eq!(
+            moved(Message::PolyphonicPressure(Channel::Ch1, 60, 3)),
+            Some(Message::PolyphonicPressure(Channel::Ch5, 60, 3))
+        );
+        assert_eq!(
+            moved(Message::ProgramChange(Channel::Ch1, 7)),
+            Some(Message::ProgramChange(Channel::Ch5, 7))
+        );
+        assert_eq!(moved(Message::NoteOn(Channel::Ch1, 60, 100)), None);
+        assert_eq!(moved(Message::Start), None);
+    }
+
+    #[test]
+    fn scale_velocity_rounds_up() {
+        assert_eq!(scale_velocity(100, 0xFF, u8::MAX), 100);
+        assert_eq!(scale_velocity(100, 0x80, u8::MAX), 51);
+        assert_eq!(scale_velocity(1, 1, u8::MAX), 1);
+        assert_eq!(scale_velocity(100, 0, u8::MAX), 0);
+        assert_eq!(scale_velocity(VELOCITY_MAX, 0xFF, u8::MAX), VELOCITY_MAX);
+    }
+
+    #[test]
+    fn scale_velocity_uses_its_own_max() {
+        assert_eq!(scale_velocity(100, 5, 10), 50);
+        assert_eq!(scale_velocity(100, 10, 10), 100);
+        assert_eq!(scale_velocity(100, 20, 10), VELOCITY_MAX);
+        assert_eq!(scale_velocity(100, 5, 0), VELOCITY_MAX);
+    }
 
     #[test]
     fn durations_follow_bpm() {

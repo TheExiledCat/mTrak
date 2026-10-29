@@ -1,18 +1,23 @@
 use chrono::{Datelike, Local};
 use figlet_rs::FIGlet;
+use strum::IntoEnumIterator;
 
 use crate::{
     data::{
         config::TITLE,
+        effect::EffectKind,
+        midi::{CC_MAX, PITCH_MAX, cc_name},
+        note::NotePitch,
         pattern::{ClearOption, ClearTarget},
     },
+    engine::effects::{Param, ParamKind, ValueLabel, effect_params},
     tui::{
         app::AppState,
         framework::{
             core_extensions::Boxed,
             dialog::{
-                Checkbox, Dialog, DialogComponent, DialogResult, InfoLevel, Label, Link, NumberBox,
-                Select, TextPrompt,
+                Buttons, Checkbox, Dialog, DialogComponent, DialogResult, InfoLevel, Label, Link,
+                List, ListEvent, NumberBox, Select, TextPrompt,
             },
         },
         glyphs,
@@ -23,6 +28,9 @@ use crate::{
 const FIRST_YEAR: i32 = 2026;
 
 const REPOSITORY_URL: &str = "https://github.com/TheExiledCat/mTrak";
+
+const CC_MAPPING_ID: &str = "cc_mapping";
+const CC_NAME_WIDTH: usize = 16;
 
 pub fn open_midi_dialog(state: &mut AppState) {
     let mut in_names = state.get_midi_in_port_names();
@@ -66,6 +74,9 @@ pub fn open_midi_dialog(state: &mut AppState) {
             Checkbox::new("velocity", "Record Velocity")
                 .checked(state.project().record_input_velocity)
                 .boxed(),
+            Checkbox::new("soft_thru", "Soft thru")
+                .checked(state.config.soft_thru)
+                .boxed(),
             Select::new("output", out_names)
                 .label("MIDI output")
                 .selected(current_out)
@@ -82,6 +93,9 @@ pub fn open_midi_dialog(state: &mut AppState) {
         if let Some(velocity) = result.bool("velocity") {
             state.set_midi_velocity_record(velocity);
         }
+        let soft_thru = result
+            .bool("soft_thru")
+            .map(|enabled| state.set_soft_thru(enabled));
         if let Some(output) = result.choice("output") {
             let output = if output == 0 {
                 None
@@ -102,6 +116,7 @@ pub fn open_midi_dialog(state: &mut AppState) {
             state.set_midi_input(port)
         });
         clock.unwrap_or(Ok(()))?;
+        soft_thru.unwrap_or(Ok(()))?;
         return input.unwrap_or(Ok(()));
     });
     state.open_dialog(dialog);
@@ -158,70 +173,60 @@ pub fn open_clear_dialog(state: &mut AppState) {
     state.open_dialog(dialog);
 }
 
-/// Previews changes live; cancelling restores the old values.
+/// Changes are made right away, so Esc closes it like Enter.
 pub fn open_instrument_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
-    let original = state.project().instruments[instrument as usize].clone();
-    let had_changes = state.has_changes();
-    let settings = &original;
+    let settings = &state.project().instruments[instrument as usize];
     let dialog = Dialog::new(
         format!("Instrument {:1X}", instrument),
         vec![
             TextPrompt::new("name", "Name")
                 .initial(&settings.name)
                 .boxed(),
-            NumberBox::new("volume", "Volume", 2)
-                .value(settings.volume as i32)
-                .boxed(),
+            labelled(
+                NumberBox::new("volume", "Volume", 2)
+                    .show_range()
+                    .value(settings.volume as i32),
+                ValueLabel::Percent,
+            )
+            .boxed(),
             NumberBox::new("pitch_wheel_range", "Bend range (semitones)", 2)
+                .show_range()
                 .value(settings.pitch_wheel_range as i32)
                 .boxed(),
             NumberBox::new("default_cc", "Default CC", 2)
-                .range(0, 0x7F)
+                .show_range()
+                .range(0, CC_MAX as i32)
                 .value(settings.default_cc as i32)
+                .value_label(cc_label)
                 .boxed(),
-            NumberBox::new("transpose", "Transpose (semitones)", 2)
-                .range(i8::MIN as i32, i8::MAX as i32)
-                .value(settings.transpose as i32)
-                .boxed(),
+            labelled(
+                NumberBox::new("transpose", "Transpose (semitones)", 2)
+                    .show_range()
+                    .range(i8::MIN as i32, i8::MAX as i32)
+                    .value(settings.transpose as i32),
+                ValueLabel::Semitones,
+            )
+            .boxed(),
+            Buttons::new("effects", vec!["Effects"]).boxed(),
         ],
     )
+    .width(60)
+    .hide_behind_child()
+    .close_on_esc()
     .focus_first()
     .on_update(move |state, fields| {
         apply_instrument(state, instrument, fields);
+        if fields.changed() == "effects" {
+            open_effects_dialog(state);
+        }
         return Ok(());
     })
     .on_submit(move |state, result| {
         apply_instrument(state, instrument, &result);
         return Ok(());
-    })
-    .on_cancel(move |state| {
-        state.project_mut().instruments[instrument as usize].name = original.name;
-        state.set_global_volume(instrument, original.volume);
-        state.set_bend_range(instrument, original.pitch_wheel_range);
-        state.set_default_cc(instrument, original.default_cc);
-        state.set_instrument_transpose(instrument, original.transpose);
-        state.restore_has_changes(had_changes);
     });
     state.open_dialog(dialog);
-}
-
-fn apply_instrument(state: &mut AppState, instrument: u8, result: &DialogResult) {
-    if let Some(name) = result.text("name") {
-        state.project_mut().instruments[instrument as usize].name = name.into();
-    }
-    if let Some(volume) = result.number("volume") {
-        state.set_global_volume(instrument, volume as u8);
-    }
-    if let Some(range) = result.number("pitch_wheel_range") {
-        state.set_bend_range(instrument, range as u8);
-    }
-    if let Some(control) = result.number("default_cc") {
-        state.set_default_cc(instrument, control as u8);
-    }
-    if let Some(transpose) = result.number("transpose") {
-        state.set_instrument_transpose(instrument, transpose as i8);
-    }
 }
 
 pub fn open_about_dialog(state: &mut AppState) {
@@ -275,27 +280,34 @@ pub fn open_about_dialog(state: &mut AppState) {
     components.push(Link::new(REPOSITORY_URL).boxed());
     let dialog = Dialog::new("About", components)
         .level(InfoLevel::Success)
-        .cancellable(false);
+        .close_on_esc();
     state.open_dialog(dialog);
 }
 
-/// Previews changes live; cancelling restores the old values.
+/// Changes are made right away, so Esc closes it like Enter.
 pub fn open_global_dialog(state: &mut AppState) {
-    let velocity = state.project().global_velocity;
-    let transpose = state.project().transpose;
-    let had_changes = state.has_changes();
     let dialog = Dialog::new(
         "Global",
         vec![
-            NumberBox::new("velocity", "Velocity", 2)
-                .value(state.project().global_velocity as i32)
-                .boxed(),
-            NumberBox::new("transpose", "Transpose (semitones)", 2)
-                .range(i8::MIN as i32, i8::MAX as i32)
-                .value(state.project().transpose as i32)
-                .boxed(),
+            labelled(
+                NumberBox::new("velocity", "Velocity", 2)
+                    .show_range()
+                    .value(state.project().global_velocity as i32),
+                ValueLabel::Percent,
+            )
+            .boxed(),
+            labelled(
+                NumberBox::new("transpose", "Transpose (semitones)", 2)
+                    .show_range()
+                    .range(i8::MIN as i32, i8::MAX as i32)
+                    .value(state.project().transpose as i32),
+                ValueLabel::Semitones,
+            )
+            .boxed(),
         ],
     )
+    .width(60)
+    .close_on_esc()
     .focus_first()
     .on_update(|state, fields| {
         apply_globals(state, fields);
@@ -304,13 +316,269 @@ pub fn open_global_dialog(state: &mut AppState) {
     .on_submit(|state, result| {
         apply_globals(state, &result);
         return Ok(());
-    })
-    .on_cancel(move |state| {
-        state.set_global_velocity(velocity);
-        state.set_transpose(transpose);
-        state.restore_has_changes(had_changes);
     });
     state.open_dialog(dialog);
+}
+
+fn apply_instrument(state: &mut AppState, instrument: u8, result: &DialogResult) {
+    if let Some(name) = result.text("name") {
+        state.project_mut().instruments[instrument as usize].name = name.into();
+    }
+    if let Some(volume) = result.number("volume") {
+        state.set_global_volume(instrument, volume as u8);
+    }
+    if let Some(range) = result.number("pitch_wheel_range") {
+        state.set_bend_range(instrument, range as u8);
+    }
+    if let Some(control) = result.number("default_cc") {
+        state.set_default_cc(instrument, control as u8);
+    }
+    if let Some(transpose) = result.number("transpose") {
+        state.set_instrument_transpose(instrument, transpose as i8);
+    }
+}
+/// The active instrument's effects, in the order notes go through them. Changes are made
+/// right away, so Esc closes it like Enter.
+fn open_effects_dialog(state: &mut AppState) {
+    let instrument = state.active_instrument;
+    let list = List::new("effects", effect_names(state, instrument))
+        .items_from(move |state| effect_names(state, instrument))
+        .checkboxes(effects_enabled(state, instrument))
+        .checks_from(move |state| effects_enabled(state, instrument))
+        .show_index(true)
+        .add_button("Add effect")
+        .removable(true)
+        .reorderable(true);
+    let dialog = Dialog::new(
+        format!("Instrument {:1X} effects", instrument),
+        vec![list.boxed()],
+    )
+    .hide_behind_child()
+    .close_on_esc()
+    .focus_first()
+    .on_update(move |state, fields| {
+        match fields.list_event("effects") {
+            Some(ListEvent::Open(effect)) => open_effect_dialog(state, instrument, effect),
+            Some(ListEvent::Add) => open_add_effect_dialog(state, instrument),
+            Some(ListEvent::Remove(effect)) => state.remove_effect(instrument, effect),
+            Some(ListEvent::Move { from, to }) => state.move_effect(instrument, from, to),
+            Some(ListEvent::Check { item, checked }) => {
+                state.set_effect_enabled(instrument, item, checked)
+            }
+            None => {}
+        }
+        return Ok(());
+    });
+    state.open_dialog(dialog);
+}
+
+fn effect_names(state: &AppState, instrument: u8) -> Vec<String> {
+    return state.project().instruments[instrument as usize]
+        .effects
+        .iter()
+        .map(|settings| settings.kind.name().to_owned())
+        .collect();
+}
+
+fn effects_enabled(state: &AppState, instrument: u8) -> Vec<bool> {
+    return state.project().instruments[instrument as usize]
+        .effects
+        .iter()
+        .map(|settings| settings.enabled)
+        .collect();
+}
+
+fn open_add_effect_dialog(state: &mut AppState, instrument: u8) {
+    let kinds = EffectKind::iter().map(|kind| kind.name()).collect();
+    let dialog = Dialog::new(
+        "Add effect",
+        vec![Select::new("kind", kinds).label("Effect").boxed()],
+    )
+    .focus_first()
+    .on_submit(move |state, result| {
+        if let Some(kind) = result
+            .choice("kind")
+            .and_then(|i| EffectKind::iter().nth(i))
+        {
+            state.add_effect(instrument, kind);
+        }
+        return Ok(());
+    });
+    state.open_dialog(dialog);
+}
+
+/// One field per parameter of an effect. Changes are made right away, so Esc closes it like
+/// Enter.
+fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
+    let Some(settings) = state.project().instruments[instrument as usize]
+        .effects
+        .get(effect)
+        .cloned()
+    else {
+        return;
+    };
+    let params = effect_params(settings.kind);
+    let values: Vec<u8> = params
+        .iter()
+        .enumerate()
+        .map(|(index, param)| settings.values.get(index).copied().unwrap_or(param.default))
+        .collect();
+    let mut fields: Vec<Box<dyn DialogComponent>> = params
+        .iter()
+        .zip(&values)
+        .map(|(param, value)| param_field(param, *value))
+        .collect();
+    fields.push(Buttons::new(CC_MAPPING_ID, vec!["CC mapping"]).boxed());
+    let dialog = Dialog::new(format!("{} {:X}", settings.kind.name(), effect), fields)
+        .hide_behind_child()
+        .close_on_esc()
+        .on_update(move |state, fields| {
+            if fields.changed() == CC_MAPPING_ID {
+                open_cc_mapping_dialog(state, instrument, effect);
+                return Ok(());
+            }
+            let changed = params
+                .iter()
+                .position(|param| param.name == fields.changed());
+            if let Some(index) = changed
+                && let Some(value) = param_value(&params[index], fields)
+            {
+                state.set_effect_param(instrument, effect, index, value);
+            }
+            return Ok(());
+        });
+    state.open_dialog(dialog);
+}
+
+/// Which CC each parameter of an effect follows, so pattern commands can change it. Changes are
+/// made right away, so Esc closes it like Enter.
+fn open_cc_mapping_dialog(state: &mut AppState, instrument: u8, effect: usize) {
+    let Some(settings) = state.project().instruments[instrument as usize]
+        .effects
+        .get(effect)
+        .cloned()
+    else {
+        return;
+    };
+    let params = effect_params(settings.kind);
+    let fields = params
+        .iter()
+        .enumerate()
+        .map(|(index, param)| {
+            let selected = settings.param_cc(index).map_or(0, |cc| cc as usize + 1);
+            Select::new(param.name, cc_options(state))
+                .label(param.name)
+                .selected(selected)
+                .typed_from(1)
+                .boxed() as Box<dyn DialogComponent>
+        })
+        .collect();
+    let title = format!("{} {:X} CC mapping", settings.kind.name(), effect);
+    let dialog = Dialog::new(title, fields)
+        .close_on_esc()
+        .focus_first()
+        .on_update(move |state, fields| {
+            let changed = params
+                .iter()
+                .position(|param| param.name == fields.changed());
+            if let Some(index) = changed
+                && let Some(choice) = fields.choice(params[index].name)
+            {
+                let cc = choice.checked_sub(1).map(|cc| cc as u8);
+                state.set_effect_param_cc(instrument, effect, index, cc);
+            }
+            return Ok(());
+        });
+    state.open_dialog(dialog);
+}
+
+/// No CC, then every CC number, in hex or decimal as the config says.
+fn cc_options(state: &AppState) -> Vec<String> {
+    let ccs = (0..=CC_MAX).map(|cc| {
+        let number = match state.config.hex_values {
+            true => format!("{cc:02X}"),
+            false => format!("{cc:<3}"),
+        };
+        match cc_name(cc) {
+            Some(name) => format!("{number} {}", truncate(&name, CC_NAME_WIDTH)),
+            None => number.trim_end().to_owned(),
+        }
+    });
+    return std::iter::once("Off".to_owned()).chain(ccs).collect();
+}
+
+fn cc_label(cc: i32) -> String {
+    let name = cc_name(cc as u8).unwrap_or_default();
+    return truncate(&name, CC_NAME_WIDTH);
+}
+
+fn truncate(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().take(width - 1).collect();
+    return format!("{kept}{}", glyphs::pick("\u{2026}", "."));
+}
+
+fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
+    return match param.kind {
+        ParamKind::Number { min, max } => {
+            let digits = if max > 0xF { 2 } else { 1 };
+            let number = NumberBox::new(param.name, param.name, digits)
+                .show_range()
+                .range(min as i32, max as i32)
+                .value(value as i32);
+            labelled(number, param.label).boxed()
+        }
+        ParamKind::SignedNumber { min, max } => {
+            let digits = if min.unsigned_abs().max(max.unsigned_abs()) > 0xF {
+                2
+            } else {
+                1
+            };
+            let number = NumberBox::new(param.name, param.name, digits)
+                .show_range()
+                .range(min as i32, max as i32)
+                .value(value as i8 as i32);
+            labelled(number, param.label).boxed()
+        }
+        ParamKind::Toggle => Checkbox::new(param.name, param.name)
+            .checked(value != 0)
+            .boxed(),
+        ParamKind::Choice(names) => Select::new(param.name, names.to_vec())
+            .label(param.name)
+            .selected(value as usize)
+            .boxed(),
+        ParamKind::Cc => NumberBox::new(param.name, param.name, 2)
+            .show_range()
+            .range(0, CC_MAX as i32)
+            .value(value as i32)
+            .value_label(cc_label)
+            .boxed(),
+        ParamKind::Pitch => {
+            let pitches = (0..=PITCH_MAX).map(|pitch| NotePitch(pitch).to_string());
+            Select::new(param.name, pitches.collect())
+                .label(param.name)
+                .selected(value as usize)
+                .boxed()
+        }
+    };
+}
+
+fn labelled(number: NumberBox, label: ValueLabel) -> NumberBox {
+    if label == ValueLabel::None {
+        return number;
+    }
+    return number.value_label(move |value| label.text(value));
+}
+
+fn param_value(param: &Param, result: &DialogResult) -> Option<u8> {
+    return match param.kind {
+        ParamKind::Number { .. } | ParamKind::Cc => result.number(param.name).map(|n| n as u8),
+        ParamKind::SignedNumber { .. } => result.number(param.name).map(|n| n as i8 as u8),
+        ParamKind::Toggle => result.bool(param.name).map(|on| on as u8),
+        ParamKind::Choice(_) | ParamKind::Pitch => result.choice(param.name).map(|i| i as u8),
+    };
 }
 
 fn apply_globals(state: &mut AppState, result: &DialogResult) {
@@ -319,5 +587,219 @@ fn apply_globals(state: &mut AppState, result: &DialogResult) {
     }
     if let Some(transpose) = result.number("transpose") {
         state.set_transpose(transpose as i8);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+    use super::*;
+    use crate::{
+        data::project::Project,
+        tui::{
+            framework::{dialog::DialogValue, widget::MtrakWidget},
+            theme::Theme,
+        },
+    };
+
+    /// The values `param_value` reads from a field made by `param_field` as `keys` are pressed.
+    fn edit(param: Param, value: u8, keys: &[KeyCode]) -> Vec<u8> {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut dialog = Dialog::new("", vec![param_field(&param, value)])
+            .focus_first()
+            .on_update({
+                let seen = seen.clone();
+                move |_, fields| {
+                    seen.borrow_mut().extend(param_value(&param, fields));
+                    return Ok(());
+                }
+            });
+        for key in keys {
+            let event = Event::Key(KeyEvent::new(*key, KeyModifiers::NONE));
+            dialog.handle_event(&mut state, &event);
+        }
+        return seen.take();
+    }
+
+    #[test]
+    fn signed_params_are_edited_as_signed_numbers() {
+        let param = Param {
+            name: "Step",
+            kind: ParamKind::SignedNumber { min: -12, max: 12 },
+            default: 0,
+            label: ValueLabel::None,
+        };
+        let keys = [KeyCode::Down, KeyCode::Up, KeyCode::Up];
+        assert_eq!(edit(param, -1i8 as u8, &keys), vec![0xFE, 0xFF, 0x00]);
+        assert!(edit(param, -12i8 as u8, &[KeyCode::Down]).is_empty());
+    }
+
+    #[test]
+    fn number_params_stay_in_their_range() {
+        let param = Param {
+            name: "Rate",
+            kind: ParamKind::Number { min: 1, max: 0xFF },
+            default: 6,
+            label: ValueLabel::None,
+        };
+        let keys = [KeyCode::Down, KeyCode::Down];
+        assert_eq!(edit(param, 2, &keys), vec![1]);
+        assert!(edit(param, 0xFF, &[KeyCode::Up]).is_empty());
+    }
+
+    #[test]
+    fn pitch_params_are_picked_by_note() {
+        let param = Param {
+            name: "Pitch",
+            kind: ParamKind::Pitch,
+            default: 60,
+            label: ValueLabel::None,
+        };
+        let field = param_field(&param, 60);
+        let Some((_, DialogValue::Choice(choice))) = field.value() else {
+            panic!("a pitch is a choice");
+        };
+        assert_eq!(choice, 60);
+    }
+
+    #[test]
+    fn every_effect_param_has_a_field_that_reads_back_its_default() {
+        for kind in EffectKind::iter() {
+            for param in effect_params(kind) {
+                let field = param_field(param, param.default);
+                let (id, value) = field.value().unwrap();
+                assert_eq!(id, param.name);
+                let read = match (param.kind, value) {
+                    (ParamKind::SignedNumber { .. }, DialogValue::Number(n)) => n as i8 as u8,
+                    (_, DialogValue::Number(n)) => n as u8,
+                    (_, DialogValue::Choice(i)) => i as u8,
+                    (_, DialogValue::Bool(b)) => b as u8,
+                    (_, value) => panic!("{} has an unexpected field: {value:?}", param.name),
+                };
+                assert_eq!(read, param.default, "{} {}", kind.name(), param.name);
+            }
+        }
+    }
+
+    #[test]
+    fn cc_options_name_each_cc_and_cut_long_names() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let options = cc_options(&state);
+        assert_eq!(options.len(), CC_MAX as usize + 2);
+        assert_eq!(options[0], "Off");
+        assert_eq!(options[2], "01 Mod wheel");
+        assert_eq!(options[4], "03");
+        assert_eq!(
+            options[0x55],
+            format!("54 Portamento cont{}", glyphs::pick("\u{2026}", "."))
+        );
+        state.config.hex_values = false;
+        let options = cc_options(&state);
+        assert_eq!(options[2], "1   Mod wheel");
+        assert_eq!(options[75], "74  Cutoff");
+        assert_eq!(options[4], "3");
+    }
+
+    /// How a field draws with values in hex or decimal and ranges on or off.
+    fn rendered(field: &mut Box<dyn DialogComponent>, hex: bool, ranges: bool) -> String {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        state.config.hex_values = hex;
+        state.config.show_value_ranges = ranges;
+        let area = ratatui::layout::Rect::new(0, 0, 60, 1);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        field.render(&state, area, &mut buf);
+        let line: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+        return line.trim_end().to_owned();
+    }
+
+    #[test]
+    fn labelled_params_follow_the_hex_and_range_settings() {
+        let feedback = effect_params(EffectKind::Echo)[1];
+        let mut field = param_field(&feedback, 0x80);
+        let all = [
+            (true, true, "80", "(00-FF)"),
+            (true, false, "80", ""),
+            (false, true, "128", "(0-255)"),
+            (false, false, "128", ""),
+        ];
+        for (hex, ranges, value, range) in all {
+            let line = rendered(&mut field, hex, ranges);
+            assert!(line.contains(value) && line.ends_with("50%"), "{line:?}");
+            assert_eq!(
+                line.contains(range) && !range.is_empty(),
+                ranges,
+                "{line:?}"
+            );
+        }
+        let step = effect_params(EffectKind::Arp)[0];
+        let mut field = param_field(&step, -12i8 as u8);
+        for (hex, ranges, value) in [(true, true, "-0C"), (false, false, "-012")] {
+            let line = rendered(&mut field, hex, ranges);
+            assert!(line.contains(value) && line.ends_with("-oct"), "{line:?}");
+        }
+        let cc = effect_params(EffectKind::Lfo)[5];
+        let mut field = param_field(&cc, 74);
+        assert!(rendered(&mut field, true, true).ends_with("4A ↕ Cutoff"));
+        assert!(rendered(&mut field, false, false).ends_with("74 ↕ Cutoff"));
+    }
+
+    #[test]
+    fn cc_params_are_numbers_named_after_the_cc() {
+        assert_eq!(cc_label(1), "Mod wheel");
+        assert_eq!(cc_label(3), "");
+        let param = Param {
+            name: "CC",
+            kind: ParamKind::Cc,
+            default: 1,
+            label: ValueLabel::None,
+        };
+        assert_eq!(edit(param, 0x7E, &[KeyCode::Up, KeyCode::Up]), vec![0x7F]);
+    }
+
+    #[test]
+    fn cc_mapping_sets_and_clears_a_params_cc() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let instrument = state.active_instrument;
+        state.add_effect(instrument, EffectKind::Echo);
+        open_cc_mapping_dialog(&mut state, instrument, 0);
+        let mut dialog = state.take_pending_dialogs().remove(0);
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        let mut type_keys = |dialog: &mut Dialog, codes: &[KeyCode]| {
+            for code in codes {
+                dialog.handle_event(&mut state, &press(*code));
+            }
+            return state.project().instruments[instrument as usize].effects[0].param_cc(0);
+        };
+        assert_eq!(type_keys(&mut dialog, &[KeyCode::Down]), Some(0));
+        assert_eq!(type_keys(&mut dialog, &[KeyCode::Down]), Some(1));
+        assert_eq!(type_keys(&mut dialog, &[KeyCode::Up, KeyCode::Up]), None);
+    }
+
+    #[test]
+    fn dialogs_with_live_changes_close_with_esc_or_enter() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        for open in [open_instrument_dialog, open_global_dialog] {
+            open(&mut state);
+        }
+        let instrument = state.active_instrument;
+        open_effects_dialog(&mut state);
+        state.add_effect(instrument, EffectKind::Arp);
+        open_effect_dialog(&mut state, instrument, 0);
+        open_cc_mapping_dialog(&mut state, instrument, 0);
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        let dialogs = state.take_pending_dialogs();
+        assert_eq!(dialogs.len(), 5);
+        for (code, mut dialog) in [KeyCode::Esc, KeyCode::Enter]
+            .into_iter()
+            .cycle()
+            .zip(dialogs)
+        {
+            dialog.handle_event(&mut state, &press(code));
+            assert!(dialog.is_closed(), "{code:?}");
+        }
     }
 }

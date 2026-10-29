@@ -1,4 +1,4 @@
-use std::iter::{self, repeat_n};
+use std::iter::repeat_n;
 
 use ratatui::{
     buffer::Buffer,
@@ -12,8 +12,8 @@ use ratatui::{
 
 use crate::{
     data::{
+        commands::Command,
         config::LineNumbers,
-        effect::Command,
         midi::{MIDI_CHANNEL_MAX, VELOCITY_MAX, VOLUME_MAX},
         note::{Note, NoteKind, NotePitch},
         pattern::{self, ClearOption, ClearTarget, PatternId},
@@ -96,7 +96,10 @@ pub enum TimelineAction {
     /// Clears the volume when the cursor is on the volume column, otherwise the note.
     DeleteAtCursor,
     DeleteAll,
+    /// Clears the volume and command. Named after the old name of the command column, as
+    /// action names are the ids in keybinds.toml.
     DeleteVolumeAndEffect,
+    /// Clears the command, see `DeleteVolumeAndEffect` for the name.
     DeleteEffect,
     /// Removes the event above the cursor, pulling the rest of the track up.
     DeletePreviousNote,
@@ -417,9 +420,7 @@ fn middle_line(height: u16) -> usize {
 /// which keeps the highlight fixed while the rows scroll past it.
 fn scrolled_to_middle<'a>(lines: Vec<Line<'a>>, selected: u8, height: u16) -> Paragraph<'a> {
     let middle = middle_line(height);
-    let padded: Vec<Line> = iter::repeat_n(Line::default(), middle)
-        .chain(lines)
-        .collect();
+    let padded: Vec<Line> = repeat_n(Line::default(), middle).chain(lines).collect();
     return Paragraph::new(padded).scroll((selected as u16, 0));
 }
 #[derive(PartialEq)]
@@ -427,7 +428,7 @@ enum TimelineColumnLocation {
     Note,
     Instrument,
     Volume,
-    Effect,
+    Command,
 }
 impl TimelineColumnLocation {
     pub fn from_column_index(index: u8) -> Self {
@@ -435,7 +436,7 @@ impl TimelineColumnLocation {
             0 => TimelineColumnLocation::Note,
             1 => TimelineColumnLocation::Instrument,
             2 | 3 => TimelineColumnLocation::Volume,
-            4..=6 => TimelineColumnLocation::Effect,
+            4..=6 => TimelineColumnLocation::Command,
             _ => panic!(),
         }
     }
@@ -556,7 +557,7 @@ impl TimeLineView {
                         .engine
                         .release_pitch(self.track_index as usize, NotePitch::new(note));
                 }
-                _ => {}
+                message => state.play_thru(message),
             }
         }
     }
@@ -808,9 +809,9 @@ impl KeyActions for TimeLineView {
             JumpToMarker(_) => "Jump to row 00/10/20/30",
             NoteOff => "Note off",
             DeleteAtCursor => "Clear the note, or the volume on the volume column",
-            DeleteAll => "Clear note, volume and effect",
-            DeleteVolumeAndEffect => "Clear volume and effect",
-            DeleteEffect => "Clear effect",
+            DeleteAll => "Clear note, volume and command",
+            DeleteVolumeAndEffect => "Clear volume and command",
+            DeleteEffect => "Clear command",
             DeletePreviousNote => "Delete the note above, pulling the track up",
             DeletePreviousLine => "Delete the row above, pulling every track up",
             InsertNote => "Insert an empty note, pushing the track down",
@@ -1001,7 +1002,7 @@ impl TimeLineView {
                 let low = column_index_to_note_string_index(3).unwrap();
                 self.enter_volume(state, [chars[high], chars[low]])
             }
-            TimelineColumnLocation::Effect => {
+            TimelineColumnLocation::Command => {
                 let kind = column_index_to_note_string_index(4).unwrap();
                 let val_high = column_index_to_note_string_index(5).unwrap();
                 let val_low = column_index_to_note_string_index(6).unwrap();
@@ -1243,11 +1244,7 @@ impl MtrakWidget for TimeLineView {
         }
         self.row_index = row as u8;
     }
-    fn handle_event(
-        &mut self,
-        state: &mut AppState,
-        event: &ratatui::crossterm::event::Event,
-    ) -> bool {
+    fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
         if self.dispatch(state, event) {
             return true;
         }
@@ -1325,12 +1322,7 @@ impl MtrakWidget for TimeLineView {
         }
     }
 
-    fn render(
-        &mut self,
-        state: &AppState,
-        area: ratatui::prelude::Rect,
-        buf: &mut ratatui::prelude::Buffer,
-    ) {
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
         let pattern_store = &state.project().patterns;
         let pattern = pattern_store
             .get_pattern_by_id(state.active_pattern)

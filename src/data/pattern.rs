@@ -399,7 +399,7 @@ impl PatternStore {
 mod tests {
     use super::*;
     use crate::data::{
-        effect::{Command, CommandKind},
+        commands::{Command, CommandKind},
         note::{NoteKind, NotePitch},
     };
 

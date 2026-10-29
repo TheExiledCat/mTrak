@@ -2,8 +2,8 @@ use std::fmt::{self, Display};
 
 use crate::{
     data::{
-        effect::{Command, CommandKind},
-        midi::{MIDI_CHANNEL_MAX, VOLUME_MAX},
+        commands::{Command, CommandKind},
+        midi::{MIDI_CHANNEL_MAX, PITCH_MAX, VOLUME_MAX},
         pattern::invalid_pattern,
     },
     error::Result,
@@ -182,6 +182,8 @@ impl Display for Note {
     }
 }
 
+pub const SEMITONES_PER_OCTAVE: u8 = 12;
+
 /// A MIDI pitch, displayed in scientific notation where C-4 is middle C (60).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NotePitch(pub u8);
@@ -193,14 +195,14 @@ impl NotePitch {
 
     /// C-0; lower pitches would need octave -1, which doesn't fit the note column.
     pub const MIN: u8 = 12;
-    pub const MAX: u8 = 127;
+    pub const MAX: u8 = PITCH_MAX;
 }
 
 impl Display for NotePitch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let note = self.0;
-        let pitch_class = note as usize % 12;
-        let octave = (note as i32 / 12) - 1;
+        let pitch_class = (note % SEMITONES_PER_OCTAVE) as usize;
+        let octave = (note / SEMITONES_PER_OCTAVE) as i32 - 1;
         let note_name = constants::NOTE_NAMES[pitch_class];
         return write!(f, "{}{}", note_name, octave);
     }

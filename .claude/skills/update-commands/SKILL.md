@@ -13,14 +13,15 @@ haven't confirmed in it.
 
 Read these before touching the doc:
 
-- `src/data/effect.rs`: the command letters (`MIDI_COMMAND_LOOKUP`, plus any effect command
-  lookup), the `MidiCommand` and `EffectCommand` enums and their comments, and
+- `src/data/commands.rs`: the command letters (`MIDI_COMMAND_LOOKUP` and
+  `PLAYBACK_COMMAND_LOOKUP`), the `MidiCommand` and `PlaybackCommand` enums and their comments,
+  what `PlaybackCommand::decode` turns each value into (`PlaybackAction`), and
   `Command::from_str` / `Display` for the syntax (letter + two hex digits, `0` for none).
 - `src/engine/command_handler.rs`: what each command does in `handle_command`, what runs per
   tick in `tick`, what `reset` clears, and value scaling (e.g. `cc_value`).
 - `src/engine/engine.rs`: how commands are fed from the pattern: `play_row` (order, muting,
   volume `00` rows), `command_context` / lookahead such as `find_slide_target`,
-  `effect_tick`, and where handlers are reset (`start` / `stop`).
+  `command_tick`, and where handlers are reset (`start` / `stop`).
 - `src/tui/constants.rs` (`EMPTY_NOTE`) for the cell layout, and `enter_command` in
   `src/tui/app.rs` for what entering a command does to the cell.
 - `docs/COMMANDS.md` itself.
@@ -38,7 +39,7 @@ the shared sections: cell layout, value scaling table, muting, playback reset.
   implemented and say what happens if used (a `todo!()` in the engine stops playback).
 - When a command becomes implemented, replace that warning with a real section.
 - Keep each command's section in the order of the lookup table, grouped under its kind
-  (MIDI commands, effect commands).
+  (MIDI commands, playback commands).
 
 ## 3. Style
 

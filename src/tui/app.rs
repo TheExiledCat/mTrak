@@ -9,8 +9,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use midi::Message::{self};
+use midi::{Channel, Message};
 use midir::{MidiInput, MidiInputConnection, MidiInputPort, MidiOutput, MidiOutputPort};
+use num::FromPrimitive;
 use ratatui::{
     DefaultTerminal,
     crossterm::event::{self, Event, KeyCode, KeyCode::Char, KeyEvent, KeyEventKind},
@@ -18,25 +19,29 @@ use ratatui::{
     widgets::Padding,
 };
 
-use super::constants;
 use crate::{
     data::{
+        commands::CommandKind,
         config::{Config, TITLE},
-        effect::CommandKind,
+        effect::EffectKind,
         midi::{
-            MAX_SPEED, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX, bytes_to_message,
+            CC_MAX, MAX_SPEED, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX,
+            bytes_to_message, non_note_on_channel,
         },
         note::{Note, NoteKind, NotePitch},
         pattern::{self, Block, ClearOption, ClearTarget, Pattern, PatternId, PatternRow},
         project::{Project, SequenceRow},
     },
     engine::{
+        effects::{create_chain, default_settings, effect_params, set_saved_param},
         engine::PlayMode,
         handle::{ClockSource, EngineCommand, EngineHandle},
     },
     error::{MTrakError, Result},
     tui::{
+        constants,
         copy_buffers::CopyBuffers,
+        files,
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, InfoLevel},
@@ -145,8 +150,11 @@ impl App {
             } else {
                 self.root.render(&self.state, area, buf);
             }
-            for dialog in &mut self.dialogs {
-                dialog.render(&self.state, area, buf);
+            if let Some((top, covered)) = self.dialogs.split_last_mut() {
+                for dialog in covered {
+                    dialog.render_covered(&self.state, area, buf);
+                }
+                top.render(&self.state, area, buf);
             }
             if glyphs::ascii_mode() {
                 glyphs::asciify(f.buffer_mut());
@@ -212,7 +220,7 @@ impl App {
 
     fn sync_dialogs(&mut self) {
         self.dialogs.retain(|d| !d.is_closed());
-        self.dialogs.append(&mut self.state.pending_dialogs);
+        self.dialogs.extend(self.state.take_pending_dialogs());
         for error in self.state.errors.drain(..) {
             self.dialogs.push(Dialog::popup(
                 InfoLevel::Warning,
@@ -539,6 +547,9 @@ impl AppState {
                 .engine
                 .set_channel_transpose(channel as u8, instrument.transpose);
         }
+        for channel in 0..state.project.instruments.len() {
+            state.send_effect_chain(channel as u8);
+        }
         state.engine.set_transpose(state.project.transpose);
         state.engine.set_bpm(state.project.bpm);
         state.engine.set_speed(state.project.speed);
@@ -658,6 +669,28 @@ impl AppState {
     pub fn set_midi_velocity_record(&mut self, enabled: bool) {
         self.project_mut().record_input_velocity = enabled;
     }
+    /// Turns soft thru on or off, for this session and in config.toml.
+    pub fn set_soft_thru(&mut self, enabled: bool) -> Result<()> {
+        if self.config.soft_thru == enabled {
+            return Ok(());
+        }
+        self.config.soft_thru = enabled;
+        let path = files::get_config_file_path()?;
+        let mut saved = Config::load(&path)?;
+        saved.soft_thru = enabled;
+        return saved.save(&path);
+    }
+    /// Sends a CC, bend, aftertouch or program change from the MIDI input to the active
+    /// instrument, while soft thru is on.
+    pub fn play_thru(&self, message: Message) {
+        if !self.config.soft_thru {
+            return;
+        }
+        let channel = Channel::from_u8(self.active_instrument).unwrap();
+        if let Some(message) = non_note_on_channel(message, channel) {
+            self.engine.send_event(MidiEvent::Message(message));
+        }
+    }
     pub fn get_midi_in_port_names(&self) -> Vec<String> {
         let Some(client) = &self.midi_in_client else {
             return vec![];
@@ -681,13 +714,6 @@ impl AppState {
 
     pub fn project(&self) -> &Project {
         return &self.project;
-    }
-    pub fn has_changes(&self) -> bool {
-        return self.has_changes;
-    }
-    /// For dialogs that preview changes and undo them on cancel.
-    pub fn restore_has_changes(&mut self, has_changes: bool) {
-        self.has_changes = has_changes;
     }
     pub fn project_mut(&mut self) -> &mut Project {
         self.has_changes = true;
@@ -802,6 +828,10 @@ impl AppState {
     }
     pub fn open_dialog(&mut self, dialog: Dialog) {
         self.pending_dialogs.push(dialog);
+    }
+    /// The dialogs opened since the last call, in the order they were opened.
+    pub fn take_pending_dialogs(&mut self) -> Vec<Dialog> {
+        return std::mem::take(&mut self.pending_dialogs);
     }
     pub fn notify(&mut self, notification: impl Into<String>) {
         self.notification = Some(notification.into());
@@ -970,12 +1000,7 @@ impl AppState {
     pub fn set_octave(&mut self, octave: u8) {
         self.current_octave = octave.clamp(0, 7);
     }
-    pub fn enter_key(
-        &mut self,
-        track: usize,
-        row: usize,
-        key: event::KeyEvent,
-    ) -> Option<NotePitch> {
+    pub fn enter_key(&mut self, track: usize, row: usize, key: KeyEvent) -> Option<NotePitch> {
         let pitch = self.play_key(track, key)?;
         let instrument = self.active_instrument;
         self.enter_note(instrument, track, row, pitch, None);
@@ -995,7 +1020,7 @@ impl AppState {
             note.velocity = vel.or(note.velocity);
         });
     }
-    pub fn play_key(&self, track: usize, key: event::KeyEvent) -> Option<NotePitch> {
+    pub fn play_key(&self, track: usize, key: KeyEvent) -> Option<NotePitch> {
         if !key.modifiers.is_empty() {
             return None;
         }
@@ -1052,7 +1077,7 @@ impl AppState {
         &mut self,
         track_index: usize,
         row_index: usize,
-        command: crate::data::effect::Command,
+        command: crate::data::commands::Command,
     ) {
         let instrument = self.active_instrument;
         self.edit_event(row_index, track_index, |note| {
@@ -1096,6 +1121,85 @@ impl AppState {
         self.project_mut().instruments[channel as usize].pitch_wheel_range = range;
         self.engine.set_bend_range(channel, range);
     }
+    pub fn add_effect(&mut self, channel: u8, kind: EffectKind) {
+        let settings = default_settings(kind);
+        self.project_mut().instruments[channel as usize]
+            .effects
+            .push(settings.clone());
+        self.engine.add_effect(channel, settings);
+    }
+    pub fn remove_effect(&mut self, channel: u8, effect: usize) {
+        if effect >= self.project.instruments[channel as usize].effects.len() {
+            return;
+        }
+        self.project_mut().instruments[channel as usize]
+            .effects
+            .remove(effect);
+        self.engine.remove_effect(channel, effect);
+    }
+    pub fn move_effect(&mut self, channel: u8, from: usize, to: usize) {
+        let count = self.project.instruments[channel as usize].effects.len();
+        if from >= count || to >= count || from == to {
+            return;
+        }
+        let effects = &mut self.project_mut().instruments[channel as usize].effects;
+        let settings = effects.remove(from);
+        effects.insert(to, settings);
+        self.engine.move_effect(channel, from, to);
+    }
+    pub fn set_effect_enabled(&mut self, channel: u8, effect: usize, enabled: bool) {
+        let Some(settings) = self.project.instruments[channel as usize]
+            .effects
+            .get(effect)
+        else {
+            return;
+        };
+        if settings.enabled == enabled {
+            return;
+        }
+        self.project_mut().instruments[channel as usize].effects[effect].enabled = enabled;
+        self.engine.set_effect_enabled(channel, effect, enabled);
+    }
+    /// Changes one parameter of an effect without rebuilding the chain, so the effect keeps
+    /// what it's playing.
+    pub fn set_effect_param(&mut self, channel: u8, effect: usize, param: usize, value: u8) {
+        let Some(settings) = self.project.instruments[channel as usize]
+            .effects
+            .get(effect)
+        else {
+            return;
+        };
+        let mut settings = settings.clone();
+        let Some(value) = set_saved_param(&mut settings, param, value) else {
+            return;
+        };
+        self.project_mut().instruments[channel as usize].effects[effect] = settings;
+        self.engine.set_effect_param(channel, effect, param, value);
+    }
+    pub fn set_effect_param_cc(
+        &mut self,
+        channel: u8,
+        effect: usize,
+        param: usize,
+        cc: Option<u8>,
+    ) {
+        let Some(settings) = self.project.instruments[channel as usize]
+            .effects
+            .get(effect)
+        else {
+            return;
+        };
+        if param >= effect_params(settings.kind).len() || settings.param_cc(param) == cc {
+            return;
+        }
+        let cc = cc.map(|cc| cc.min(CC_MAX));
+        let ccs = &mut self.project_mut().instruments[channel as usize].effects[effect].param_ccs;
+        if ccs.len() <= param {
+            ccs.resize(param + 1, None);
+        }
+        ccs[param] = cc;
+        self.engine.set_effect_param_cc(channel, effect, param, cc);
+    }
     pub fn is_saved(&self) -> bool {
         return !self.has_changes && self.saved_position == self.undo_stack.position();
     }
@@ -1127,6 +1231,10 @@ impl AppState {
             .find(|p| client.port_name(p).is_ok_and(|n| n == name));
     }
 
+    fn send_effect_chain(&self, channel: u8) {
+        let effects = &self.project.instruments[channel as usize].effects;
+        self.engine.set_effect_chain(channel, create_chain(effects));
+    }
     fn restore_midi_input(&mut self) {
         let Some(name) = self.project.midi_input.clone() else {
             return;
@@ -1437,6 +1545,100 @@ impl TrackCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn effect_state() -> AppState {
+        return AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+    }
+
+    fn effect_kinds(state: &AppState) -> Vec<EffectKind> {
+        return state.project().instruments[1]
+            .effects
+            .iter()
+            .map(|settings| settings.kind)
+            .collect();
+    }
+
+    #[test]
+    fn effects_are_added_moved_and_removed() {
+        let mut state = effect_state();
+        state.add_effect(1, EffectKind::Eq);
+        state.add_effect(1, EffectKind::Arp);
+        state.add_effect(1, EffectKind::Harmonize);
+        assert!(state.project().instruments[0].effects.is_empty());
+        state.move_effect(1, 2, 0);
+        assert_eq!(
+            effect_kinds(&state),
+            vec![EffectKind::Harmonize, EffectKind::Eq, EffectKind::Arp]
+        );
+        state.move_effect(1, 0, 3);
+        state.remove_effect(1, 3);
+        state.remove_effect(1, 1);
+        assert_eq!(
+            effect_kinds(&state),
+            vec![EffectKind::Harmonize, EffectKind::Arp]
+        );
+    }
+
+    #[test]
+    fn effects_are_turned_off_and_on_keeping_their_settings() {
+        let mut state = effect_state();
+        state.add_effect(1, EffectKind::Arp);
+        state.set_effect_param(1, 0, 0, 7);
+        state.set_effect_enabled(1, 0, false);
+        let settings = &state.project().instruments[1].effects[0];
+        assert!(!settings.enabled);
+        assert_eq!(settings.values[0], 7);
+        state.set_effect_enabled(1, 0, true);
+        state.set_effect_enabled(1, 5, false);
+        assert!(state.project().instruments[1].effects[0].enabled);
+    }
+
+    #[test]
+    fn effect_params_are_saved_clamped() {
+        let mut state = effect_state();
+        state.add_effect(1, EffectKind::Arp);
+        state.set_effect_param(1, 0, 9, 0);
+        state.set_effect_param(1, 0, 99, 1);
+        state.set_effect_param(1, 4, 0, 1);
+        let settings = &state.project().instruments[1].effects[0];
+        assert_eq!(settings.values[9], 1, "the rate is at least 1");
+        assert_eq!(settings.values.len(), 11);
+        assert!(state.has_changes);
+    }
+
+    #[test]
+    fn soft_thru_plays_the_mod_wheel_on_the_active_instrument() {
+        let mut state = effect_state();
+        state.active_instrument = 3;
+        state.play_thru(Message::ControlChange(Channel::Ch1, 1, 64));
+        state.config.soft_thru = true;
+        state.play_thru(Message::ControlChange(Channel::Ch1, 1, 100));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut seen = vec![];
+        while seen.is_empty() && Instant::now() < deadline {
+            seen.extend(
+                state
+                    .engine
+                    .drain_events()
+                    .flat_map(MidiEvent::into_messages),
+            );
+        }
+        assert_eq!(seen, vec![Message::ControlChange(Channel::Ch4, 1, 100)]);
+    }
+
+    #[test]
+    fn effect_params_follow_ccs() {
+        let mut state = effect_state();
+        state.add_effect(1, EffectKind::Echo);
+        state.set_effect_param_cc(1, 0, 1, Some(0x4A));
+        state.set_effect_param_cc(1, 0, 9, Some(0x10));
+        state.set_effect_param_cc(1, 3, 0, Some(0x10));
+        let settings = &state.project().instruments[1].effects[0];
+        assert_eq!(settings.param_ccs, vec![None, Some(0x4A)]);
+        state.set_effect_param_cc(1, 0, 1, None);
+        assert_eq!(state.project().instruments[1].effects[0].param_cc(1), None);
+        assert!(state.has_changes);
+    }
 
     #[test]
     fn every_column_maps_into_the_note_string() {

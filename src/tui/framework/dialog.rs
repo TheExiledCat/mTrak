@@ -10,6 +10,7 @@ use ratatui::{
 };
 
 use crate::{
+    data::config::Config,
     error::Result,
     tui::{
         app::AppState,
@@ -24,8 +25,10 @@ use crate::{
 };
 
 mod color_picker;
+mod list;
 
 pub use color_picker::ColorPicker;
+pub use list::{List, ListEvent};
 
 /// The value a single input component contributes to a `DialogResult`.
 #[derive(Clone, Debug, PartialEq)]
@@ -38,6 +41,11 @@ pub enum DialogValue {
     /// The last button pressed in a row of buttons, and how many presses there have been.
     Press {
         button: usize,
+        count: u32,
+    },
+    /// What was last done in a list, and how many times something has been.
+    List {
+        event: Option<ListEvent>,
         count: u32,
     },
 }
@@ -89,6 +97,13 @@ impl DialogResult {
         };
     }
 
+    pub fn list_event(&self, id: &str) -> Option<ListEvent> {
+        return match self.values.get(id) {
+            Some(DialogValue::List { event, count }) if *count > 0 => *event,
+            _ => None,
+        };
+    }
+
     pub fn color(&self, id: &str) -> Option<Color> {
         return match self.values.get(id) {
             Some(DialogValue::Color(c)) => Some(*c),
@@ -136,6 +151,7 @@ impl Deref for DialogFields<'_> {
     }
 }
 
+#[allow(unused_variables)]
 pub trait DialogComponent: MtrakWidget {
     fn get_height(&self) -> u8 {
         return 1;
@@ -156,22 +172,22 @@ pub trait DialogComponent: MtrakWidget {
     fn focusable(&self) -> bool {
         return false;
     }
-    fn set_focused(&mut self, _focused: bool) {}
+    fn set_focused(&mut self, focused: bool) {}
     /// How many fields Tab moves through inside this component before going on to the next
     /// one; 0 for a component that is a single field.
     fn subcomponents(&self) -> usize {
         return 0;
     }
     /// Focuses one of the fields counted by `subcomponents`, while the component has focus.
-    fn focus_subcomponent(&mut self, _index: usize) {}
+    fn focus_subcomponent(&mut self, index: usize) {}
     /// Draws on top of the whole dialog, e.g. an open dropdown list.
-    fn render_overlay(&mut self, _state: &AppState, _bounds: Rect, _buf: &mut Buffer) {}
+    fn render_overlay(&mut self, state: &AppState, bounds: Rect, buf: &mut Buffer) {}
     /// The id and current value of an input component; `None` for static content.
     fn value(&self) -> Option<(&'static str, DialogValue)> {
         return None;
     }
     /// Replaces the value of an input component; values of the wrong kind are ignored.
-    fn set_value(&mut self, _value: DialogValue) {}
+    fn set_value(&mut self, value: DialogValue) {}
 }
 
 type OnSubmit = Box<dyn FnOnce(&mut AppState, DialogResult) -> Result<()>>;
@@ -188,6 +204,14 @@ pub enum DialogAction {
 
 impl Action for DialogAction {}
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OnEsc {
+    Cancel,
+    Nothing,
+    /// Closes it like Enter, for a dialog whose changes are made as they happen.
+    Close,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum InfoLevel {
     Info,
@@ -203,7 +227,7 @@ pub struct Dialog {
     title: String,
     width: u16,
     level: InfoLevel,
-    is_cancellable: bool,
+    on_esc: OnEsc,
     components: Vec<Box<dyn DialogComponent>>,
     focus: Option<usize>,
     /// The focused field inside the focused component, for one with subcomponents.
@@ -212,6 +236,8 @@ pub struct Dialog {
     on_cancel: Option<OnCancel>,
     on_update: Option<OnUpdate>,
     closed: bool,
+    /// Draws only the frame and title while another dialog is open on top.
+    hides_behind_child: bool,
     keys: Keymap<DialogAction>,
     footer: Footer,
 }
@@ -222,7 +248,7 @@ impl Dialog {
             title: title.into(),
             width: 50,
             level: InfoLevel::Info,
-            is_cancellable: true,
+            on_esc: OnEsc::Cancel,
             components,
             focus: None,
             sub_focus: 0,
@@ -230,6 +256,7 @@ impl Dialog {
             on_cancel: None,
             on_update: None,
             closed: false,
+            hides_behind_child: false,
             footer: Footer::new(),
             keys: Keymap::new("dialog")
                 .bind(Key::plain(KeyCode::Enter), DialogAction::Submit, "OK")
@@ -275,6 +302,21 @@ impl Dialog {
         self.width = width;
         return self;
     }
+    /// While a dialog opened from this one is on top, draws only this one's frame and title,
+    /// so the two don't run into each other.
+    pub fn hide_behind_child(mut self) -> Self {
+        self.hides_behind_child = true;
+        return self;
+    }
+
+    /// Draws the dialog while another one is open on top of it.
+    pub fn render_covered(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
+        if self.hides_behind_child {
+            self.render_frame(state, area, buf);
+        } else {
+            self.render(state, area, buf);
+        }
+    }
 
     /// Opens with the first focusable component focused.
     pub fn focus_first(mut self) -> Self {
@@ -285,7 +327,17 @@ impl Dialog {
     }
 
     pub fn cancellable(mut self, is_cancellable: bool) -> Self {
-        self.is_cancellable = is_cancellable;
+        self.on_esc = match is_cancellable {
+            true => OnEsc::Cancel,
+            false => OnEsc::Nothing,
+        };
+        return self;
+    }
+
+    /// Has Esc close the dialog like Enter, running `on_submit`, for a dialog whose changes
+    /// are made as they happen so there's nothing to cancel.
+    pub fn close_on_esc(mut self) -> Self {
+        self.on_esc = OnEsc::Close;
         return self;
     }
 
@@ -327,9 +379,10 @@ impl Dialog {
                 .entries(checkbox.keys.help_entries(Checkbox::describe))
                 .entries(buttons.keys.help_entries(Buttons::describe))
                 .entries(number.keys.help_entries(NumberBox::describe))
+                .entries(List::help_entries())
                 .entry(
                     "0-9 / A-F",
-                    "Pick the dropdown option at that index, from 0",
+                    "Pick the dropdown option at that number, from 0",
                 )
                 .entry("Bksp", "Delete the last character of a text field"),
         );
@@ -442,6 +495,34 @@ impl Dialog {
     fn content_height(&self) -> u16 {
         return self.components.iter().map(|c| c.get_height() as u16).sum();
     }
+
+    /// Clears the dialog's area and draws its border and title, returning the area inside.
+    fn render_frame(&self, state: &AppState, area: Rect, buf: &mut Buffer) -> Rect {
+        let block = Block::bordered()
+            .title(format!(" {} ", self.title))
+            .border_style(match self.level {
+                InfoLevel::Info => state.theme.border,
+                InfoLevel::Success => state.theme.border_success,
+                InfoLevel::Warning => state.theme.border_warning,
+                InfoLevel::Error => state.theme.border_danger,
+            })
+            .padding(Padding::horizontal(1));
+
+        // borders + content + spacer + hint line
+        let width = self.width.min(area.width);
+        let height = (self.content_height() + 4).min(area.height);
+        let popup = Rect {
+            x: area.x + (area.width - width) / 2,
+            y: area.y + (area.height - height) / 2,
+            width,
+            height,
+        };
+        Clear.render(popup, buf);
+        buf.set_style(popup, state.theme.background);
+        let inner = block.inner(popup);
+        block.render(popup, buf);
+        return inner;
+    }
 }
 
 impl KeyActions for Dialog {
@@ -454,8 +535,11 @@ impl KeyActions for Dialog {
     fn perform(&mut self, action: DialogAction, state: &mut AppState) -> Result<()> {
         match action {
             DialogAction::Submit => self.submit(state)?,
-            DialogAction::Cancel if self.is_cancellable => self.cancel(state),
-            DialogAction::Cancel => {}
+            DialogAction::Cancel => match self.on_esc {
+                OnEsc::Cancel => self.cancel(state),
+                OnEsc::Nothing => {}
+                OnEsc::Close => self.submit(state)?,
+            },
             DialogAction::NextField => self.move_focus(true),
             DialogAction::PrevField => self.move_focus(false),
         }
@@ -465,7 +549,7 @@ impl KeyActions for Dialog {
     fn describe(action: DialogAction) -> &'static str {
         return match action {
             DialogAction::Submit => "Confirm",
-            DialogAction::Cancel => "Cancel",
+            DialogAction::Cancel => "Cancel, or close a dialog whose changes are already made",
             DialogAction::NextField => "Next field",
             DialogAction::PrevField => "Previous field",
         };
@@ -543,8 +627,15 @@ impl MtrakWidget for Dialog {
                 return position <= component_hints || !taken.contains(&h.key);
             });
         }
-        if !self.is_cancellable {
-            hints.retain(|h| h.label != "Cancel");
+        match self.on_esc {
+            OnEsc::Cancel => {}
+            OnEsc::Nothing => hints.retain(|h| h.label != "Cancel"),
+            OnEsc::Close => {
+                hints.retain(|h| h.label != "OK");
+                for hint in hints.iter_mut().filter(|h| h.label == "Cancel") {
+                    hint.label = "Close";
+                }
+            }
         }
         if !self.components.iter().any(|c| c.focusable()) {
             hints.retain(|h| h.label != "Field");
@@ -552,29 +643,7 @@ impl MtrakWidget for Dialog {
     }
 
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
-        let block = Block::bordered()
-            .title(format!(" {} ", self.title))
-            .border_style(match self.level {
-                InfoLevel::Info => state.theme.border,
-                InfoLevel::Success => state.theme.border_success,
-                InfoLevel::Warning => state.theme.border_warning,
-                InfoLevel::Error => state.theme.border_danger,
-            })
-            .padding(Padding::horizontal(1));
-
-        // borders + content + spacer + hint line
-        let width = self.width.min(area.width);
-        let height = (self.content_height() + 4).min(area.height);
-        let popup = Rect {
-            x: area.x + (area.width - width) / 2,
-            y: area.y + (area.height - height) / 2,
-            width,
-            height,
-        };
-        Clear.render(popup, buf);
-        buf.set_style(popup, state.theme.background);
-        let inner = block.inner(popup);
-        block.render(popup, buf);
+        let inner = self.render_frame(state, area, buf);
 
         let [content, _, hint_area] = Layout::vertical([
             Constraint::Fill(1),
@@ -843,21 +912,28 @@ impl DialogComponent for TextPrompt {
     }
 }
 
-/// A hex number input that Up and Down step within its range.
+/// A number input that Up and Down step within its range. It's in hex or decimal as the
+/// config's `hex_values` says, switching along with it.
 pub struct NumberBox {
     id: &'static str,
     label: String,
+    /// How many digits the value has in hex.
     digits: usize,
     min: i32,
     max: i32,
     negative: bool,
+    /// The digits of the value without its sign, in hex or decimal as `hex` says.
     text: String,
+    hex: bool,
+    show_range: bool,
+    value_label: Option<Box<dyn Fn(i32) -> String>>,
     focused: bool,
     keys: Keymap<NumberBoxAction>,
 }
 
-/// How far Left and Right move a number box with `steps`.
-const BIG_STEP: i32 = 0x10;
+/// How far Left and Right move a number box with `steps`, in hex and in decimal.
+const BIG_STEP_HEX: i32 = 0x10;
+const BIG_STEP_DECIMAL: i32 = 10;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NumberBoxAction {
@@ -880,6 +956,9 @@ impl NumberBox {
             max: (1 << (4 * digits)) - 1,
             negative: false,
             text: String::new(),
+            hex: true,
+            show_range: false,
+            value_label: None,
             focused: false,
             keys: Keymap::new("dialog")
                 .bind(Key::plain(KeyCode::Up), NumberBoxAction::Increment, "+/-")
@@ -902,6 +981,19 @@ impl NumberBox {
         return self;
     }
 
+    /// Shows the range after the label, e.g. `Volume (00-FF)`, in hex or decimal like the
+    /// value, while the config's `show_value_ranges` is on.
+    pub fn show_range(mut self) -> Self {
+        self.show_range = true;
+        return self;
+    }
+
+    /// Shows what the value stands for after it, e.g. a CC's name.
+    pub fn value_label(mut self, label: impl Fn(i32) -> String + 'static) -> Self {
+        self.value_label = Some(Box::new(label));
+        return self;
+    }
+
     /// Lets Left and Right move the value in bigger steps.
     pub fn steps(mut self) -> Self {
         self.keys = self
@@ -913,15 +1005,75 @@ impl NumberBox {
 
     /// The typed value, kept within the range.
     fn number(&self) -> i32 {
-        let magnitude = i32::from_str_radix(&self.text, 16).unwrap_or(0);
+        let magnitude = i32::from_str_radix(&self.text, self.radix()).unwrap_or(0);
         let value = if self.negative { -magnitude } else { magnitude };
         return value.clamp(self.min, self.max);
     }
 
     fn set(&mut self, value: i32) {
         let value = value.clamp(self.min, self.max);
+        let width = self.width();
         self.negative = value < 0;
-        self.text = format!("{:0width$X}", value.unsigned_abs(), width = self.digits);
+        self.text = match self.hex {
+            true => format!("{:0width$X}", value.unsigned_abs()),
+            false => format!("{:0width$}", value.unsigned_abs()),
+        };
+    }
+
+    fn radix(&self) -> u32 {
+        return if self.hex { 16 } else { 10 };
+    }
+
+    /// How many digits the value is shown with: as asked for in hex, and as many as the
+    /// range needs in decimal.
+    fn width(&self) -> usize {
+        if self.hex {
+            return self.digits;
+        }
+        let largest = self.min.unsigned_abs().max(self.max.unsigned_abs());
+        return largest.to_string().len();
+    }
+
+    /// Switches to hex or decimal if the config changed, keeping the value.
+    fn follow_config(&mut self, state: &AppState) {
+        if self.hex != state.config.hex_values {
+            let value = self.number();
+            self.hex = state.config.hex_values;
+            self.set(value);
+        }
+    }
+
+    /// `value` as the box shows it: signed if the range goes below 0, and in hex padded to
+    /// the box's digits or in decimal.
+    fn format(&self, value: i32) -> String {
+        let sign = match (value < 0, self.min < 0) {
+            (true, _) => "-",
+            (false, true) => "+",
+            (false, false) => "",
+        };
+        let magnitude = value.unsigned_abs();
+        return match self.hex {
+            true => format!("{sign}{magnitude:0width$X}", width = self.digits),
+            false => format!("{sign}{magnitude}"),
+        };
+    }
+
+    /// The label, with the range when `show_range` and the config's `show_value_ranges` are
+    /// on. A label that ends in brackets gets the range inside them.
+    fn label(&self, config: &Config) -> String {
+        if !self.show_range || !config.show_value_ranges {
+            return self.label.clone();
+        }
+        let separator = if self.min < 0 { " to " } else { "-" };
+        let range = format!(
+            "{}{separator}{}",
+            self.format(self.min),
+            self.format(self.max)
+        );
+        return match self.label.strip_suffix(')') {
+            Some(label) => format!("{label}, {range})"),
+            None => format!("{} ({range})", self.label),
+        };
     }
 
     /// Arrows showing which ways Up and Down can still move the value.
@@ -938,8 +1090,8 @@ impl NumberBox {
     /// Applies a typed key, returning whether it was one the box takes.
     fn type_key(&mut self, code: KeyCode) -> bool {
         match code {
-            KeyCode::Char(c) if c.is_ascii_hexdigit() => {
-                if self.text.len() >= self.digits {
+            KeyCode::Char(c) if c.is_digit(self.radix()) => {
+                if self.text.len() >= self.width() {
                     self.text.remove(0);
                 }
                 self.text.push(c.to_ascii_uppercase());
@@ -963,11 +1115,16 @@ impl KeyActions for NumberBox {
 
     fn perform(&mut self, action: NumberBoxAction, _state: &mut AppState) -> Result<()> {
         let value = self.number();
+        let big_step = if self.hex {
+            BIG_STEP_HEX
+        } else {
+            BIG_STEP_DECIMAL
+        };
         self.set(match action {
             NumberBoxAction::Increment => value.saturating_add(1),
             NumberBoxAction::Decrement => value.saturating_sub(1),
-            NumberBoxAction::StepUp => value.saturating_add(BIG_STEP),
-            NumberBoxAction::StepDown => value.saturating_sub(BIG_STEP),
+            NumberBoxAction::StepUp => value.saturating_add(big_step),
+            NumberBoxAction::StepDown => value.saturating_sub(big_step),
         });
         return Ok(());
     }
@@ -984,6 +1141,7 @@ impl KeyActions for NumberBox {
 
 impl MtrakWidget for NumberBox {
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
+        self.follow_config(state);
         if self.dispatch(state, event) {
             return true;
         }
@@ -1005,7 +1163,9 @@ impl MtrakWidget for NumberBox {
     }
 
     fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
-        let mut spans = label_spans(state, &self.label, self.focused).to_vec();
+        self.follow_config(state);
+        let label = self.label(&state.config);
+        let mut spans = label_spans(state, &label, self.focused).to_vec();
         let sign = match (self.negative, self.min < 0) {
             (true, _) => "-",
             (false, true) => "+",
@@ -1018,6 +1178,9 @@ impl MtrakWidget for NumberBox {
         };
         spans.push(Span::styled(format!("{sign}{}", self.text), style));
         spans.push(Span::raw(format!(" {}", self.arrows())));
+        if let Some(label) = &self.value_label {
+            spans.push(Span::raw(format!(" {}", label(self.number()))));
+        }
         Line::from(spans).render(area, buf);
     }
 }
@@ -1256,6 +1419,9 @@ pub struct Select {
     max_visible: u8,
     focused: bool,
     area: Rect,
+    /// The digits typed so far, to pick options past the first digit.
+    typed: String,
+    typed_from: usize,
     keys: Keymap<SelectAction>,
 }
 
@@ -1278,6 +1444,8 @@ impl Select {
             max_visible: 8,
             focused: false,
             area: Rect::default(),
+            typed: String::new(),
+            typed_from: 0,
             keys: Keymap::new("dialog")
                 .bind(Key::plain(KeyCode::Up), SelectAction::Up, "Choose")
                 .bind(Key::plain(KeyCode::Down), SelectAction::Down, "Choose"),
@@ -1297,6 +1465,41 @@ impl Select {
     pub fn max_visible(mut self, rows: u8) -> Self {
         self.max_visible = rows.max(1);
         return self;
+    }
+
+    /// Typing a number picks the option this many places further down, for lists that start
+    /// with options that aren't numbered, like an `Off`.
+    pub fn typed_from(mut self, index: usize) -> Self {
+        self.typed_from = index;
+        return self;
+    }
+
+    /// Picks the option for the digits typed so far, in hex or decimal as the config says. A
+    /// number past the last option starts over from the digit just typed.
+    fn type_digit(&mut self, c: char, hex: bool) -> bool {
+        let radix = if hex { 16 } else { 10 };
+        if !c.is_digit(radix) || self.options.len() <= self.typed_from {
+            return false;
+        }
+        let last = self.options.len() - 1 - self.typed_from;
+        let max_digits = if hex {
+            format!("{last:X}").len()
+        } else {
+            last.to_string().len()
+        };
+        self.typed.push(c);
+        let skip = self.typed.chars().count().saturating_sub(max_digits);
+        self.typed = self.typed.chars().skip(skip).collect();
+        while !self.typed.is_empty() {
+            if let Ok(number) = usize::from_str_radix(&self.typed, radix)
+                && number <= last
+            {
+                self.selected = number + self.typed_from;
+                return true;
+            }
+            self.typed.remove(0);
+        }
+        return false;
     }
 
     /// Where the open list goes: below the box, else above, shrinking to fit.
@@ -1331,6 +1534,7 @@ impl KeyActions for Select {
     }
 
     fn perform(&mut self, action: SelectAction, _state: &mut AppState) -> Result<()> {
+        self.typed.clear();
         let last = self.options.len().saturating_sub(1);
         self.selected = match action {
             SelectAction::Up => self.selected.saturating_sub(1),
@@ -1366,14 +1570,7 @@ impl MtrakWidget for Select {
         {
             return false;
         }
-        let Some(index) = c.to_digit(16).map(|i| i as usize) else {
-            return false;
-        };
-        if index >= self.options.len() {
-            return false;
-        }
-        self.selected = index;
-        return true;
+        return self.type_digit(c, state.config.hex_values);
     }
 
     fn key_hints(&self, _state: &AppState, hints: &mut Vec<KeyHint>) {
@@ -1467,6 +1664,7 @@ impl DialogComponent for Select {
     }
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        self.typed.clear();
     }
     fn value(&self) -> Option<(&'static str, DialogValue)> {
         if self.options.is_empty() {
@@ -1511,8 +1709,90 @@ mod tests {
         assert_eq!((above.y, above.height), (0, 8));
     }
 
+    #[test]
+    fn esc_closes_a_close_on_esc_dialog_like_enter() {
+        use std::{cell::Cell, rc::Rc};
+
+        use ratatui::crossterm::event::KeyEvent;
+
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let submitted = Rc::new(Cell::new(false));
+        let cancelled = Rc::new(Cell::new(false));
+        let mut dialog = Dialog::new("", vec![Checkbox::new("c", "C").boxed()])
+            .close_on_esc()
+            .on_submit({
+                let submitted = submitted.clone();
+                move |_, _| {
+                    submitted.set(true);
+                    return Ok(());
+                }
+            })
+            .on_cancel({
+                let cancelled = cancelled.clone();
+                move |_| cancelled.set(true)
+            });
+        let mut hints = vec![];
+        dialog.key_hints(&state, &mut hints);
+        let labels: Vec<&str> = hints.iter().map(|hint| hint.label).collect();
+        assert!(labels.contains(&"Close"), "{labels:?}");
+        assert!(
+            !labels.contains(&"OK") && !labels.contains(&"Cancel"),
+            "{labels:?}"
+        );
+        let esc = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        dialog.handle_event(&mut state, &esc);
+        assert!(dialog.is_closed());
+        assert!(submitted.get());
+        assert!(!cancelled.get());
+    }
+
     fn focused(dialog: &Dialog) -> Option<usize> {
         return dialog.focus;
+    }
+
+    #[test]
+    fn typed_digits_add_up_to_pick_options_past_the_first_digit() {
+        let mut select = Select::new("s", (0..0x81).map(|i| i.to_string()).collect());
+        select.type_digit('4', true);
+        select.type_digit('a', true);
+        assert_eq!(select.selected, 0x4A);
+        select.type_digit('8', true);
+        select.type_digit('1', true);
+        assert_eq!(
+            select.selected, 0x01,
+            "81 is past the end, so only the 1 counts"
+        );
+        select.type_digit('7', false);
+        select.type_digit('4', false);
+        assert_eq!(select.selected, 74);
+        assert!(!select.type_digit('a', false));
+    }
+
+    #[test]
+    fn typed_numbers_can_skip_the_first_options() {
+        let mut select = Select::new("s", (0..0x81).map(|i| i.to_string()).collect()).typed_from(1);
+        select.type_digit('0', true);
+        assert_eq!(select.selected, 1);
+        select.type_digit('7', true);
+        select.type_digit('f', true);
+        assert_eq!(select.selected, 0x80);
+    }
+
+    #[test]
+    fn number_boxes_show_what_their_value_stands_for() {
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let mut number = NumberBox::new("n", "N", 2)
+            .value(3)
+            .value_label(|value| format!("is {value}"));
+        let area = Rect::new(0, 0, 30, 1);
+        let mut buf = Buffer::empty(area);
+        number.render(&state, area, &mut buf);
+        let line: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+        assert!(line.contains("03") && line.contains("is 3"), "{line:?}");
     }
 
     #[test]
@@ -1624,6 +1904,126 @@ mod tests {
         assert!(number.negative);
     }
 
+    fn state_with_hex_values(hex: bool) -> AppState {
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        state.config.hex_values = hex;
+        return state;
+    }
+
+    #[test]
+    fn number_box_follows_the_config_keeping_its_value() {
+        let mut number = number_box(2).range(-0x80, 0x7F).value(-0x1A);
+        number.follow_config(&state_with_hex_values(false));
+        assert_eq!((number.text.as_str(), number.negative), ("026", true));
+        assert_eq!(number.number(), -26);
+        number.follow_config(&state_with_hex_values(true));
+        assert_eq!(number.text, "1A");
+    }
+
+    #[test]
+    fn decimal_number_boxes_take_decimal_digits_as_wide_as_the_range() {
+        let mut number = number_box(2).value(0x10);
+        number.follow_config(&state_with_hex_values(false));
+        assert_eq!(number.text, "016");
+        type_keys(&mut number, "2a");
+        assert_eq!(number.number(), 162);
+        type_keys(&mut number, "99");
+        assert_eq!(number.number(), 255, "kept in range");
+        let mut small = number_box(1).range(0, 7);
+        small.follow_config(&state_with_hex_values(false));
+        type_keys(&mut small, "5");
+        assert_eq!(small.text, "5");
+    }
+
+    #[test]
+    fn number_box_big_steps_are_round_in_either_base() {
+        let mut state = state_with_hex_values(true);
+        let mut number = number_box(2).steps().value(0);
+        number.follow_config(&state);
+        number.perform(NumberBoxAction::StepUp, &mut state).unwrap();
+        assert_eq!(number.number(), 0x10);
+        let mut state = state_with_hex_values(false);
+        number.follow_config(&state);
+        number.perform(NumberBoxAction::StepUp, &mut state).unwrap();
+        assert_eq!(number.number(), 26);
+    }
+
+    fn ranges_shown() -> Config {
+        return Config {
+            show_value_ranges: true,
+            ..Config::default()
+        };
+    }
+
+    #[test]
+    fn number_box_labels_show_the_range_when_asked() {
+        let config = ranges_shown();
+        let volume = NumberBox::new("v", "Volume", 2);
+        assert_eq!(volume.label(&config), "Volume");
+        let mut volume = volume.show_range();
+        assert_eq!(volume.label(&config), "Volume (00-FF)");
+        let mut state = state_with_hex_values(false);
+        state.config.show_value_ranges = true;
+        volume.follow_config(&state);
+        assert_eq!(volume.label(&state.config), "Volume (0-255)");
+        let cc = NumberBox::new("c", "Default CC", 2)
+            .range(0, 0x7F)
+            .show_range();
+        assert_eq!(cc.label(&config), "Default CC (00-7F)");
+    }
+
+    #[test]
+    fn value_ranges_are_off_unless_the_config_turns_them_on() {
+        let volume = NumberBox::new("v", "Volume", 2).show_range();
+        assert_eq!(volume.label(&Config::default()), "Volume");
+    }
+
+    #[test]
+    fn signed_ranges_go_inside_the_labels_own_brackets() {
+        let mut transpose = NumberBox::new("t", "Transpose (semitones)", 2)
+            .range(-0x80, 0x7F)
+            .show_range();
+        assert_eq!(
+            transpose.label(&ranges_shown()),
+            "Transpose (semitones, -80 to +7F)"
+        );
+        let mut state = state_with_hex_values(false);
+        state.config.show_value_ranges = true;
+        transpose.follow_config(&state);
+        assert_eq!(
+            transpose.label(&state.config),
+            "Transpose (semitones, -128 to +127)"
+        );
+    }
+
+    #[test]
+    fn every_dialog_key_is_listed_and_rebinds_on_its_own() {
+        let mut sections = vec![];
+        Dialog::help(&mut sections);
+        let ids: Vec<String> = sections[0]
+            .entries
+            .iter()
+            .filter_map(|entry| entry.binding.as_ref().map(|b| b.id.clone()))
+            .collect();
+        for action in [
+            "prev_item",
+            "next_item",
+            "open",
+            "remove",
+            "move_up",
+            "move_down",
+            "check",
+        ] {
+            assert!(ids.contains(&format!("dialog.{action}")), "dialog.{action}");
+        }
+        let mut unique = ids.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "{ids:?}");
+    }
+
     #[test]
     fn number_box_arrows_show_which_ways_it_can_move() {
         let number = number_box(2).range(0, 2);
@@ -1683,6 +2083,34 @@ mod tests {
         });
         dialog.handle_event(&mut state, &Event::Key(KeyEvent::from(KeyCode::Down)));
         assert_eq!(dialog.result().text("hex"), Some("#00ff00"));
+    }
+
+    #[test]
+    fn space_opens_a_list_item_and_enter_still_submits() {
+        use std::{cell::RefCell, rc::Rc};
+
+        use ratatui::crossterm::event::KeyEvent;
+
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut dialog = Dialog::new("", vec![List::new("l", vec!["a", "b"]).boxed()])
+            .focus_first()
+            .on_update({
+                let seen = seen.clone();
+                move |_, fields| {
+                    seen.borrow_mut().extend(fields.list_event("l"));
+                    return Ok(());
+                }
+            });
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        dialog.handle_event(&mut state, &press(KeyCode::Down));
+        dialog.handle_event(&mut state, &press(KeyCode::Char(' ')));
+        assert_eq!(*seen.borrow(), vec![ListEvent::Open(1)]);
+        assert!(!dialog.closed);
+        dialog.handle_event(&mut state, &press(KeyCode::Enter));
+        assert!(dialog.closed);
     }
 
     impl NumberBox {

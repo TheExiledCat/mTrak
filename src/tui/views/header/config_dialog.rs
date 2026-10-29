@@ -97,6 +97,12 @@ pub fn open_config_dialog(state: &mut AppState) {
             Checkbox::new("update", "Check for updates")
                 .checked(state.config.update_check)
                 .boxed(),
+            Checkbox::new("hex_values", "Values are hex")
+                .checked(state.config.hex_values)
+                .boxed(),
+            Checkbox::new("value_ranges", "Show value ranges")
+                .checked(state.config.show_value_ranges)
+                .boxed(),
             Label::new("Pattern editor").boxed(),
             Select::new("line_numbers", line_number_names)
                 .label("Line numbers")
@@ -134,7 +140,7 @@ pub fn open_config_dialog(state: &mut AppState) {
                     .ok_or(MTrakError::MissingDirectory("config"))?;
                 return files::open_in_file_manager(&folder);
             }
-            let config = settings(fields, state.config.theme.clone(), &ports);
+            let config = settings(fields, state.config.theme.clone(), &ports, &state.config);
             state.apply_config(config);
             let mut edit = edit.borrow_mut();
             let color = fields.choice("color").unwrap_or(0);
@@ -214,7 +220,7 @@ fn save_settings(
         edit.palette.save(&files::get_named_theme_path(&name)?)?;
         theme = ThemeSetting::Named(name);
     }
-    let config = settings(result, theme, ports);
+    let config = settings(result, theme, ports, &state.config);
     return apply_config(state, config, result.bool("save").unwrap_or(false));
 }
 
@@ -238,8 +244,9 @@ impl Original {
     }
 }
 
-/// The settings in the dialog, with `theme`.
-fn settings(result: &DialogResult, theme: ThemeSetting, ports: &Ports) -> Config {
+/// The settings in the dialog, with `theme`. Settings the dialog doesn't show stay as they are
+/// in `current`.
+fn settings(result: &DialogResult, theme: ThemeSetting, ports: &Ports, current: &Config) -> Config {
     let defaults = Config::default();
     let line_numbers = result
         .choice("line_numbers")
@@ -254,6 +261,11 @@ fn settings(result: &DialogResult, theme: ThemeSetting, ports: &Ports) -> Config
         midi_output: result
             .choice("midi_out")
             .and_then(|i| ports.output[i].clone()),
+        soft_thru: current.soft_thru,
+        hex_values: result.bool("hex_values").unwrap_or(defaults.hex_values),
+        show_value_ranges: result
+            .bool("value_ranges")
+            .unwrap_or(defaults.show_value_ranges),
         hex_line_numbers: result.bool("hex").unwrap_or(defaults.hex_line_numbers),
         show_dashes: result.bool("dashes").unwrap_or(defaults.show_dashes),
         track_numbers: result

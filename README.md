@@ -18,8 +18,11 @@ any hardware or software synth.
 - MIDI output on all 16 channels, with one instrument per channel and instrument configuration
 - Midi input for note data, clock sync and start/stop
   (see [docs/SYNC.md](docs/SYNC.md))
-- Command column for (midi) effects, using FT2 syntax where applicable
+- Command column for MIDI and playback commands, using FT2 syntax where applicable
   (see [docs/COMMANDS.md](docs/COMMANDS.md))
+- Live MIDI effects on each instrument: arpeggiator, chords, a velocity EQ, an echo, an LFO
+  and an envelope, with every setting changeable from pattern CC commands
+  (see [docs/EFFECTS.md](docs/EFFECTS.md))
 - Per-channel activity meters, channel muting and a MIDI event monitor
 - Built-in file browser for opening and saving projects
 - Context-aware key hints and a built in shortcuts screen
@@ -78,6 +81,13 @@ common ones. Keys can be rebound on that screen or in `keybinds.toml`, see
 
 Press `/` to see every pattern command with a short description. The full guide is
 [docs/COMMANDS.md](docs/COMMANDS.md), which is also included in every release zip.
+
+### Effects
+
+Each instrument can have a chain of live MIDI effects. Press `Ctrl+R` for the active
+instrument's dialog and choose `Effects` to add them. Each effect's `CC mapping` lets pattern
+commands change its settings while the song plays. The guide is
+[docs/EFFECTS.md](docs/EFFECTS.md), which is also included in every release zip.
 
 ### Options
 
@@ -180,15 +190,15 @@ Planned features, in no particular order:
     - [ ] piano key layouts per keyboard (QWERTZ, AZERTY, ...)
 - [x] **Proper CLI argument parsing** and a global app config
 - [ ] **Instrument Live Midi Effects**
-    - [ ] Auto arp
-    - [ ] Midi EQ
-    - [ ] Chord mode / Harmonizer
-    - [ ] Delay
+    - [x] Auto arp
+    - [x] Midi EQ
+    - [x] Chord mode / Harmonizer
+    - [x] Delay (Echo)
     - [ ] Randomizer
     - [ ] Scale mode
     - [ ] Note to CC
     - [ ] Global Probability
-    - [ ] CC LFO
+    - [x] CC LFO
 - [ ] ...and more
 
 Have an idea? Feel free to open an issue.

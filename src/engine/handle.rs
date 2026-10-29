@@ -9,13 +9,17 @@ use std::{
 
 use midir::MidiOutputPort;
 
-use super::engine::{MtrakEngine, PlayMode};
 use crate::{
     data::{
+        effect::EffectSettings,
         midi::MidiEvent,
         note::NotePitch,
         pattern::{Pattern, PatternId},
         project::SequenceRow,
+    },
+    engine::{
+        effects::MidiEffectChain,
+        engine::{MtrakEngine, PlayMode},
     },
     error::Result,
 };
@@ -65,6 +69,40 @@ pub enum EngineCommand {
     SetBendRange {
         channel: u8,
         range: u8,
+    },
+    SetEffectChain {
+        channel: u8,
+        chain: MidiEffectChain,
+    },
+    SetEffectParam {
+        channel: u8,
+        effect: usize,
+        param: usize,
+        value: u8,
+    },
+    AddEffect {
+        channel: u8,
+        settings: EffectSettings,
+    },
+    RemoveEffect {
+        channel: u8,
+        effect: usize,
+    },
+    MoveEffect {
+        channel: u8,
+        from: usize,
+        to: usize,
+    },
+    SetEffectEnabled {
+        channel: u8,
+        effect: usize,
+        enabled: bool,
+    },
+    SetEffectParamCc {
+        channel: u8,
+        effect: usize,
+        param: usize,
+        cc: Option<u8>,
     },
     SetMidiClock(bool),
     SetClockSource(ClockSource),
@@ -241,6 +279,42 @@ impl EngineHandle {
     }
     pub fn set_global_velocity(&self, velocity: u8) {
         self.send(EngineCommand::SetGlobalVelocity(velocity));
+    }
+    pub fn set_effect_chain(&self, channel: u8, chain: MidiEffectChain) {
+        self.send(EngineCommand::SetEffectChain { channel, chain });
+    }
+    pub fn set_effect_param(&self, channel: u8, effect: usize, param: usize, value: u8) {
+        self.send(EngineCommand::SetEffectParam {
+            channel,
+            effect,
+            param,
+            value,
+        });
+    }
+
+    pub fn add_effect(&self, channel: u8, settings: EffectSettings) {
+        self.send(EngineCommand::AddEffect { channel, settings });
+    }
+    pub fn remove_effect(&self, channel: u8, effect: usize) {
+        self.send(EngineCommand::RemoveEffect { channel, effect });
+    }
+    pub fn move_effect(&self, channel: u8, from: usize, to: usize) {
+        self.send(EngineCommand::MoveEffect { channel, from, to });
+    }
+    pub fn set_effect_enabled(&self, channel: u8, effect: usize, enabled: bool) {
+        self.send(EngineCommand::SetEffectEnabled {
+            channel,
+            effect,
+            enabled,
+        });
+    }
+    pub fn set_effect_param_cc(&self, channel: u8, effect: usize, param: usize, cc: Option<u8>) {
+        self.send(EngineCommand::SetEffectParamCc {
+            channel,
+            effect,
+            param,
+            cc,
+        });
     }
 
     fn send(&self, command: EngineCommand) {
