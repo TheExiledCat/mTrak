@@ -1,5 +1,68 @@
 # Changelog
 
+## v0.7.0 - 2026-10-29
+
+### Added
+
+- **Live MIDI effects on every instrument.** Press `Ctrl+R` for the active instrument's dialog
+  and choose `Effects` to build a chain of effects that change its notes on the way out, both
+  the pattern's and the ones you play live. Notes go through the chain from the top down, and
+  effects can be added, removed, moved (`Shift+Up`/`Shift+Down`) and turned off (`X`) while the
+  song plays without cutting off what the others are playing. The effects are saved with the
+  project. See [docs/EFFECTS.md](docs/EFFECTS.md).
+  - **Arp:** plays a held note as a looping sequence of up to 8 steps, with a rate in ticks
+    and a gate that overlaps or separates the notes.
+  - **Chord:** plays each note as a chord of up to 7 intervals, with inversions and a legato
+    that spaces the chord's notes out.
+  - **EQ:** makes notes louder or quieter by pitch in three bands, and fades out notes past a
+    high and low pass.
+  - **LFO:** moves the velocity, the pitch bend or a CC in a sine, triangle, saw, square or
+    random wave, following the pattern or restarting with every note.
+  - **Envelope:** moves the pitch bend or a CC with an attack, decay, sustain and release
+    started by the notes, restarting from rest or continuing from where it is.
+  - **Echo:** repeats every note at a rate, each repeat quieter than the one before by the
+    feedback, until it fades out.
+- **Effect settings can be changed by pattern commands.** In an effect's settings, `CC mapping`
+  lets any setting follow a CC. Sending that CC on the instrument's channel, with `M`, a `V` or
+  `J` slide, `W`, or an LFO or Envelope above it in the chain, changes the setting instead of
+  reaching the synth:
+
+  ```
+  ---|1|--|S14   select CC 20, which the Echo's feedback follows
+  ---|1|--|V00   slide the feedback from nothing ...
+  ---|1|--|MFF   ... to full
+  ```
+
+  Settings go back to what the dialog shows when playback stops.
+- **Soft thru.** Tick `Soft thru` in the MIDI dialog (`Ctrl+O`) to also play the MIDI input's
+  CCs, pitch bend, aftertouch and program changes on the active instrument, like its notes. They
+  go through its effects, so a knob on a controller can drive a mapped effect setting. It's
+  saved as `soft_thru` in `config.toml`. See [docs/SYNC.md](docs/SYNC.md).
+- **Hex or decimal in dialogs.** Untick `Values are hex` in the Config dialog (`hex_values` in
+  `config.toml`) to show and type the numbers in dialogs in decimal.
+- **Value ranges in dialogs.** Tick `Show value ranges` in the Config dialog
+  (`show_value_ranges`) to show each number's range after its name, e.g. `Volume (00-FF)`. It's
+  off by default.
+- **Numbers say what they mean.** Fields show what their value stands for after it: a CC's name
+  in the MIDI spec (`4A Cutoff`), a percentage (`80` is `50%`), a note length for ticks (`06` is
+  `1/16`, `08` is `1/8T`) or an interval for semitones (`07` is `5th`, `-0C` is `-oct`).
+- **Typing numbers in dropdowns.** Typing a number of two digits or more now picks that option,
+  in hex or decimal as `Values are hex` says.
+- **The effect list's keys can be rebound** on the keybindings screen (`?`) and in
+  `keybinds.toml`, like every other key.
+
+### Changed
+
+- **`Esc` no longer undoes changes in the instrument and Global dialogs.** Changes are made as
+  you go, and `Esc` closes these dialogs like `Enter`, as it does the new effect dialogs.
+- **Projects saved with v0.6.0 open in this version**, upgraded to the new file format with an
+  empty effect chain on every instrument. Projects saved with this version can't be opened by
+  v0.6.0. The new format is in [docs/FILE_FORMAT.md](docs/FILE_FORMAT.md).
+- **The pattern's effect column is now called the command column**, and effect commands are
+  now playback commands, in the shortcuts screen, the commands list (`/`) and
+  [docs/COMMANDS.md](docs/COMMANDS.md), so they aren't confused with the instrument effects.
+  The commands themselves haven't changed.
+
 ## v0.6.0 - 2026-10-27
 
 ### Added
