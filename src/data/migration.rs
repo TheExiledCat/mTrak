@@ -50,7 +50,6 @@ fn v3_to_v4(mut payload: Value) -> Result<Value> {
     return Ok(payload);
 }
 
-/// The value of a field of a payload map.
 fn map_field<'a>(payload: &'a mut Value, name: &str) -> Option<&'a mut Value> {
     let Value::Map(fields) = payload else {
         return None;

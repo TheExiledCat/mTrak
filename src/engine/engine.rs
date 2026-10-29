@@ -164,7 +164,8 @@ pub struct MtrakEngine {
     playback_command_handler: PlaybackCommandHandler,
     /// Pulses since the current pattern's first row, for effects' timing.
     pattern_pulse: u32,
-    /// Each instrument's live effects. The UI sends a new chain when it changes them.
+    /// Each instrument's live effects. The UI sends a whole chain when a project loads, and
+    /// changes it in place after that.
     effect_chains: [MidiEffectChain; MIDI_CHANNEL_COUNT],
 }
 
@@ -299,6 +300,44 @@ impl MtrakEngine {
             } => {
                 if let Some(chain) = self.effect_chains.get_mut(channel as usize) {
                     chain.set_param(effect, param, value);
+                }
+            }
+            EngineCommand::AddEffect { channel, settings } => {
+                if let Some(chain) = self.effect_chains.get_mut(channel as usize) {
+                    chain.push_settings(&settings);
+                }
+            }
+            EngineCommand::RemoveEffect { channel, effect } => {
+                let mut out = vec![];
+                if let Some(chain) = self.effect_chains.get_mut(channel as usize) {
+                    chain.remove(effect, &mut out);
+                }
+                self.output_messages(out);
+            }
+            EngineCommand::MoveEffect { channel, from, to } => {
+                if let Some(chain) = self.effect_chains.get_mut(channel as usize) {
+                    chain.move_effect(from, to);
+                }
+            }
+            EngineCommand::SetEffectEnabled {
+                channel,
+                effect,
+                enabled,
+            } => {
+                let mut out = vec![];
+                if let Some(chain) = self.effect_chains.get_mut(channel as usize) {
+                    chain.set_enabled(effect, enabled, &mut out);
+                }
+                self.output_messages(out);
+            }
+            EngineCommand::SetEffectParamCc {
+                channel,
+                effect,
+                param,
+                cc,
+            } => {
+                if let Some(chain) = self.effect_chains.get_mut(channel as usize) {
+                    chain.set_param_cc(effect, param, cc);
                 }
             }
             EngineCommand::SetMidiClock(enabled) => self.send_midi_clock = enabled,
@@ -1259,7 +1298,6 @@ impl MtrakEngine {
         return self.clock.as_ref().map(|_| Timing::new(self.pattern_pulse));
     }
 
-    /// Advances every instrument's effects by a pulse and sends what they make.
     fn tick_effects(&mut self) {
         let timing = Timing::new(self.pattern_pulse);
         let mut out = vec![];
@@ -1279,7 +1317,6 @@ impl MtrakEngine {
         self.output_messages(out);
     }
 
-    /// Resets every instrument's effects and sends the releases they make.
     fn reset_effects(&mut self) {
         let mut out = vec![];
         for chain in &mut self.effect_chains {
@@ -1288,7 +1325,6 @@ impl MtrakEngine {
         self.output_messages(out);
     }
 
-    /// Runs each channel message through its instrument's effects.
     fn apply_effects(&mut self, event: MidiEvent) -> MidiEvent {
         return match event {
             MidiEvent::Message(message) => {
@@ -1403,7 +1439,9 @@ mod tests {
     };
     use crate::{
         data::effect::EffectKind,
-        engine::effects::{MidiEffect, Param, arp, create_effect, default_settings, echo, eq},
+        engine::effects::{
+            MidiEffect, Param, arp, create_chain, create_effect, default_settings, echo, eq,
+        },
     };
 
     /// Drives an engine without a MIDI port and collects every message it would send.
@@ -4060,5 +4098,41 @@ mod tests {
             .count();
         assert!(offs > 4, "{notes:?}");
         assert_channel_3_notes_pair_up(&notes);
+    }
+
+    #[test]
+    fn a_cc_command_modulates_a_mapped_param_without_reaching_the_synth() {
+        let mut harness = Harness::new(vec![pattern(
+            4,
+            &[
+                (0, 0, command(MidiCommand::SetCC, 20, 2)),
+                (1, 0, command(MidiCommand::ChangeCC, 0xFF, 2)),
+                (2, 0, command(MidiCommand::SetCC, 21, 2)),
+                (3, 0, command(MidiCommand::ChangeCC, 0x10, 2)),
+            ],
+        )]);
+        let mut settings = default_settings(EffectKind::Echo);
+        settings.param_ccs = vec![None, Some(20)];
+        harness.engine.apply(EngineCommand::SetEffectChain {
+            channel: 2,
+            chain: create_chain(&[settings]),
+        });
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+        for _ in 0..3 {
+            harness.next_row();
+        }
+        let echo = harness.engine.effect_chains[2].get(0).unwrap();
+        assert_eq!(echo.param(echo::FEEDBACK_PARAM), 0xFF);
+        let ccs: Vec<Message> = harness
+            .messages()
+            .into_iter()
+            .filter(|message| matches!(message, Message::ControlChange(..)))
+            .collect();
+        assert_eq!(ccs, vec![Message::ControlChange(Channel::Ch3, 21, 8)]);
+        harness.engine.apply(EngineCommand::Stop);
+        let echo = harness.engine.effect_chains[2].get(0).unwrap();
+        assert_eq!(echo.param(echo::FEEDBACK_PARAM), 0x80);
     }
 }

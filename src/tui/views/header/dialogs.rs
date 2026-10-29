@@ -6,7 +6,7 @@ use crate::{
     data::{
         config::TITLE,
         effect::EffectKind,
-        midi::PITCH_MAX,
+        midi::{CC_MAX, PITCH_MAX},
         note::NotePitch,
         pattern::{ClearOption, ClearTarget},
     },
@@ -71,6 +71,9 @@ pub fn open_midi_dialog(state: &mut AppState) {
             Checkbox::new("velocity", "Record Velocity")
                 .checked(state.project().record_input_velocity)
                 .boxed(),
+            Checkbox::new("soft_thru", "Soft thru")
+                .checked(state.config.soft_thru)
+                .boxed(),
             Select::new("output", out_names)
                 .label("MIDI output")
                 .selected(current_out)
@@ -87,6 +90,9 @@ pub fn open_midi_dialog(state: &mut AppState) {
         if let Some(velocity) = result.bool("velocity") {
             state.set_midi_velocity_record(velocity);
         }
+        let soft_thru = result
+            .bool("soft_thru")
+            .map(|enabled| state.set_soft_thru(enabled));
         if let Some(output) = result.choice("output") {
             let output = if output == 0 {
                 None
@@ -107,6 +113,7 @@ pub fn open_midi_dialog(state: &mut AppState) {
             state.set_midi_input(port)
         });
         clock.unwrap_or(Ok(()))?;
+        soft_thru.unwrap_or(Ok(()))?;
         return input.unwrap_or(Ok(()));
     });
     state.open_dialog(dialog);
@@ -163,7 +170,7 @@ pub fn open_clear_dialog(state: &mut AppState) {
     state.open_dialog(dialog);
 }
 
-/// Changes are made right away, so it can only be closed with Enter.
+/// Changes are made right away, so Esc closes it like Enter.
 pub fn open_instrument_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
     let settings = &state.project().instruments[instrument as usize];
@@ -183,7 +190,7 @@ pub fn open_instrument_dialog(state: &mut AppState) {
                 .boxed(),
             NumberBox::new("default_cc", "Default CC", 2)
                 .show_range()
-                .range(0, 0x7F)
+                .range(0, CC_MAX as i32)
                 .value(settings.default_cc as i32)
                 .boxed(),
             NumberBox::new("transpose", "Transpose (semitones)", 2)
@@ -195,7 +202,7 @@ pub fn open_instrument_dialog(state: &mut AppState) {
         ],
     )
     .hide_behind_child()
-    .cancellable(false)
+    .close_on_esc()
     .focus_first()
     .on_update(move |state, fields| {
         apply_instrument(state, instrument, fields);
@@ -229,7 +236,7 @@ fn apply_instrument(state: &mut AppState, instrument: u8, result: &DialogResult)
     }
 }
 /// The active instrument's effects, in the order notes go through them. Changes are made
-/// right away, so it can only be closed with Enter.
+/// right away, so Esc closes it like Enter.
 fn open_effects_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
     let list = List::new("effects", effect_names(state, instrument))
@@ -245,7 +252,7 @@ fn open_effects_dialog(state: &mut AppState) {
         vec![list.boxed()],
     )
     .hide_behind_child()
-    .cancellable(false)
+    .close_on_esc()
     .focus_first()
     .on_update(move |state, fields| {
         match fields.list_event("effects") {
@@ -298,8 +305,8 @@ fn open_add_effect_dialog(state: &mut AppState, instrument: u8) {
     state.open_dialog(dialog);
 }
 
-/// One field per parameter of an effect. Changes are made right away, so it can only be closed
-/// with Enter.
+/// One field per parameter of an effect. Changes are made right away, so Esc closes it like
+/// Enter.
 fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
     let Some(settings) = state.project().instruments[instrument as usize]
         .effects
@@ -314,14 +321,20 @@ fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
         .enumerate()
         .map(|(index, param)| settings.values.get(index).copied().unwrap_or(param.default))
         .collect();
-    let fields = params
+    let mut fields: Vec<Box<dyn DialogComponent>> = params
         .iter()
         .zip(&values)
         .map(|(param, value)| param_field(param, *value))
         .collect();
+    fields.push(Buttons::new(CC_MAPPING_ID, vec!["CC mapping"]).boxed());
     let dialog = Dialog::new(format!("{} {:X}", settings.kind.name(), effect), fields)
-        .cancellable(false)
+        .hide_behind_child()
+        .close_on_esc()
         .on_update(move |state, fields| {
+            if fields.changed() == CC_MAPPING_ID {
+                open_cc_mapping_dialog(state, instrument, effect);
+                return Ok(());
+            }
             let changed = params
                 .iter()
                 .position(|param| param.name == fields.changed());
@@ -333,6 +346,58 @@ fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
             return Ok(());
         });
     state.open_dialog(dialog);
+}
+
+const CC_MAPPING_ID: &str = "cc_mapping";
+
+/// Which CC each parameter of an effect follows, so pattern commands can change it. Changes are
+/// made right away, so Esc closes it like Enter.
+fn open_cc_mapping_dialog(state: &mut AppState, instrument: u8, effect: usize) {
+    let Some(settings) = state.project().instruments[instrument as usize]
+        .effects
+        .get(effect)
+        .cloned()
+    else {
+        return;
+    };
+    let params = effect_params(settings.kind);
+    let fields = params
+        .iter()
+        .enumerate()
+        .map(|(index, param)| {
+            let selected = settings.param_cc(index).map_or(0, |cc| cc as usize + 1);
+            Select::new(param.name, cc_options(state))
+                .label(param.name)
+                .selected(selected)
+                .boxed() as Box<dyn DialogComponent>
+        })
+        .collect();
+    let title = format!("{} {:X} CC mapping", settings.kind.name(), effect);
+    let dialog = Dialog::new(title, fields)
+        .close_on_esc()
+        .focus_first()
+        .on_update(move |state, fields| {
+            let changed = params
+                .iter()
+                .position(|param| param.name == fields.changed());
+            if let Some(index) = changed
+                && let Some(choice) = fields.choice(params[index].name)
+            {
+                let cc = choice.checked_sub(1).map(|cc| cc as u8);
+                state.set_effect_param_cc(instrument, effect, index, cc);
+            }
+            return Ok(());
+        });
+    state.open_dialog(dialog);
+}
+
+/// No CC, then every CC number, in hex or decimal as the config says.
+fn cc_options(state: &AppState) -> Vec<String> {
+    let numbers = (0..=CC_MAX).map(|cc| match state.config.hex_values {
+        true => format!("{cc:02X}"),
+        false => cc.to_string(),
+    });
+    return std::iter::once("Off".to_owned()).chain(numbers).collect();
 }
 
 fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
@@ -433,11 +498,11 @@ pub fn open_about_dialog(state: &mut AppState) {
     components.push(Link::new(REPOSITORY_URL).boxed());
     let dialog = Dialog::new("About", components)
         .level(InfoLevel::Success)
-        .cancellable(false);
+        .close_on_esc();
     state.open_dialog(dialog);
 }
 
-/// Changes are made right away, so it can only be closed with Enter.
+/// Changes are made right away, so Esc closes it like Enter.
 pub fn open_global_dialog(state: &mut AppState) {
     let dialog = Dialog::new(
         "Global",
@@ -453,7 +518,7 @@ pub fn open_global_dialog(state: &mut AppState) {
                 .boxed(),
         ],
     )
-    .cancellable(false)
+    .close_on_esc()
     .focus_first()
     .on_update(|state, fields| {
         apply_globals(state, fields);
@@ -568,7 +633,26 @@ mod tests {
     }
 
     #[test]
-    fn instrument_and_global_dialogs_only_close_with_enter() {
+    fn cc_mapping_sets_and_clears_a_params_cc() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let instrument = state.active_instrument;
+        state.add_effect(instrument, EffectKind::Echo);
+        open_cc_mapping_dialog(&mut state, instrument, 0);
+        let mut dialog = state.take_pending_dialogs().remove(0);
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        let mut type_keys = |dialog: &mut Dialog, codes: &[KeyCode]| {
+            for code in codes {
+                dialog.handle_event(&mut state, &press(*code));
+            }
+            return state.project().instruments[instrument as usize].effects[0].param_cc(0);
+        };
+        assert_eq!(type_keys(&mut dialog, &[KeyCode::Down]), Some(0));
+        assert_eq!(type_keys(&mut dialog, &[KeyCode::Down]), Some(1));
+        assert_eq!(type_keys(&mut dialog, &[KeyCode::Up, KeyCode::Up]), None);
+    }
+
+    #[test]
+    fn dialogs_with_live_changes_close_with_esc_or_enter() {
         let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
         for open in [open_instrument_dialog, open_global_dialog] {
             open(&mut state);
@@ -577,12 +661,17 @@ mod tests {
         open_effects_dialog(&mut state);
         state.add_effect(instrument, EffectKind::Arp);
         open_effect_dialog(&mut state, instrument, 0);
+        open_cc_mapping_dialog(&mut state, instrument, 0);
         let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
-        for mut dialog in state.take_pending_dialogs() {
-            dialog.handle_event(&mut state, &press(KeyCode::Esc));
-            assert!(!dialog.is_closed());
-            dialog.handle_event(&mut state, &press(KeyCode::Enter));
-            assert!(dialog.is_closed());
+        let dialogs = state.take_pending_dialogs();
+        assert_eq!(dialogs.len(), 5);
+        for (code, mut dialog) in [KeyCode::Esc, KeyCode::Enter]
+            .into_iter()
+            .cycle()
+            .zip(dialogs)
+        {
+            dialog.handle_event(&mut state, &press(code));
+            assert!(dialog.is_closed(), "{code:?}");
         }
     }
 }

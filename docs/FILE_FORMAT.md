@@ -69,9 +69,10 @@ The effects on an instrument's channel, in the order notes go through them. Each
 
 | Field     | Type          | Contents                                                     |
 | --------- | ------------- | ------------------------------------------------------------ |
-| `kind`    | string        | Which effect it is: `Eq`, `Arp`, `Harmonize`, `Lfo` or `Echo`, see below |
+| `kind`    | string        | Which effect it is: `Eq`, `Arp`, `Harmonize`, `Lfo`, `Echo` or `Envelope`, see below |
 | `values`  | array of ints | Each of the effect's parameters, `0`-`255`, in the order below |
 | `enabled` | bool          | `false` if the effect is turned off: notes pass it unchanged, and it keeps its place and values |
+| `param_ccs` | array of ints or nils | The CC each parameter follows, `0`-`127`, in the same order as `values`; nil for none. Parameters past its end follow none |
 
 mTrak clamps a value to what its parameter takes, gives parameters without a value their
 default, and ignores values past the effect's last parameter.
@@ -130,6 +131,22 @@ note with retrigger on. Its values:
 | 6     | CC center | The CC's value in the middle of the wave, `0`-`127`                       | `64`    |
 
 When playback stops, the bend or CC the wave moved last is set back to its middle.
+
+The `Envelope` effect moves the pitch bend or a CC with an ADSR envelope, started by notes. It only runs while the song plays. Its values:
+
+| Index | Parameter | Values                                                                    | Default |
+| ----- | --------- | ------------------------------------------------------------------------- | ------- |
+| 0     | Attack    | Ticks to rise from rest to the peak, `0`-`255`                            | `0`     |
+| 1     | Decay     | Ticks to fall from the peak to the sustain level, `0`-`255`               | `12`    |
+| 2     | Sustain   | The level held while notes are held, `0`-`255`; `255` is the peak         | `128`   |
+| 3     | Release   | Ticks to fall back to rest after the last note ends, `0`-`255`            | `12`    |
+| 4     | Overlap   | What a note does while the envelope is moving: `0` starts the attack from rest, `1` from where it is | `0` |
+| 5     | Depth     | How far the peak is from rest, a two's complement signed byte: in CC steps; for pitch bend, `127` (or `-127`) reaches the end of the bend range | `0x7F` |
+| 6     | Target    | `0` pitch bend, `1` a CC                                                  | `1`     |
+| 7     | CC        | The CC it moves, `0`-`127`, for target `1`                                | `1`     |
+| 8     | CC base   | The CC's value at rest, `0`-`127`                                         | `0`     |
+
+When playback stops, the bend or CC is set back to rest.
 
 The `Echo` effect plays each note again and again, each repeat as long as the note was held
 and quieter than the one before, until its velocity reaches 0. It only runs while the song

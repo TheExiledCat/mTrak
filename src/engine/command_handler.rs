@@ -9,7 +9,7 @@ use crate::{
     data::{
         commands::{MidiCommand, PlaybackAction},
         instrument::DEFAULT_PITCH_WHEEL_RANGE,
-        midi::{MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX},
+        midi::{BEND_CENTER, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX},
         note::Note,
     },
     tui::constants::TRACK_COUNT,
@@ -74,7 +74,6 @@ fn cc_value(value: u8) -> u8 {
 
 const MIDI_CHANNEL_COUNT: usize = MIDI_CHANNEL_MAX as usize + 1;
 const MOD_WHEEL_CC: u8 = 1;
-const BEND_CENTER: u16 = 8192;
 
 /// Maps a 00-FF command value to a 14 bit pitch bend: 00 is full down, 80 is no bend and
 /// FF is full up.

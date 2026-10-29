@@ -133,6 +133,8 @@ pub struct Config {
     pub midi_input: Option<String>,
     /// The MIDI output port projects that don't name one connect to.
     pub midi_output: Option<String>,
+    /// Send what the MIDI input plays to the output, not only its notes.
+    pub soft_thru: bool,
     /// Show and type the numbers in dialogs in hex, else in decimal.
     pub hex_values: bool,
     /// Show the range of a number field after its label in dialogs.
@@ -154,6 +156,7 @@ impl Default for Config {
             update_check: true,
             midi_input: None,
             midi_output: None,
+            soft_thru: false,
             hex_values: true,
             show_value_ranges: true,
             hex_line_numbers: true,
@@ -180,6 +183,7 @@ impl Config {
                 "update_check" => config.update_check = parse_bool(&entry.value).map_err(error)?,
                 "midi_input" => config.midi_input = port(&entry.value),
                 "midi_output" => config.midi_output = port(&entry.value),
+                "soft_thru" => config.soft_thru = parse_bool(&entry.value).map_err(error)?,
                 "hex_values" => config.hex_values = parse_bool(&entry.value).map_err(error)?,
                 "show_value_ranges" => {
                     config.show_value_ranges = parse_bool(&entry.value).map_err(error)?;
@@ -213,6 +217,7 @@ impl Config {
             update_check,
             midi_input,
             midi_output,
+            soft_thru,
             hex_values,
             show_value_ranges,
             hex_line_numbers,
@@ -241,6 +246,9 @@ impl Config {
              # The MIDI ports a project connects to when it doesn't name its own, \"\" for none.\n\
              midi_input = {midi_input}\n\
              midi_output = {midi_output}\n\
+             # Send CCs, pitch bend, aftertouch and program changes from the MIDI input to the\n\
+             # active instrument, like its notes.\n\
+             soft_thru = {soft_thru}\n\
              \n\
              # Numbers in dialogs in hex, or in decimal when false.\n\
              hex_values = {hex_values}\n\
@@ -288,6 +296,7 @@ mod tests {
                 update_check: false,
                 midi_input: Some("Keys".to_owned()),
                 midi_output: Some("USB \\MIDI \"Out\"".to_owned()),
+                soft_thru: true,
                 hex_values: false,
                 show_value_ranges: false,
                 hex_line_numbers: false,

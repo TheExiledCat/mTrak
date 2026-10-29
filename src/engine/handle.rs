@@ -15,6 +15,7 @@ use super::{
 };
 use crate::{
     data::{
+        effect::EffectSettings,
         midi::MidiEvent,
         note::NotePitch,
         pattern::{Pattern, PatternId},
@@ -69,17 +70,39 @@ pub enum EngineCommand {
         channel: u8,
         range: u8,
     },
-    /// Replaces an instrument's live effects.
     SetEffectChain {
         channel: u8,
         chain: MidiEffectChain,
     },
-    /// Sets parameter `param` of the effect at `effect` in an instrument's chain.
     SetEffectParam {
         channel: u8,
         effect: usize,
         param: usize,
         value: u8,
+    },
+    AddEffect {
+        channel: u8,
+        settings: EffectSettings,
+    },
+    RemoveEffect {
+        channel: u8,
+        effect: usize,
+    },
+    MoveEffect {
+        channel: u8,
+        from: usize,
+        to: usize,
+    },
+    SetEffectEnabled {
+        channel: u8,
+        effect: usize,
+        enabled: bool,
+    },
+    SetEffectParamCc {
+        channel: u8,
+        effect: usize,
+        param: usize,
+        cc: Option<u8>,
     },
     SetMidiClock(bool),
     SetClockSource(ClockSource),
@@ -266,6 +289,31 @@ impl EngineHandle {
             effect,
             param,
             value,
+        });
+    }
+
+    pub fn add_effect(&self, channel: u8, settings: EffectSettings) {
+        self.send(EngineCommand::AddEffect { channel, settings });
+    }
+    pub fn remove_effect(&self, channel: u8, effect: usize) {
+        self.send(EngineCommand::RemoveEffect { channel, effect });
+    }
+    pub fn move_effect(&self, channel: u8, from: usize, to: usize) {
+        self.send(EngineCommand::MoveEffect { channel, from, to });
+    }
+    pub fn set_effect_enabled(&self, channel: u8, effect: usize, enabled: bool) {
+        self.send(EngineCommand::SetEffectEnabled {
+            channel,
+            effect,
+            enabled,
+        });
+    }
+    pub fn set_effect_param_cc(&self, channel: u8, effect: usize, param: usize, cc: Option<u8>) {
+        self.send(EngineCommand::SetEffectParamCc {
+            channel,
+            effect,
+            param,
+            cc,
         });
     }
 

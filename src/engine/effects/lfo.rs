@@ -5,7 +5,7 @@ use rand::RngExt;
 use strum::FromRepr;
 
 use crate::{
-    data::midi::VELOCITY_MAX,
+    data::midi::{BEND_CENTER, CC_MAX, VELOCITY_MAX, bend_by, cc_by},
     engine::effects::{MidiEffect, Param, ParamKind, Timing, note_event},
 };
 
@@ -21,9 +21,6 @@ pub const CENTER_PARAM: usize = 6;
 const SHAPE_NAMES: &[&str] = &["Sine", "Triangle", "Saw up", "Saw down", "Square", "Random"];
 /// In the order of `LfoTarget`.
 const TARGET_NAMES: &[&str] = &["Velocity", "Pitch bend", "CC"];
-const BEND_CENTER: i32 = 0x2000;
-const BEND_MAX: i32 = 0x3FFF;
-const CC_MAX: u8 = 0x7F;
 
 const PARAMS: &[Param] = &[
     Param {
@@ -187,21 +184,8 @@ impl LfoEffect {
         let offset = self.offset(ticks);
         let message = match self.target {
             LfoTarget::Velocity => return,
-            LfoTarget::Bend => {
-                // full depth reaches the end of the range either way, which is a step
-                // further down than up
-                let reach = if offset < 0.0 {
-                    BEND_CENTER
-                } else {
-                    BEND_MAX - BEND_CENTER
-                };
-                let bend = BEND_CENTER + (offset / i8::MAX as f32 * reach as f32).round() as i32;
-                Message::PitchBend(channel, bend.clamp(0, BEND_MAX) as u16)
-            }
-            LfoTarget::CC => {
-                let value = self.center as i32 + offset.round() as i32;
-                Message::ControlChange(channel, self.cc, value.clamp(0, CC_MAX as i32) as u8)
-            }
+            LfoTarget::Bend => bend_by(channel, offset),
+            LfoTarget::CC => cc_by(channel, self.cc, self.center, offset),
         };
         if self.sent.as_ref() != Some(&message) {
             self.sent = Some(message.clone());
@@ -288,7 +272,7 @@ impl MidiEffect for LfoEffect {
     fn reset(&mut self, out: &mut Vec<Message>) {
         match self.sent.take() {
             Some(Message::PitchBend(channel, _)) => {
-                out.push(Message::PitchBend(channel, BEND_CENTER as u16));
+                out.push(Message::PitchBend(channel, BEND_CENTER));
             }
             Some(Message::ControlChange(channel, cc, _)) => {
                 out.push(Message::ControlChange(channel, cc, self.center));

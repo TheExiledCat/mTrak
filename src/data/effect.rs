@@ -9,6 +9,7 @@ pub enum EffectKind {
     Harmonize,
     Lfo,
     Echo,
+    Envelope,
 }
 impl EffectKind {
     pub fn name(&self) -> &'static str {
@@ -18,6 +19,7 @@ impl EffectKind {
             EffectKind::Harmonize => "Chord",
             EffectKind::Lfo => "LFO",
             EffectKind::Echo => "Echo",
+            EffectKind::Envelope => "Envelope",
         };
     }
 }
@@ -29,6 +31,9 @@ pub struct EffectSettings {
     pub kind: EffectKind,
     pub values: Vec<u8>,
     pub enabled: bool,
+    /// The CC that modulates each parameter, in the same order as `values`. Parameters past
+    /// the end have none.
+    pub param_ccs: Vec<Option<u8>>,
 }
 impl EffectSettings {
     pub fn new(kind: EffectKind, values: Vec<u8>) -> Self {
@@ -36,6 +41,11 @@ impl EffectSettings {
             kind,
             values,
             enabled: true,
+            param_ccs: Vec::new(),
         };
+    }
+
+    pub fn param_cc(&self, param: usize) -> Option<u8> {
+        return self.param_ccs.get(param).copied().flatten();
     }
 }

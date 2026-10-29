@@ -1,5 +1,6 @@
 pub mod arp;
 pub mod echo;
+pub mod envelope;
 pub mod eq;
 pub mod harmonizer;
 pub mod lfo;
@@ -8,12 +9,12 @@ use midi::{Channel, Message, U7};
 use crate::{
     data::{
         effect::{EffectKind, EffectSettings},
-        midi::{PITCH_MAX, PULSES_PER_QUARTER},
+        midi::{CC_MAX, PITCH_MAX, PULSES_PER_QUARTER},
         note::NotePitch,
     },
     engine::effects::{
-        arp::ArpeggiatorEffect, echo::EchoEffect, eq::EqEffect, harmonizer::Harmonizer,
-        lfo::LfoEffect,
+        arp::ArpeggiatorEffect, echo::EchoEffect, envelope::EnvelopeEffect, eq::EqEffect,
+        harmonizer::Harmonizer, lfo::LfoEffect,
     },
     tui::framework::core_extensions::Boxed,
 };
@@ -27,6 +28,7 @@ pub fn create_effect(settings: &EffectSettings) -> Box<dyn MidiEffect> {
         EffectKind::Harmonize => Harmonizer::new().boxed(),
         EffectKind::Lfo => LfoEffect::new().boxed(),
         EffectKind::Echo => EchoEffect::new().boxed(),
+        EffectKind::Envelope => EnvelopeEffect::new().boxed(),
     };
     for (index, (param, value)) in effect.params().iter().zip(&settings.values).enumerate() {
         effect.set_param(index, param.kind.clamp(*value));
@@ -34,12 +36,10 @@ pub fn create_effect(settings: &EffectSettings) -> Box<dyn MidiEffect> {
     return effect;
 }
 
-/// The parameters an effect of `kind` has.
 pub fn effect_params(kind: EffectKind) -> &'static [Param] {
     return create_effect(&EffectSettings::new(kind, Vec::new())).params();
 }
 
-/// The settings of a new effect of `kind`, with every parameter at its default.
 pub fn default_settings(kind: EffectKind) -> EffectSettings {
     let values = effect_params(kind)
         .iter()
@@ -62,35 +62,12 @@ pub fn set_saved_param(settings: &mut EffectSettings, param: usize, value: u8) -
     return Some(value);
 }
 
-/// An instrument's chain, built from its saved effects.
 pub fn create_chain(effects: &[EffectSettings]) -> MidiEffectChain {
     let mut chain = MidiEffectChain::new();
     for settings in effects {
-        let effect = create_effect(settings);
-        chain.push(match settings.enabled {
-            true => effect,
-            false => Bypassed(effect).boxed(),
-        });
+        chain.push_settings(settings);
     }
     return chain;
-}
-
-/// A disabled effect: it keeps its place and settings in the chain, but lets every message
-/// through untouched.
-struct Bypassed(Box<dyn MidiEffect>);
-impl MidiEffect for Bypassed {
-    fn params(&self) -> &'static [Param] {
-        return self.0.params();
-    }
-    fn param(&self, index: usize) -> u8 {
-        return self.0.param(index);
-    }
-    fn set_param(&mut self, index: usize, value: u8) {
-        self.0.set_param(index, value);
-    }
-    fn process(&mut self, message: Message, _timing: Option<Timing>, out: &mut Vec<Message>) {
-        out.push(message);
-    }
 }
 
 /// How a parameter's value is shown and which values it takes.
@@ -109,7 +86,6 @@ pub enum ParamKind {
     Pitch,
 }
 impl ParamKind {
-    /// The nearest value this kind takes.
     pub fn clamp(&self, value: u8) -> u8 {
         return match *self {
             ParamKind::Number { min, max } => value.clamp(min, max),
@@ -117,6 +93,22 @@ impl ParamKind {
             ParamKind::Toggle => value.min(1),
             ParamKind::Choice(names) => value.min(names.len().saturating_sub(1) as u8),
             ParamKind::Pitch => value.min(PITCH_MAX),
+        };
+    }
+
+    /// The value a CC value of 0 to 127 sets, spread over the whole range.
+    pub fn cc_to_value(&self, value: u8) -> u8 {
+        let value = value.min(CC_MAX) as i32;
+        let spread =
+            |min: i32, max: i32| min + (value * (max - min) + CC_MAX as i32 / 2) / CC_MAX as i32;
+        return match *self {
+            ParamKind::Number { min, max } => spread(min as i32, max as i32) as u8,
+            ParamKind::SignedNumber { min, max } => spread(min as i32, max as i32) as i8 as u8,
+            ParamKind::Toggle => (value > CC_MAX as i32 / 2) as u8,
+            ParamKind::Choice(names) => {
+                (value as usize * names.len() / (CC_MAX as usize + 1)) as u8
+            }
+            ParamKind::Pitch => value as u8,
         };
     }
 }
@@ -172,17 +164,171 @@ pub trait MidiEffect: Send {
 }
 
 /// An instrument's effects, each one feeding the next.
+///
+/// A parameter can follow a CC: when that CC reaches its effect, it sets the parameter instead
+/// of going through the effect, so effects above it, like an LFO, can modulate it too. A CC
+/// any parameter follows is never sent out. Modulated parameters go back to their own values
+/// on reset.
 #[derive(Default)]
 pub struct MidiEffectChain {
-    chain: Vec<Box<dyn MidiEffect>>,
+    chain: Vec<ChainedEffect>,
+    /// Every CC a parameter in the chain follows.
+    mapped: Vec<u8>,
 }
-impl MidiEffectChain {
-    pub fn new() -> Self {
-        return Self { chain: Vec::new() };
+
+struct ChainedEffect {
+    effect: Box<dyn MidiEffect>,
+    /// A disabled effect keeps its place and settings, but lets every message through.
+    enabled: bool,
+    ccs: Vec<Option<u8>>,
+    /// Each parameter's own value, to go back to after modulation.
+    values: Vec<u8>,
+}
+impl ChainedEffect {
+    /// Runs the messages through the effect, setting the parameters a CC among them maps to.
+    fn process_all(&mut self, messages: Vec<Message>, timing: Option<Timing>) -> Vec<Message> {
+        let mut out = vec![];
+        for message in messages {
+            if let Message::ControlChange(_, control, value) = message
+                && self.ccs.contains(&Some(control))
+            {
+                self.modulate(control, value);
+                out.push(message);
+                continue;
+            }
+            match self.enabled {
+                true => self.effect.process(message, timing, &mut out),
+                false => out.push(message),
+            }
+        }
+        return out;
     }
 
+    fn modulate(&mut self, control: u8, value: u8) {
+        let params = self.effect.params();
+        for (index, cc) in self.ccs.iter().enumerate() {
+            if *cc == Some(control)
+                && let Some(param) = params.get(index)
+            {
+                self.effect.set_param(index, param.kind.cc_to_value(value));
+            }
+        }
+    }
+
+    fn restore(&mut self) {
+        for index in 0..self.values.len() {
+            self.restore_param(index);
+        }
+    }
+
+    fn restore_param(&mut self, index: usize) {
+        let value = self.values[index];
+        if self.effect.param(index) != value {
+            self.effect.set_param(index, value);
+        }
+    }
+}
+
+impl MidiEffectChain {
+    pub fn new() -> Self {
+        return Self {
+            chain: Vec::new(),
+            mapped: Vec::new(),
+        };
+    }
+
+    #[cfg(test)]
     pub fn push(&mut self, effect: Box<dyn MidiEffect>) {
-        self.chain.push(effect);
+        self.add(effect, Vec::new(), true);
+    }
+    fn add(&mut self, effect: Box<dyn MidiEffect>, ccs: Vec<Option<u8>>, enabled: bool) {
+        let values = (0..effect.params().len())
+            .map(|i| effect.param(i))
+            .collect();
+        self.chain.push(ChainedEffect {
+            effect,
+            enabled,
+            ccs,
+            values,
+        });
+        self.map_ccs();
+    }
+    fn map_ccs(&mut self) {
+        self.mapped.clear();
+        for chained in &self.chain {
+            for cc in chained.ccs.iter().flatten() {
+                if !self.mapped.contains(cc) {
+                    self.mapped.push(*cc);
+                }
+            }
+        }
+    }
+
+    /// Turns an effect on or off in place, so the effects around it keep what they're
+    /// playing. A disabled effect releases what it has sounding through the effects after it.
+    pub fn push_settings(&mut self, settings: &EffectSettings) {
+        let effect = create_effect(settings);
+        self.add(effect, settings.param_ccs.clone(), settings.enabled);
+    }
+
+    /// The removed effect releases what it has sounding through the effects after it.
+    pub fn remove(&mut self, effect: usize, out: &mut Vec<Message>) {
+        if effect >= self.chain.len() {
+            return;
+        }
+        let mut removed = self.chain.remove(effect);
+        let mut messages = vec![];
+        removed.effect.reset(&mut messages);
+        for chained in &mut self.chain[effect..] {
+            messages = chained.process_all(messages, None);
+        }
+        self.map_ccs();
+        self.send(messages, out);
+    }
+
+    /// Nothing is reset, so every effect keeps what it's playing.
+    pub fn move_effect(&mut self, from: usize, to: usize) {
+        if from >= self.chain.len() || to >= self.chain.len() {
+            return;
+        }
+        let chained = self.chain.remove(from);
+        self.chain.insert(to, chained);
+    }
+
+    pub fn set_enabled(&mut self, effect: usize, enabled: bool, out: &mut Vec<Message>) {
+        let Some(chained) = self.chain.get_mut(effect) else {
+            return;
+        };
+        if chained.enabled == enabled {
+            return;
+        }
+        chained.enabled = enabled;
+        if enabled {
+            return;
+        }
+        let mut messages = vec![];
+        chained.effect.reset(&mut messages);
+        for chained in &mut self.chain[effect + 1..] {
+            messages = chained.process_all(messages, None);
+        }
+        self.send(messages, out);
+    }
+
+    /// Has a parameter follow a CC, or none. A parameter that stops following one goes back to
+    /// its own value.
+    pub fn set_param_cc(&mut self, effect: usize, param: usize, cc: Option<u8>) {
+        let Some(chained) = self.chain.get_mut(effect) else {
+            return;
+        };
+        if param >= chained.values.len() {
+            return;
+        }
+        if chained.ccs.len() <= param {
+            chained.ccs.resize(param + 1, None);
+        }
+        chained.ccs[param] = cc;
+        chained.restore_param(param);
+        self.map_ccs();
     }
     pub fn is_empty(&self) -> bool {
         return self.chain.is_empty();
@@ -191,70 +337,74 @@ impl MidiEffectChain {
         return self.chain.len();
     }
     pub fn get(&self, index: usize) -> Option<&dyn MidiEffect> {
-        return self.chain.get(index).map(|effect| effect.as_ref());
+        return self.chain.get(index).map(|chained| chained.effect.as_ref());
     }
-    /// Sets a parameter of the effect at `effect`, clamped to what the parameter takes.
-    /// Indices out of range are ignored.
+    /// Sets a parameter of the effect at `effect`, clamped to what the parameter takes. This
+    /// is its own value, which modulation goes back to. Indices out of range are ignored.
     pub fn set_param(&mut self, effect: usize, param: usize, value: u8) {
-        let Some(effect) = self.chain.get_mut(effect) else {
+        let Some(chained) = self.chain.get_mut(effect) else {
             return;
         };
-        let Some(kind) = effect.params().get(param).map(|p| p.kind) else {
+        let Some(kind) = chained.effect.params().get(param).map(|p| p.kind) else {
             return;
         };
-        effect.set_param(param, kind.clamp(value));
+        let value = kind.clamp(value);
+        chained.effect.set_param(param, value);
+        chained.values[param] = value;
     }
 
-    /// Runs a message through every effect in turn.
     pub fn process(&mut self, message: Message, timing: Option<Timing>, out: &mut Vec<Message>) {
         let mut messages = vec![message];
-        for effect in &mut self.chain {
-            messages = process_all(effect.as_mut(), messages, timing);
+        for chained in &mut self.chain {
+            messages = chained.process_all(messages, timing);
         }
-        out.extend(messages);
+        self.send(messages, out);
     }
 
     /// What an effect makes on a tick goes through the effects after it.
     pub fn tick(&mut self, timing: Timing, out: &mut Vec<Message>) {
         let mut messages = vec![];
-        for effect in &mut self.chain {
-            messages = process_all(effect.as_mut(), messages, Some(timing));
-            effect.tick(timing, &mut messages);
+        for chained in &mut self.chain {
+            messages = chained.process_all(messages, Some(timing));
+            if chained.enabled {
+                chained.effect.tick(timing, &mut messages);
+            }
         }
-        out.extend(messages);
+        self.send(messages, out);
     }
 
     /// What an effect makes after a pulse goes through the effects after it.
     pub fn after_pulse(&mut self, timing: Timing, out: &mut Vec<Message>) {
         let mut messages = vec![];
-        for effect in &mut self.chain {
-            messages = process_all(effect.as_mut(), messages, Some(timing));
-            effect.after_pulse(timing, &mut messages);
+        for chained in &mut self.chain {
+            messages = chained.process_all(messages, Some(timing));
+            if chained.enabled {
+                chained.effect.after_pulse(timing, &mut messages);
+            }
         }
-        out.extend(messages);
+        self.send(messages, out);
     }
 
     /// The releases an effect writes go through the effects after it before those reset too.
+    /// Modulated parameters go back to their own values.
     pub fn reset(&mut self, out: &mut Vec<Message>) {
         let mut messages = vec![];
-        for effect in &mut self.chain {
-            messages = process_all(effect.as_mut(), messages, None);
-            effect.reset(&mut messages);
+        for chained in &mut self.chain {
+            messages = chained.process_all(messages, None);
+            chained.effect.reset(&mut messages);
         }
-        out.extend(messages);
+        for chained in &mut self.chain {
+            chained.restore();
+        }
+        self.send(messages, out);
     }
-}
 
-fn process_all(
-    effect: &mut dyn MidiEffect,
-    messages: Vec<Message>,
-    timing: Option<Timing>,
-) -> Vec<Message> {
-    let mut out = vec![];
-    for message in messages {
-        effect.process(message, timing, &mut out);
+    /// Sends what came out of the last effect, keeping back the CCs parameters follow.
+    fn send(&self, messages: Vec<Message>, out: &mut Vec<Message>) {
+        out.extend(messages.into_iter().filter(|message| {
+            !matches!(message, Message::ControlChange(_, control, _) if self.mapped.contains(control))
+        }));
     }
-    return out;
 }
 
 #[derive(Clone, Copy)]
@@ -527,6 +677,125 @@ mod tests {
         assert_eq!(out, vec![note_on(60)]);
     }
 
+    #[test]
+    fn turning_off_an_effect_keeps_the_arp_above_it_playing() {
+        let chord = settings(EffectKind::Harmonize, &[(0, 4)]);
+        let mut chain = create_chain(&[fifth_arp(), chord]);
+        let mut out = vec![];
+        chain.process(note_on(60), Some(Timing::new(0)), &mut out);
+        assert_eq!(out, vec![note_on(60), note_on(64)]);
+        out.clear();
+        chain.set_enabled(1, false, &mut out);
+        assert_eq!(
+            out,
+            vec![
+                Message::NoteOff(Channel::Ch1, 60, 0),
+                Message::NoteOff(Channel::Ch1, 64, 0),
+            ]
+        );
+        out.clear();
+        out.extend(run_pulse(&mut chain, 1));
+        out.extend(run_pulse(&mut chain, 2));
+        assert_eq!(
+            out,
+            vec![Message::NoteOff(Channel::Ch1, 60, 0), note_on(67)]
+        );
+        out.clear();
+        chain.set_enabled(1, true, &mut out);
+        assert!(out.is_empty());
+        out.extend(run_pulse(&mut chain, 3));
+        out.extend(run_pulse(&mut chain, 4));
+        assert_eq!(
+            out,
+            vec![
+                Message::NoteOff(Channel::Ch1, 67, 0),
+                note_on(60),
+                note_on(64)
+            ]
+        );
+    }
+
+    /// A held arp above a chord of a major third, one pulse in.
+    fn arp_into_chord() -> MidiEffectChain {
+        let chord = settings(EffectKind::Harmonize, &[(0, 4)]);
+        let mut chain = create_chain(&[fifth_arp(), chord]);
+        let mut out = vec![];
+        chain.process(note_on(60), Some(Timing::new(0)), &mut out);
+        assert_eq!(out, vec![note_on(60), note_on(64)]);
+        return chain;
+    }
+
+    #[test]
+    fn removing_an_effect_releases_its_notes_and_keeps_the_arp_playing() {
+        let mut chain = arp_into_chord();
+        let mut out = vec![];
+        chain.remove(1, &mut out);
+        assert_eq!(
+            out,
+            vec![
+                Message::NoteOff(Channel::Ch1, 60, 0),
+                Message::NoteOff(Channel::Ch1, 64, 0),
+            ]
+        );
+        assert_eq!(chain.len(), 1);
+        out.clear();
+        out.extend(run_pulse(&mut chain, 1));
+        out.extend(run_pulse(&mut chain, 2));
+        assert_eq!(
+            out,
+            vec![Message::NoteOff(Channel::Ch1, 60, 0), note_on(67)]
+        );
+    }
+
+    #[test]
+    fn an_added_effect_changes_the_next_step_of_a_playing_arp() {
+        let mut chain = create_chain(&[fifth_arp()]);
+        let mut out = vec![];
+        chain.process(note_on(60), Some(Timing::new(0)), &mut out);
+        chain.push_settings(&settings(EffectKind::Harmonize, &[(0, 4)]));
+        out.clear();
+        out.extend(run_pulse(&mut chain, 1));
+        out.extend(run_pulse(&mut chain, 2));
+        assert_eq!(
+            out,
+            vec![
+                Message::NoteOff(Channel::Ch1, 60, 0),
+                note_on(67),
+                note_on(71)
+            ]
+        );
+    }
+
+    #[test]
+    fn moving_an_effect_keeps_everything_playing() {
+        let mut chain = arp_into_chord();
+        chain.move_effect(0, 1);
+        let mut out = vec![];
+        out.extend(run_pulse(&mut chain, 1));
+        out.extend(run_pulse(&mut chain, 2));
+        assert_eq!(
+            out,
+            vec![Message::NoteOff(Channel::Ch1, 60, 0), note_on(67)]
+        );
+        chain.move_effect(5, 0);
+        assert_eq!(chain.len(), 2);
+    }
+
+    #[test]
+    fn a_param_that_stops_following_a_cc_goes_back_to_its_value() {
+        let mut chain = echo_on_cc_20();
+        let mut out = vec![];
+        chain.process(cc(20, 0), None, &mut out);
+        chain.set_param_cc(0, echo::FEEDBACK_PARAM, None);
+        assert_eq!(chain.get(0).unwrap().param(echo::FEEDBACK_PARAM), 0x80);
+        chain.process(cc(20, 0), None, &mut out);
+        assert_eq!(out, vec![cc(20, 0)]);
+        chain.set_param_cc(0, echo::RATE_PARAM, Some(21));
+        chain.process(cc(21, 0), None, &mut out);
+        assert_eq!(chain.get(0).unwrap().param(echo::RATE_PARAM), 1);
+        assert_eq!(out, vec![cc(20, 0)]);
+    }
+
     fn settings(kind: EffectKind, values: &[(usize, u8)]) -> EffectSettings {
         let mut settings = default_settings(kind);
         for (param, value) in values {
@@ -610,6 +879,134 @@ mod tests {
             out,
             vec![note_on(60), Message::NoteOff(Channel::Ch1, 60, 0)]
         );
+    }
+
+    fn cc(control: u8, value: u8) -> Message {
+        return Message::ControlChange(Channel::Ch1, control, value);
+    }
+
+    /// An echo whose feedback follows CC 20.
+    fn echo_on_cc_20() -> MidiEffectChain {
+        let mut settings = default_settings(EffectKind::Echo);
+        settings.param_ccs = vec![None, Some(20)];
+        return create_chain(&[settings]);
+    }
+
+    #[test]
+    fn a_mapped_cc_sets_its_param_and_is_not_sent() {
+        let mut chain = echo_on_cc_20();
+        let mut out = vec![];
+        chain.process(cc(20, 0x7F), None, &mut out);
+        chain.process(cc(21, 5), None, &mut out);
+        assert_eq!(out, vec![cc(21, 5)]);
+        assert_eq!(chain.get(0).unwrap().param(echo::FEEDBACK_PARAM), 0xFF);
+        chain.process(cc(20, 0), None, &mut out);
+        assert_eq!(chain.get(0).unwrap().param(echo::FEEDBACK_PARAM), 0);
+    }
+
+    #[test]
+    fn modulation_is_undone_on_reset_but_set_params_stay() {
+        let mut chain = echo_on_cc_20();
+        let mut out = vec![];
+        chain.process(cc(20, 0), None, &mut out);
+        chain.reset(&mut out);
+        assert_eq!(chain.get(0).unwrap().param(echo::FEEDBACK_PARAM), 0x80);
+        chain.set_param(0, echo::FEEDBACK_PARAM, 0x10);
+        chain.reset(&mut out);
+        assert_eq!(chain.get(0).unwrap().param(echo::FEEDBACK_PARAM), 0x10);
+    }
+
+    #[test]
+    fn an_lfo_above_modulates_the_effects_below_it() {
+        let lfo = settings(
+            EffectKind::Lfo,
+            &[
+                (lfo::TARGET_PARAM, 2),
+                (lfo::CC_PARAM, 20),
+                (lfo::SHAPE_PARAM, 4),
+                (lfo::DEPTH_PARAM, 0x7F),
+            ],
+        );
+        let mut echo = default_settings(EffectKind::Echo);
+        echo.param_ccs = vec![None, Some(20)];
+        let mut chain = create_chain(&[lfo, echo]);
+        let mut out = vec![];
+        chain.process(
+            Message::NoteOn(Channel::Ch1, 60, 100),
+            Some(Timing::new(0)),
+            &mut out,
+        );
+        out.extend(run_pulse(&mut chain, 1));
+        assert!(
+            out.iter()
+                .all(|message| !matches!(message, Message::ControlChange(..))),
+            "{out:?}"
+        );
+        assert_ne!(chain.get(1).unwrap().param(echo::FEEDBACK_PARAM), 0x80);
+    }
+
+    #[test]
+    fn a_cc_reaches_only_the_effects_below_whatever_sends_it() {
+        let mut echo = default_settings(EffectKind::Echo);
+        echo.param_ccs = vec![None, Some(20)];
+        let lfo = settings(
+            EffectKind::Lfo,
+            &[
+                (lfo::TARGET_PARAM, 2),
+                (lfo::CC_PARAM, 20),
+                (lfo::SHAPE_PARAM, 4),
+            ],
+        );
+        let mut chain = create_chain(&[echo, lfo]);
+        let mut out = vec![];
+        chain.process(
+            Message::NoteOn(Channel::Ch1, 60, 100),
+            Some(Timing::new(0)),
+            &mut out,
+        );
+        out.extend(run_pulse(&mut chain, 1));
+        assert_eq!(chain.get(0).unwrap().param(echo::FEEDBACK_PARAM), 0x80);
+        assert!(
+            out.iter()
+                .all(|message| !matches!(message, Message::ControlChange(..))),
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn cc_values_spread_over_each_params_range() {
+        let rate = ParamKind::Number { min: 1, max: 0xFF };
+        assert_eq!(
+            (
+                rate.cc_to_value(0),
+                rate.cc_to_value(0x40),
+                rate.cc_to_value(0x7F)
+            ),
+            (1, 0x81, 0xFF)
+        );
+        let signed = ParamKind::SignedNumber {
+            min: i8::MIN,
+            max: i8::MAX,
+        };
+        assert_eq!(signed.cc_to_value(0) as i8, i8::MIN);
+        assert_eq!(signed.cc_to_value(0x7F) as i8, i8::MAX);
+        assert_eq!(
+            (
+                ParamKind::Toggle.cc_to_value(0x3F),
+                ParamKind::Toggle.cc_to_value(0x40)
+            ),
+            (0, 1)
+        );
+        let choice = ParamKind::Choice(&["a", "b", "c"]);
+        assert_eq!(
+            (
+                choice.cc_to_value(0),
+                choice.cc_to_value(0x40),
+                choice.cc_to_value(0x7F)
+            ),
+            (0, 1, 2)
+        );
+        assert_eq!(ParamKind::Pitch.cc_to_value(0xFF), PITCH_MAX);
     }
 
     #[test]

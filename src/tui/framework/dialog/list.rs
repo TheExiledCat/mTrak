@@ -64,7 +64,6 @@ pub struct List {
     id: &'static str,
     items: Vec<String>,
     source: Option<ItemSource>,
-    /// Each item's checkbox, if the list has them.
     checks: Option<Vec<bool>>,
     check_source: Option<CheckSource>,
     show_index: bool,

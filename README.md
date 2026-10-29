@@ -20,8 +20,9 @@ any hardware or software synth.
   (see [docs/SYNC.md](docs/SYNC.md))
 - Command column for MIDI and playback commands, using FT2 syntax where applicable
   (see [docs/COMMANDS.md](docs/COMMANDS.md))
-- Live MIDI effects on each instrument: arpeggiator, chords, a velocity EQ, an echo and an
-  LFO for velocity, pitch bend or a CC (see [docs/EFFECTS.md](docs/EFFECTS.md))
+- Live MIDI effects on each instrument: arpeggiator, chords, a velocity EQ, an echo, an LFO
+  and an envelope, with every setting changeable from pattern CC commands
+  (see [docs/EFFECTS.md](docs/EFFECTS.md))
 - Per-channel activity meters, channel muting and a MIDI event monitor
 - Built-in file browser for opening and saving projects
 - Context-aware key hints and a built in shortcuts screen
@@ -84,7 +85,8 @@ Press `/` to see every pattern command with a short description. The full guide 
 ### Effects
 
 Each instrument can have a chain of live MIDI effects. Press `Ctrl+R` for the active
-instrument's dialog and choose `Effects` to add them. The guide is
+instrument's dialog and choose `Effects` to add them. Each effect's `CC mapping` lets pattern
+commands change its settings while the song plays. The guide is
 [docs/EFFECTS.md](docs/EFFECTS.md), which is also included in every release zip.
 
 ### Options

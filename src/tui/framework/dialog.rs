@@ -97,7 +97,6 @@ impl DialogResult {
         };
     }
 
-    /// What was last done in a list, if anything was.
     pub fn list_event(&self, id: &str) -> Option<ListEvent> {
         return match self.values.get(id) {
             Some(DialogValue::List { event, count }) if *count > 0 => *event,
@@ -205,6 +204,14 @@ pub enum DialogAction {
 
 impl Action for DialogAction {}
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OnEsc {
+    Cancel,
+    Nothing,
+    /// Closes it like Enter, for a dialog whose changes are made as they happen.
+    Close,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum InfoLevel {
     Info,
@@ -220,7 +227,7 @@ pub struct Dialog {
     title: String,
     width: u16,
     level: InfoLevel,
-    is_cancellable: bool,
+    on_esc: OnEsc,
     components: Vec<Box<dyn DialogComponent>>,
     focus: Option<usize>,
     /// The focused field inside the focused component, for one with subcomponents.
@@ -241,7 +248,7 @@ impl Dialog {
             title: title.into(),
             width: 50,
             level: InfoLevel::Info,
-            is_cancellable: true,
+            on_esc: OnEsc::Cancel,
             components,
             focus: None,
             sub_focus: 0,
@@ -320,7 +327,17 @@ impl Dialog {
     }
 
     pub fn cancellable(mut self, is_cancellable: bool) -> Self {
-        self.is_cancellable = is_cancellable;
+        self.on_esc = match is_cancellable {
+            true => OnEsc::Cancel,
+            false => OnEsc::Nothing,
+        };
+        return self;
+    }
+
+    /// Has Esc close the dialog like Enter, running `on_submit`, for a dialog whose changes
+    /// are made as they happen so there's nothing to cancel.
+    pub fn close_on_esc(mut self) -> Self {
+        self.on_esc = OnEsc::Close;
         return self;
     }
 
@@ -518,8 +535,11 @@ impl KeyActions for Dialog {
     fn perform(&mut self, action: DialogAction, state: &mut AppState) -> Result<()> {
         match action {
             DialogAction::Submit => self.submit(state)?,
-            DialogAction::Cancel if self.is_cancellable => self.cancel(state),
-            DialogAction::Cancel => {}
+            DialogAction::Cancel => match self.on_esc {
+                OnEsc::Cancel => self.cancel(state),
+                OnEsc::Nothing => {}
+                OnEsc::Close => self.submit(state)?,
+            },
             DialogAction::NextField => self.move_focus(true),
             DialogAction::PrevField => self.move_focus(false),
         }
@@ -529,7 +549,7 @@ impl KeyActions for Dialog {
     fn describe(action: DialogAction) -> &'static str {
         return match action {
             DialogAction::Submit => "Confirm",
-            DialogAction::Cancel => "Cancel",
+            DialogAction::Cancel => "Cancel, or close a dialog whose changes are already made",
             DialogAction::NextField => "Next field",
             DialogAction::PrevField => "Previous field",
         };
@@ -607,8 +627,15 @@ impl MtrakWidget for Dialog {
                 return position <= component_hints || !taken.contains(&h.key);
             });
         }
-        if !self.is_cancellable {
-            hints.retain(|h| h.label != "Cancel");
+        match self.on_esc {
+            OnEsc::Cancel => {}
+            OnEsc::Nothing => hints.retain(|h| h.label != "Cancel"),
+            OnEsc::Close => {
+                hints.retain(|h| h.label != "OK");
+                for hint in hints.iter_mut().filter(|h| h.label == "Cancel") {
+                    hint.label = "Close";
+                }
+            }
         }
         if !self.components.iter().any(|c| c.focusable()) {
             hints.retain(|h| h.label != "Field");
@@ -1636,6 +1663,45 @@ mod tests {
         assert_eq!((above.y, above.height), (0, 8));
     }
 
+    #[test]
+    fn esc_closes_a_close_on_esc_dialog_like_enter() {
+        use std::{cell::Cell, rc::Rc};
+
+        use ratatui::crossterm::event::KeyEvent;
+
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let submitted = Rc::new(Cell::new(false));
+        let cancelled = Rc::new(Cell::new(false));
+        let mut dialog = Dialog::new("", vec![Checkbox::new("c", "C").boxed()])
+            .close_on_esc()
+            .on_submit({
+                let submitted = submitted.clone();
+                move |_, _| {
+                    submitted.set(true);
+                    return Ok(());
+                }
+            })
+            .on_cancel({
+                let cancelled = cancelled.clone();
+                move |_| cancelled.set(true)
+            });
+        let mut hints = vec![];
+        dialog.key_hints(&state, &mut hints);
+        let labels: Vec<&str> = hints.iter().map(|hint| hint.label).collect();
+        assert!(labels.contains(&"Close"), "{labels:?}");
+        assert!(
+            !labels.contains(&"OK") && !labels.contains(&"Cancel"),
+            "{labels:?}"
+        );
+        let esc = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        dialog.handle_event(&mut state, &esc);
+        assert!(dialog.is_closed());
+        assert!(submitted.get());
+        assert!(!cancelled.get());
+    }
+
     fn focused(dialog: &Dialog) -> Option<usize> {
         return dialog.focus;
     }
@@ -1749,7 +1815,6 @@ mod tests {
         assert!(number.negative);
     }
 
-    /// A state with numbers in dialogs in hex or decimal.
     fn state_with_hex_values(hex: bool) -> AppState {
         use crate::{data::project::Project, tui::theme::Theme};
 

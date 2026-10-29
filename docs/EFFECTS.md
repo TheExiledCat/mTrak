@@ -1,7 +1,7 @@
 # Effects
 
 Each instrument has a chain of live MIDI effects that change its notes on the way out: an
-arpeggiator, chords, an EQ for velocities, an LFO and an echo. They work on the notes the pattern plays
+arpeggiator, chords, an EQ for velocities, an LFO, an envelope and an echo. They work on the notes the pattern plays
 and on notes you play live, and they're saved with the project.
 
 ## Adding effects
@@ -15,15 +15,39 @@ instrument's effects:
 | `Del`                   | Removes the selected effect                               |
 | `Shift+Up` / `Shift+Down` | Moves the selected effect up or down the chain           |
 | `X`                     | Turns the selected effect off or on                       |
-| `Enter`                 | Closes the dialog                                         |
+| `Esc` / `Enter`         | Closes the dialog                                         |
 
 These keys can be rebound like any other, see [CONFIG.md](CONFIG.md).
 
-Changes are heard straight away, also while the song plays. The instrument, effects and
-effect settings dialogs close with `Enter` only: there's nothing to cancel, as every change is
-already made.
+Changes are heard straight away, also while the song plays. There's nothing to cancel, as every
+change is already made, so `Esc` closes the instrument, effects, effect settings and CC mapping
+dialogs just like `Enter`.
 
 An effect that's turned off keeps its place and settings, and notes pass it unchanged.
+
+## Modulation
+
+Any setting can follow a CC, so pattern commands can change it while the song plays. In an
+effect's settings, `CC mapping` lists every setting with the CC it follows, or `Off`. A CC
+sent on the instrument's channel then sets the setting instead of reaching the synth:
+`00` is its lowest value and `7F` its highest. Choices are split evenly over the CC's values,
+and a toggle is on from `40`.
+
+```
+---|1|--|S14   select CC 20, which the Echo's Feedback follows
+---|1|--|V00   slide the feedback from nothing ...
+---|1|--|000
+---|1|--|MFF   ... to full
+```
+
+Every pattern command for CCs works, so `V` and `J` slide a setting smoothly. A CC also comes
+from an LFO with the CC target, which then modulates the effects below it in the list, but not
+the ones above. With [soft thru](SYNC.md#soft-thru) on, a knob on a MIDI controller does it
+too. Settings can share a CC, to change together.
+
+A CC any setting follows is never sent to the synth on that instrument's channel, so pick
+ones the synth doesn't use; CCs 102 to 119 are free in MIDI. Changes from a CC only last while
+the song plays: stopping or starting it puts every setting back to what the dialog shows.
 
 ## How notes go through
 
@@ -35,9 +59,9 @@ Effects get the notes after mutes, transposes and the global velocity, just befo
 sent.
 
 Times are in ticks. There are 24 ticks in a beat, so at the default speed of 6 a row is 6
-ticks. The Arp, Chord legato, LFO and Echo count ticks, so they only run while the song plays:
+ticks. The Arp, Chord legato, LFO, Envelope and Echo count ticks, so they only run while the song plays:
 while stopped, the Arp and Echo let notes through as they are, the Chord plays all its notes
-at once and the LFO stays at the start of its wave.
+at once, the LFO stays at the start of its wave and the Envelope sends nothing.
 
 Numbers in the settings are hex unless `Values are hex` is turned off in the Config dialog.
 Signed values go below 0, e.g. `-0C` is 12 semitones down.
@@ -108,6 +132,32 @@ old value. When playback stops, the bend or CC is set back to the middle of the 
 
 With Retrigger on and the Velocity target, every note starts at the beginning of the wave, so
 they all get the same change.
+
+## Envelope
+
+Moves the pitch bend or a CC with an ADSR envelope each time a note starts: up to its peak in
+the attack, down to the sustain level in the decay, held there while notes are held, and back
+to rest in the release once the last note ends.
+
+| Setting         | Values     | Default | Does |
+| --------------- | ---------- | ------- | ---- |
+| Attack (ticks)  | `00`-`FF`  | `00`    | How long it takes to rise to the peak. `00` starts the note at the peak |
+| Decay (ticks)   | `00`-`FF`  | `0C`    | How long it takes to fall from the peak to the sustain level |
+| Sustain         | `00`-`FF`  | `80`    | The level held while notes are held: `FF` is the peak, `80` halfway, `00` back at rest |
+| Release (ticks) | `00`-`FF`  | `0C`    | How long it takes to fall back to rest after the last note ends |
+| Overlap         | A choice   | Restart  | What a note does while the envelope is still moving, see below |
+| Depth           | `-80`-`7F` | `7F`    | How far the peak is from rest, in CC steps. For pitch bend, `7F` reaches the top of the synth's bend range. Negative moves it down instead |
+| Target          | A target   | CC      | Pitch bend or CC |
+| CC              | `00`-`7F`  | `01`    | The CC it moves, with the CC target |
+| CC base         | `00`-`7F`  | `00`    | The CC's value at rest |
+
+A note that starts while the envelope is still moving, during another note or its release,
+does what `Overlap` says:
+
+- `Restart`: jumps back to rest and starts the attack over, like a new note on its own.
+- `Continue`: starts the attack from wherever the envelope got to, so it never jumps.
+
+The value for the start of the attack is sent just before the note. When playback stops, the bend or CC goes back to rest.
 
 ## Echo
 

@@ -131,7 +131,6 @@ impl EchoEffect {
         }
     }
 
-    /// Plays a note, and schedules its echoes while playing.
     fn play_note(
         &mut self,
         channel: Channel,

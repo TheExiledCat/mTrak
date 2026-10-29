@@ -52,14 +52,12 @@ const fn params() -> [Param; GATE_PARAM + 1] {
     return params;
 }
 
-/// A held root and the arp it's playing.
 struct HeldArp {
     channel: Channel,
     root: u8,
     velocity: u8,
     /// How many steps have played, so the first can be told apart.
     played: u32,
-    /// The pitches started and not released yet.
     sounding: Vec<u8>,
 }
 

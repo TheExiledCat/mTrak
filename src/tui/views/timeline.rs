@@ -559,7 +559,7 @@ impl TimeLineView {
                         .engine
                         .release_pitch(self.track_index as usize, NotePitch::new(note));
                 }
-                _ => {}
+                message => state.play_thru(message),
             }
         }
     }

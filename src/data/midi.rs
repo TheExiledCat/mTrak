@@ -8,6 +8,9 @@ pub const PULSES_PER_QUARTER: u32 = 24;
 pub const VELOCITY_MAX: u8 = 0x7F;
 /// The highest pitch MIDI can send. The tracker's own range (`NotePitch`) starts higher.
 pub const PITCH_MAX: u8 = 0x7F;
+pub const CC_MAX: u8 = 0x7F;
+pub const BEND_CENTER: u16 = 0x2000;
+pub const BEND_MAX: u16 = 0x3FFF;
 pub const VOLUME_MAX: u8 = 0x80;
 pub const DEFAULT_BPM: u8 = 125;
 pub const DEFAULT_SPEED: u8 = 6;
@@ -116,6 +119,40 @@ pub fn raw_message_to_bytes(msg: RawMessage) -> Vec<u8> {
         }
     }
 }
+/// A bend `offset` steps of depth from the center: 127 either way reaches the end of the range.
+pub fn bend_by(channel: Channel, offset: f32) -> Message {
+    // the range reaches a step further down than up
+    let reach = if offset < 0.0 {
+        BEND_CENTER
+    } else {
+        BEND_MAX - BEND_CENTER
+    };
+    let bend = BEND_CENTER as i32 + (offset / i8::MAX as f32 * reach as f32).round() as i32;
+    return Message::PitchBend(channel, bend.clamp(0, BEND_MAX as i32) as u16);
+}
+
+pub fn cc_by(channel: Channel, cc: u8, from: u8, offset: f32) -> Message {
+    let value = from as i32 + offset.round() as i32;
+    return Message::ControlChange(channel, cc, value.clamp(0, CC_MAX as i32) as u8);
+}
+
+/// A channel message other than a note, moved to `channel`. `None` for notes and system
+/// messages.
+pub fn non_note_on_channel(message: Message, channel: Channel) -> Option<Message> {
+    return Some(match message {
+        Message::PolyphonicPressure(_, note, pressure) => {
+            Message::PolyphonicPressure(channel, note, pressure)
+        }
+        Message::ControlChange(_, controller, value) => {
+            Message::ControlChange(channel, controller, value)
+        }
+        Message::ProgramChange(_, program) => Message::ProgramChange(channel, program),
+        Message::ChannelPressure(_, pressure) => Message::ChannelPressure(channel, pressure),
+        Message::PitchBend(_, bend) => Message::PitchBend(channel, bend),
+        _ => return None,
+    });
+}
+
 pub fn bytes_to_message(bytes: &[u8]) -> Option<Message> {
     let (&status, data) = bytes.split_first()?;
     let channel = Channel::from_u8(status & 0x0F)?;
@@ -145,6 +182,45 @@ mod tests {
     use midi::ToRawMessages;
 
     use super::*;
+
+    #[test]
+    fn mod_wheel_bytes_read_as_cc_1() {
+        assert_eq!(
+            bytes_to_message(&[0xB2, 0x01, 0x40]),
+            Some(Message::ControlChange(Channel::Ch3, 1, 0x40))
+        );
+        assert_eq!(
+            bytes_to_message(&[0xB2, 0x21, 0x10]),
+            Some(Message::ControlChange(Channel::Ch3, 0x21, 0x10))
+        );
+    }
+
+    #[test]
+    fn non_note_messages_move_to_the_channel() {
+        let moved = |message| non_note_on_channel(message, Channel::Ch5);
+        assert_eq!(
+            moved(Message::ControlChange(Channel::Ch1, 74, 9)),
+            Some(Message::ControlChange(Channel::Ch5, 74, 9))
+        );
+        assert_eq!(
+            moved(Message::PitchBend(Channel::Ch2, 0x1234)),
+            Some(Message::PitchBend(Channel::Ch5, 0x1234))
+        );
+        assert_eq!(
+            moved(Message::ChannelPressure(Channel::Ch1, 3)),
+            Some(Message::ChannelPressure(Channel::Ch5, 3))
+        );
+        assert_eq!(
+            moved(Message::PolyphonicPressure(Channel::Ch1, 60, 3)),
+            Some(Message::PolyphonicPressure(Channel::Ch5, 60, 3))
+        );
+        assert_eq!(
+            moved(Message::ProgramChange(Channel::Ch1, 7)),
+            Some(Message::ProgramChange(Channel::Ch5, 7))
+        );
+        assert_eq!(moved(Message::NoteOn(Channel::Ch1, 60, 100)), None);
+        assert_eq!(moved(Message::Start), None);
+    }
 
     #[test]
     fn scale_velocity_rounds_up() {

@@ -216,6 +216,7 @@ mod tests {
             vec![30, 90, 0xC0, 0x00, 0x40, 24, 100, 16],
         )];
         bass.effects[0].enabled = false;
+        bass.effects[0].param_ccs = vec![None, Some(0x4A)];
 
         let first = project
             .patterns

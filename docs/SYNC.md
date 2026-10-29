@@ -11,15 +11,26 @@ own clock out. All of it is set up in the MIDI dialog
 | `MIDI input`      | The port notes come in on, for playing and entering notes               |
 | `Clock SRC`       | `(internal)` to use mTrak's own tempo, or the port to follow clock from |
 | `Record Velocity` | Notes entered from the MIDI input keep their velocity                   |
+| `Soft thru`       | Also plays the input's CCs, pitch bend, aftertouch and program changes, see below |
 | `MIDI output`     | The port mTrak plays on                                                 |
 | `Send MIDI clock` | Sends clock pulses to the output, so other devices can follow mTrak     |
 
-The ports are saved with the project. When a project opens and a saved port isn't there,
+The ports, `Record Velocity` and `Send MIDI clock` are saved with the project. When a project opens and a saved port isn't there,
 that setting goes back to none (or `(internal)` for the clock).
 
 The note input and the clock input can be the same port or two different ones. Clock and
 transport messages never reach the pattern editor, so a keyboard that also sends clock
 doesn't get in the way.
+
+## Soft thru
+
+Notes from the MIDI input always play on the active instrument. With `Soft thru` on, its CCs,
+pitch bend, aftertouch and program changes do too, whatever channel they come in on. They go
+through the instrument's effects like its notes, so a knob sending a CC an effect setting
+follows changes that setting (see [EFFECTS.md](EFFECTS.md#modulation)).
+
+`Soft thru` is saved in `config.toml`, not in the project, so it stays the same for every
+project.
 
 ## Following an external clock
 
