@@ -1,4 +1,4 @@
-use std::iter::{self, repeat_n};
+use std::iter::repeat_n;
 
 use ratatui::{
     buffer::Buffer,
@@ -420,9 +420,7 @@ fn middle_line(height: u16) -> usize {
 /// which keeps the highlight fixed while the rows scroll past it.
 fn scrolled_to_middle<'a>(lines: Vec<Line<'a>>, selected: u8, height: u16) -> Paragraph<'a> {
     let middle = middle_line(height);
-    let padded: Vec<Line> = iter::repeat_n(Line::default(), middle)
-        .chain(lines)
-        .collect();
+    let padded: Vec<Line> = repeat_n(Line::default(), middle).chain(lines).collect();
     return Paragraph::new(padded).scroll((selected as u16, 0));
 }
 #[derive(PartialEq)]
@@ -1246,11 +1244,7 @@ impl MtrakWidget for TimeLineView {
         }
         self.row_index = row as u8;
     }
-    fn handle_event(
-        &mut self,
-        state: &mut AppState,
-        event: &ratatui::crossterm::event::Event,
-    ) -> bool {
+    fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
         if self.dispatch(state, event) {
             return true;
         }
@@ -1328,12 +1322,7 @@ impl MtrakWidget for TimeLineView {
         }
     }
 
-    fn render(
-        &mut self,
-        state: &AppState,
-        area: ratatui::prelude::Rect,
-        buf: &mut ratatui::prelude::Buffer,
-    ) {
+    fn render(&mut self, state: &AppState, area: Rect, buf: &mut Buffer) {
         let pattern_store = &state.project().patterns;
         let pattern = pattern_store
             .get_pattern_by_id(state.active_pattern)

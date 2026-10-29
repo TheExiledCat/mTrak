@@ -9,10 +9,6 @@ use std::{
 
 use midir::MidiOutputPort;
 
-use super::{
-    effects::MidiEffectChain,
-    engine::{MtrakEngine, PlayMode},
-};
 use crate::{
     data::{
         effect::EffectSettings,
@@ -20,6 +16,10 @@ use crate::{
         note::NotePitch,
         pattern::{Pattern, PatternId},
         project::SequenceRow,
+    },
+    engine::{
+        effects::MidiEffectChain,
+        engine::{MtrakEngine, PlayMode},
     },
     error::Result,
 };

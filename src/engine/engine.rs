@@ -12,10 +12,6 @@ use midi::{Channel, Message, ToRawMessages};
 use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
 use num::FromPrimitive;
 
-use super::{
-    handle::{ClockSource, EngineCommand, EngineStatus},
-    voices::Voices,
-};
 use crate::{
     data::{
         commands::{CommandKind, MidiCommand, PlaybackAction},
@@ -34,7 +30,9 @@ use crate::{
             retrig_velocity,
         },
         effects::{MidiEffectChain, Timing},
+        handle::{ClockSource, EngineCommand, EngineStatus},
         notes::MIDI_CHANNEL_COUNT,
+        voices::Voices,
     },
     tui::constants::TRACK_COUNT,
 };
@@ -1396,6 +1394,16 @@ impl MtrakEngine {
     }
 }
 
+/// A note's velocity: the volume column (00-80) wins, then a velocity slide's value, then full
+/// velocity. `None` means the note is silent.
+pub fn velocity(volume: Option<u8>, glide: Option<u8>) -> Option<u8> {
+    let velocity = match volume {
+        Some(volume) => volume.min(VELOCITY_MAX),
+        None => glide.unwrap_or(VELOCITY_MAX),
+    };
+    return (velocity > 0).then_some(velocity);
+}
+
 /// Drops channel messages for muted channels.
 fn audible(events: Vec<MidiEvent>, mutes: &[bool; 16]) -> Vec<Message> {
     return events
@@ -1416,16 +1424,6 @@ fn message_channel(message: &Message) -> Option<u8> {
     return (0x80..=0xEF).contains(&status).then_some(status & 0x0F);
 }
 
-/// A note's velocity: the volume column (00-80) wins, then a velocity slide's value, then full
-/// velocity. `None` means the note is silent.
-pub fn velocity(volume: Option<u8>, glide: Option<u8>) -> Option<u8> {
-    let velocity = match volume {
-        Some(volume) => volume.min(VELOCITY_MAX),
-        None => glide.unwrap_or(VELOCITY_MAX),
-    };
-    return (velocity > 0).then_some(velocity);
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Mutex, mpsc};
@@ -1433,12 +1431,12 @@ mod tests {
     use midi::Channel;
 
     use super::*;
-    use crate::data::{
-        commands::{Command, MidiCommand, PlaybackCommand},
-        note::NotePitch,
-    };
     use crate::{
-        data::effect::EffectKind,
+        data::{
+            commands::{Command, MidiCommand, PlaybackCommand},
+            effect::EffectKind,
+            note::NotePitch,
+        },
         engine::effects::{
             MidiEffect, Param, arp, create_chain, create_effect, default_settings, echo, eq,
         },

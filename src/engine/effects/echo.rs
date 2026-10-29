@@ -2,7 +2,7 @@ use midi::{Channel, Message};
 use num::FromPrimitive;
 
 use crate::engine::{
-    effects::{MidiEffect, Param, ParamKind, Timing, note_event},
+    effects::{MidiEffect, Param, ParamKind, Timing, ValueLabel, note_event},
     notes::{Countdown, MIDI_CHANNEL_COUNT, PITCH_COUNT},
 };
 
@@ -17,6 +17,7 @@ const PARAMS: &[Param] = &[
             max: u8::MAX,
         },
         default: 0x0C,
+        label: ValueLabel::Ticks,
     },
     Param {
         name: "Feedback",
@@ -25,6 +26,7 @@ const PARAMS: &[Param] = &[
             max: u8::MAX,
         },
         default: 0x80,
+        label: ValueLabel::Percent,
     },
 ];
 

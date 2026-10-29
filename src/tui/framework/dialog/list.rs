@@ -6,12 +6,12 @@ use ratatui::{
     widgets::Widget,
 };
 
-use super::{DialogComponent, DialogValue};
 use crate::{
     error::Result,
     tui::{
         app::AppState,
         framework::{
+            dialog::{DialogComponent, DialogValue},
             keymap::{Action, HelpEntry, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
         },

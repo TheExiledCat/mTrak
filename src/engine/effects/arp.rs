@@ -3,7 +3,7 @@ use midi::{Channel, Message};
 use crate::{
     data::midi::PITCH_MAX,
     engine::{
-        effects::{MidiEffect, Param, ParamKind, Timing, note_event},
+        effects::{MidiEffect, Param, ParamKind, Timing, ValueLabel, note_event},
         notes::{Countdown, HeldNotes},
     },
 };
@@ -26,6 +26,7 @@ const fn params() -> [Param; GATE_PARAM + 1] {
             max: i8::MAX,
         },
         default: 0,
+        label: ValueLabel::Semitones,
     }; GATE_PARAM + 1];
     let mut i = 0;
     while i < STEP_COUNT {
@@ -39,6 +40,7 @@ const fn params() -> [Param; GATE_PARAM + 1] {
             max: STEP_COUNT as u8,
         },
         default: 4,
+        label: ValueLabel::None,
     };
     params[RATE_PARAM] = Param {
         name: "Rate (ticks)",
@@ -47,8 +49,10 @@ const fn params() -> [Param; GATE_PARAM + 1] {
             max: u8::MAX,
         },
         default: 6,
+        label: ValueLabel::Ticks,
     };
     params[GATE_PARAM].name = "Gate (ticks)";
+    params[GATE_PARAM].label = ValueLabel::Ticks;
     return params;
 }
 

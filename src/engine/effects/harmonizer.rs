@@ -6,7 +6,7 @@ use crate::{
         note::{NotePitch, SEMITONES_PER_OCTAVE},
     },
     engine::{
-        effects::{MidiEffect, NoteEvent, Param, ParamKind, Timing, note_event},
+        effects::{MidiEffect, NoteEvent, Param, ParamKind, Timing, ValueLabel, note_event},
         notes::{Countdown, HeldNotes},
     },
 };
@@ -35,6 +35,7 @@ const fn params() -> [Param; LEGATO_PARAM + 1] {
             max: i8::MAX,
         },
         default: NO_INTERVAL as u8,
+        label: ValueLabel::Semitones,
     }; LEGATO_PARAM + 1];
     let mut i = 0;
     while i < INTERVALS_COUNT {
@@ -48,6 +49,7 @@ const fn params() -> [Param; LEGATO_PARAM + 1] {
             max: INTERVALS_COUNT as u8,
         },
         default: 0,
+        label: ValueLabel::None,
     };
     params[LEGATO_PARAM] = Param {
         name: "Legato (ticks)",
@@ -56,6 +58,7 @@ const fn params() -> [Param; LEGATO_PARAM + 1] {
             max: u8::MAX,
         },
         default: 0,
+        label: ValueLabel::Ticks,
     };
     return params;
 }

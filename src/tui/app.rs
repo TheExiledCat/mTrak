@@ -19,7 +19,6 @@ use ratatui::{
     widgets::Padding,
 };
 
-use super::constants;
 use crate::{
     data::{
         commands::CommandKind,
@@ -40,6 +39,7 @@ use crate::{
     },
     error::{MTrakError, Result},
     tui::{
+        constants,
         copy_buffers::CopyBuffers,
         files,
         framework::{
@@ -1000,12 +1000,7 @@ impl AppState {
     pub fn set_octave(&mut self, octave: u8) {
         self.current_octave = octave.clamp(0, 7);
     }
-    pub fn enter_key(
-        &mut self,
-        track: usize,
-        row: usize,
-        key: event::KeyEvent,
-    ) -> Option<NotePitch> {
+    pub fn enter_key(&mut self, track: usize, row: usize, key: KeyEvent) -> Option<NotePitch> {
         let pitch = self.play_key(track, key)?;
         let instrument = self.active_instrument;
         self.enter_note(instrument, track, row, pitch, None);
@@ -1025,7 +1020,7 @@ impl AppState {
             note.velocity = vel.or(note.velocity);
         });
     }
-    pub fn play_key(&self, track: usize, key: event::KeyEvent) -> Option<NotePitch> {
+    pub fn play_key(&self, track: usize, key: KeyEvent) -> Option<NotePitch> {
         if !key.modifiers.is_empty() {
             return None;
         }
@@ -1552,7 +1547,7 @@ mod tests {
     use super::*;
 
     fn effect_state() -> AppState {
-        return AppState::new(Project::empty(), crate::tui::theme::Theme::monochrome()).unwrap();
+        return AppState::new(Project::empty(), Theme::monochrome()).unwrap();
     }
 
     fn effect_kinds(state: &AppState) -> Vec<EffectKind> {
@@ -1618,7 +1613,7 @@ mod tests {
         state.play_thru(Message::ControlChange(Channel::Ch1, 1, 64));
         state.config.soft_thru = true;
         state.play_thru(Message::ControlChange(Channel::Ch1, 1, 100));
-        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(2);
         let mut seen = vec![];
         while seen.is_empty() && Instant::now() < deadline {
             seen.extend(

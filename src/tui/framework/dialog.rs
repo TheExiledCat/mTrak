@@ -382,7 +382,7 @@ impl Dialog {
                 .entries(List::help_entries())
                 .entry(
                     "0-9 / A-F",
-                    "Pick the dropdown option at that index, from 0",
+                    "Pick the dropdown option at that number, from 0",
                 )
                 .entry("Bksp", "Delete the last character of a text field"),
         );
@@ -926,6 +926,7 @@ pub struct NumberBox {
     text: String,
     hex: bool,
     show_range: bool,
+    value_label: Option<Box<dyn Fn(i32) -> String>>,
     focused: bool,
     keys: Keymap<NumberBoxAction>,
 }
@@ -957,6 +958,7 @@ impl NumberBox {
             text: String::new(),
             hex: true,
             show_range: false,
+            value_label: None,
             focused: false,
             keys: Keymap::new("dialog")
                 .bind(Key::plain(KeyCode::Up), NumberBoxAction::Increment, "+/-")
@@ -983,6 +985,12 @@ impl NumberBox {
     /// value, while the config's `show_value_ranges` is on.
     pub fn show_range(mut self) -> Self {
         self.show_range = true;
+        return self;
+    }
+
+    /// Shows what the value stands for after it, e.g. a CC's name.
+    pub fn value_label(mut self, label: impl Fn(i32) -> String + 'static) -> Self {
+        self.value_label = Some(Box::new(label));
         return self;
     }
 
@@ -1170,6 +1178,9 @@ impl MtrakWidget for NumberBox {
         };
         spans.push(Span::styled(format!("{sign}{}", self.text), style));
         spans.push(Span::raw(format!(" {}", self.arrows())));
+        if let Some(label) = &self.value_label {
+            spans.push(Span::raw(format!(" {}", label(self.number()))));
+        }
         Line::from(spans).render(area, buf);
     }
 }
@@ -1408,6 +1419,9 @@ pub struct Select {
     max_visible: u8,
     focused: bool,
     area: Rect,
+    /// The digits typed so far, to pick options past the first digit.
+    typed: String,
+    typed_from: usize,
     keys: Keymap<SelectAction>,
 }
 
@@ -1430,6 +1444,8 @@ impl Select {
             max_visible: 8,
             focused: false,
             area: Rect::default(),
+            typed: String::new(),
+            typed_from: 0,
             keys: Keymap::new("dialog")
                 .bind(Key::plain(KeyCode::Up), SelectAction::Up, "Choose")
                 .bind(Key::plain(KeyCode::Down), SelectAction::Down, "Choose"),
@@ -1449,6 +1465,41 @@ impl Select {
     pub fn max_visible(mut self, rows: u8) -> Self {
         self.max_visible = rows.max(1);
         return self;
+    }
+
+    /// Typing a number picks the option this many places further down, for lists that start
+    /// with options that aren't numbered, like an `Off`.
+    pub fn typed_from(mut self, index: usize) -> Self {
+        self.typed_from = index;
+        return self;
+    }
+
+    /// Picks the option for the digits typed so far, in hex or decimal as the config says. A
+    /// number past the last option starts over from the digit just typed.
+    fn type_digit(&mut self, c: char, hex: bool) -> bool {
+        let radix = if hex { 16 } else { 10 };
+        if !c.is_digit(radix) || self.options.len() <= self.typed_from {
+            return false;
+        }
+        let last = self.options.len() - 1 - self.typed_from;
+        let max_digits = if hex {
+            format!("{last:X}").len()
+        } else {
+            last.to_string().len()
+        };
+        self.typed.push(c);
+        let skip = self.typed.chars().count().saturating_sub(max_digits);
+        self.typed = self.typed.chars().skip(skip).collect();
+        while !self.typed.is_empty() {
+            if let Ok(number) = usize::from_str_radix(&self.typed, radix)
+                && number <= last
+            {
+                self.selected = number + self.typed_from;
+                return true;
+            }
+            self.typed.remove(0);
+        }
+        return false;
     }
 
     /// Where the open list goes: below the box, else above, shrinking to fit.
@@ -1483,6 +1534,7 @@ impl KeyActions for Select {
     }
 
     fn perform(&mut self, action: SelectAction, _state: &mut AppState) -> Result<()> {
+        self.typed.clear();
         let last = self.options.len().saturating_sub(1);
         self.selected = match action {
             SelectAction::Up => self.selected.saturating_sub(1),
@@ -1518,14 +1570,7 @@ impl MtrakWidget for Select {
         {
             return false;
         }
-        let Some(index) = c.to_digit(16).map(|i| i as usize) else {
-            return false;
-        };
-        if index >= self.options.len() {
-            return false;
-        }
-        self.selected = index;
-        return true;
+        return self.type_digit(c, state.config.hex_values);
     }
 
     fn key_hints(&self, _state: &AppState, hints: &mut Vec<KeyHint>) {
@@ -1619,6 +1664,7 @@ impl DialogComponent for Select {
     }
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        self.typed.clear();
     }
     fn value(&self) -> Option<(&'static str, DialogValue)> {
         if self.options.is_empty() {
@@ -1704,6 +1750,49 @@ mod tests {
 
     fn focused(dialog: &Dialog) -> Option<usize> {
         return dialog.focus;
+    }
+
+    #[test]
+    fn typed_digits_add_up_to_pick_options_past_the_first_digit() {
+        let mut select = Select::new("s", (0..0x81).map(|i| i.to_string()).collect());
+        select.type_digit('4', true);
+        select.type_digit('a', true);
+        assert_eq!(select.selected, 0x4A);
+        select.type_digit('8', true);
+        select.type_digit('1', true);
+        assert_eq!(
+            select.selected, 0x01,
+            "81 is past the end, so only the 1 counts"
+        );
+        select.type_digit('7', false);
+        select.type_digit('4', false);
+        assert_eq!(select.selected, 74);
+        assert!(!select.type_digit('a', false));
+    }
+
+    #[test]
+    fn typed_numbers_can_skip_the_first_options() {
+        let mut select = Select::new("s", (0..0x81).map(|i| i.to_string()).collect()).typed_from(1);
+        select.type_digit('0', true);
+        assert_eq!(select.selected, 1);
+        select.type_digit('7', true);
+        select.type_digit('f', true);
+        assert_eq!(select.selected, 0x80);
+    }
+
+    #[test]
+    fn number_boxes_show_what_their_value_stands_for() {
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let mut number = NumberBox::new("n", "N", 2)
+            .value(3)
+            .value_label(|value| format!("is {value}"));
+        let area = Rect::new(0, 0, 30, 1);
+        let mut buf = Buffer::empty(area);
+        number.render(&state, area, &mut buf);
+        let line: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+        assert!(line.contains("03") && line.contains("is 3"), "{line:?}");
     }
 
     #[test]
@@ -1861,14 +1950,22 @@ mod tests {
         assert_eq!(number.number(), 26);
     }
 
+    fn ranges_shown() -> Config {
+        return Config {
+            show_value_ranges: true,
+            ..Config::default()
+        };
+    }
+
     #[test]
     fn number_box_labels_show_the_range_when_asked() {
-        let config = Config::default();
+        let config = ranges_shown();
         let volume = NumberBox::new("v", "Volume", 2);
         assert_eq!(volume.label(&config), "Volume");
         let mut volume = volume.show_range();
         assert_eq!(volume.label(&config), "Volume (00-FF)");
-        let state = state_with_hex_values(false);
+        let mut state = state_with_hex_values(false);
+        state.config.show_value_ranges = true;
         volume.follow_config(&state);
         assert_eq!(volume.label(&state.config), "Volume (0-255)");
         let cc = NumberBox::new("c", "Default CC", 2)
@@ -1878,13 +1975,9 @@ mod tests {
     }
 
     #[test]
-    fn value_ranges_can_be_turned_off_in_the_config() {
-        let config = Config {
-            show_value_ranges: false,
-            ..Config::default()
-        };
+    fn value_ranges_are_off_unless_the_config_turns_them_on() {
         let volume = NumberBox::new("v", "Volume", 2).show_range();
-        assert_eq!(volume.label(&config), "Volume");
+        assert_eq!(volume.label(&Config::default()), "Volume");
     }
 
     #[test]
@@ -1893,10 +1986,11 @@ mod tests {
             .range(-0x80, 0x7F)
             .show_range();
         assert_eq!(
-            transpose.label(&Config::default()),
+            transpose.label(&ranges_shown()),
             "Transpose (semitones, -80 to +7F)"
         );
-        let state = state_with_hex_values(false);
+        let mut state = state_with_hex_values(false);
+        state.config.show_value_ranges = true;
         transpose.follow_config(&state);
         assert_eq!(
             transpose.label(&state.config),

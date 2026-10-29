@@ -3,7 +3,7 @@ use strum::FromRepr;
 
 use crate::{
     data::midi::{BEND_CENTER, CC_MAX, bend_by, cc_by},
-    engine::effects::{MidiEffect, Param, ParamKind, Timing, note_event},
+    engine::effects::{MidiEffect, Param, ParamKind, Timing, ValueLabel, note_event},
 };
 
 pub const ATTACK_PARAM: usize = 0;
@@ -29,6 +29,7 @@ const fn ticks(name: &'static str, default: u8) -> Param {
             max: u8::MAX,
         },
         default,
+        label: ValueLabel::Ticks,
     };
 }
 
@@ -42,12 +43,14 @@ const PARAMS: &[Param] = &[
             max: u8::MAX,
         },
         default: 0x80,
+        label: ValueLabel::Percent,
     },
     ticks("Release (ticks)", 0x0C),
     Param {
         name: "Overlap",
         kind: ParamKind::Choice(OVERLAP_NAMES),
         default: Overlap::Restart as u8,
+        label: ValueLabel::None,
     },
     Param {
         name: "Depth",
@@ -56,19 +59,19 @@ const PARAMS: &[Param] = &[
             max: i8::MAX,
         },
         default: 0x7F,
+        label: ValueLabel::None,
     },
     Param {
         name: "Target",
         kind: ParamKind::Choice(TARGET_NAMES),
         default: EnvelopeTarget::CC as u8,
+        label: ValueLabel::None,
     },
     Param {
         name: "CC",
-        kind: ParamKind::Number {
-            min: 0,
-            max: CC_MAX,
-        },
+        kind: ParamKind::Cc,
         default: 1,
+        label: ValueLabel::None,
     },
     Param {
         name: "CC base",
@@ -77,6 +80,7 @@ const PARAMS: &[Param] = &[
             max: CC_MAX,
         },
         default: 0,
+        label: ValueLabel::None,
     },
 ];
 

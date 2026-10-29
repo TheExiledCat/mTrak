@@ -28,8 +28,9 @@ An effect that's turned off keeps its place and settings, and notes pass it unch
 ## Modulation
 
 Any setting can follow a CC, so pattern commands can change it while the song plays. In an
-effect's settings, `CC mapping` lists every setting with the CC it follows, or `Off`. A CC
-sent on the instrument's channel then sets the setting instead of reaching the synth:
+effect's settings, `CC mapping` lists every setting with the CC it follows, or `Off`; each CC
+is shown with its name in the MIDI spec, e.g. `01 Mod wheel`, and typing its number picks it.
+A CC sent on the instrument's channel then sets the setting instead of reaching the synth:
 `00` is its lowest value and `7F` its highest. Choices are split evenly over the CC's values,
 and a toggle is on from `40`.
 
@@ -65,6 +66,8 @@ at once, the LFO stays at the start of its wave and the Envelope sends nothing.
 
 Numbers in the settings are hex unless `Values are hex` is turned off in the Config dialog.
 Signed values go below 0, e.g. `-0C` is 12 semitones down.
+Some settings show what their number means after it: a percentage, a note length for ticks
+(`06` is `1/16`, `08` is `1/8T`) or an interval for semitones (`07` is `5th`, `-0C` is `-oct`).
 
 ## Arp
 

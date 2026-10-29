@@ -6,7 +6,7 @@ use strum::FromRepr;
 
 use crate::{
     data::midi::{BEND_CENTER, CC_MAX, VELOCITY_MAX, bend_by, cc_by},
-    engine::effects::{MidiEffect, Param, ParamKind, Timing, note_event},
+    engine::effects::{MidiEffect, Param, ParamKind, Timing, ValueLabel, note_event},
 };
 
 pub const RATE_PARAM: usize = 0;
@@ -30,6 +30,7 @@ const PARAMS: &[Param] = &[
             max: u8::MAX,
         },
         default: 6,
+        label: ValueLabel::Ticks,
     },
     Param {
         name: "Depth",
@@ -38,29 +39,31 @@ const PARAMS: &[Param] = &[
             max: i8::MAX,
         },
         default: 0x20,
+        label: ValueLabel::None,
     },
     Param {
         name: "Shape",
         kind: ParamKind::Choice(SHAPE_NAMES),
         default: LfoShape::Sine as u8,
+        label: ValueLabel::None,
     },
     Param {
         name: "Retrigger",
         kind: ParamKind::Toggle,
         default: 0,
+        label: ValueLabel::None,
     },
     Param {
         name: "Target",
         kind: ParamKind::Choice(TARGET_NAMES),
         default: LfoTarget::Velocity as u8,
+        label: ValueLabel::None,
     },
     Param {
         name: "CC",
-        kind: ParamKind::Number {
-            min: 0,
-            max: CC_MAX,
-        },
+        kind: ParamKind::Cc,
         default: 1,
+        label: ValueLabel::None,
     },
     Param {
         name: "CC center",
@@ -69,6 +72,7 @@ const PARAMS: &[Param] = &[
             max: CC_MAX,
         },
         default: 0x40,
+        label: ValueLabel::None,
     },
 ];
 

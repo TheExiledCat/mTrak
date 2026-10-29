@@ -481,7 +481,7 @@ mod tests {
         assert!(handle(&mut handler, 0, cc_note(MidiCommand::SetCC, 74, 2)).is_empty());
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 100, 2)),
-            vec![Message::ControlChange(Channel::Ch3, 74, 50)]
+            vec![ControlChange(Channel::Ch3, 74, 50)]
         );
     }
 
@@ -491,11 +491,11 @@ mod tests {
         handler.set_default_control(0, 74);
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::ModWheel, 0x80, 0)),
-            vec![Message::ControlChange(Channel::Ch1, 1, 64)]
+            vec![ControlChange(Channel::Ch1, 1, 64)]
         );
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 0x40, 0)),
-            vec![Message::ControlChange(Channel::Ch1, 1, 32)]
+            vec![ControlChange(Channel::Ch1, 1, 32)]
         );
     }
 
@@ -505,11 +505,11 @@ mod tests {
         handler.set_default_control(2, 74);
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 100, 2)),
-            vec![Message::ControlChange(Channel::Ch3, 74, 50)]
+            vec![ControlChange(Channel::Ch3, 74, 50)]
         );
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 100, 1)),
-            vec![Message::ControlChange(Channel::Ch2, 0, 50)]
+            vec![ControlChange(Channel::Ch2, 0, 50)]
         );
     }
 
@@ -520,7 +520,7 @@ mod tests {
         handle(&mut handler, 0, cc_note(MidiCommand::SetCC, 71, 0));
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 100, 0)),
-            vec![Message::ControlChange(Channel::Ch1, 71, 50)]
+            vec![ControlChange(Channel::Ch1, 71, 50)]
         );
     }
 
@@ -532,7 +532,7 @@ mod tests {
         handler.reset(&mut vec![]);
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 100, 0)),
-            vec![Message::ControlChange(Channel::Ch1, 74, 50)]
+            vec![ControlChange(Channel::Ch1, 74, 50)]
         );
     }
 
@@ -543,11 +543,11 @@ mod tests {
         handle(&mut handler, 1, cc_note(MidiCommand::SetCC, 71, 0));
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 10, 0)),
-            vec![Message::ControlChange(Channel::Ch1, 74, 5)]
+            vec![ControlChange(Channel::Ch1, 74, 5)]
         );
         assert_eq!(
             handle(&mut handler, 1, cc_note(MidiCommand::ChangeCC, 20, 0)),
-            vec![Message::ControlChange(Channel::Ch1, 71, 10)]
+            vec![ControlChange(Channel::Ch1, 71, 10)]
         );
     }
 
@@ -565,11 +565,11 @@ mod tests {
         let mut handler = MidiCommandHandler::new();
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::AfterTouch, 0xFF, 1)),
-            vec![Message::ChannelPressure(Channel::Ch2, 127)]
+            vec![ChannelPressure(Channel::Ch2, 127)]
         );
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::PitchBend, 0x80, 1)),
-            vec![Message::PitchBend(Channel::Ch2, 8192)]
+            vec![PitchBend(Channel::Ch2, 8192)]
         );
     }
 
@@ -581,28 +581,25 @@ mod tests {
         };
         assert_eq!(
             bend(&mut handler, 0x80),
-            vec![Message::PitchBend(Channel::Ch2, 8192)]
+            vec![PitchBend(Channel::Ch2, 8192)]
         );
         assert_eq!(
             bend(&mut handler, 0x83),
-            vec![Message::PitchBend(Channel::Ch2, 10239)]
+            vec![PitchBend(Channel::Ch2, 10239)]
         );
         assert_eq!(
             bend(&mut handler, 0x7D),
-            vec![Message::PitchBend(Channel::Ch2, 6144)]
+            vec![PitchBend(Channel::Ch2, 6144)]
         );
         assert_eq!(
             bend(&mut handler, 0x8C),
-            vec![Message::PitchBend(Channel::Ch2, 16383)]
+            vec![PitchBend(Channel::Ch2, 16383)]
         );
-        assert_eq!(
-            bend(&mut handler, 0x74),
-            vec![Message::PitchBend(Channel::Ch2, 0)]
-        );
+        assert_eq!(bend(&mut handler, 0x74), vec![PitchBend(Channel::Ch2, 0)]);
         handler.set_bend_range(1, 2);
         assert_eq!(
             bend(&mut handler, 0x81),
-            vec![Message::PitchBend(Channel::Ch2, 12287)]
+            vec![PitchBend(Channel::Ch2, 12287)]
         );
     }
 
@@ -615,16 +612,13 @@ mod tests {
         };
         assert_eq!(
             bend(&mut handler, 0x8F),
-            vec![Message::PitchBend(Channel::Ch2, 16383)]
+            vec![PitchBend(Channel::Ch2, 16383)]
         );
-        assert_eq!(
-            bend(&mut handler, 0x00),
-            vec![Message::PitchBend(Channel::Ch2, 0)]
-        );
+        assert_eq!(bend(&mut handler, 0x00), vec![PitchBend(Channel::Ch2, 0)]);
         handler.set_bend_range(1, 0);
         assert_eq!(
             bend(&mut handler, 0x83),
-            vec![Message::PitchBend(Channel::Ch2, 8192)]
+            vec![PitchBend(Channel::Ch2, 8192)]
         );
     }
 
@@ -639,8 +633,8 @@ mod tests {
         assert_eq!(
             messages,
             vec![
-                Message::PitchBend(Channel::Ch3, 8192),
-                Message::ChannelPressure(Channel::Ch6, 0),
+                PitchBend(Channel::Ch3, 8192),
+                ChannelPressure(Channel::Ch6, 0),
             ]
         );
         let mut events = vec![];

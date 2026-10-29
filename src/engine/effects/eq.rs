@@ -5,7 +5,7 @@ use crate::{
         midi::scale_velocity,
         note::{NotePitch, SEMITONES_PER_OCTAVE},
     },
-    engine::effects::{MidiEffect, Param, ParamKind, Timing, note_event},
+    engine::effects::{MidiEffect, Param, ParamKind, Timing, ValueLabel, note_event},
 };
 
 /// Band velocities are signed: 0 leaves notes unchanged, -128 silences them and 127 about
@@ -34,41 +34,49 @@ const PARAMS: &[Param] = &[
         name: "Low band up to",
         kind: ParamKind::Pitch,
         default: NotePitch::MAX / 3,
+        label: ValueLabel::None,
     },
     Param {
         name: "Mid band up to",
         kind: ParamKind::Pitch,
         default: NotePitch::MAX / 3 * 2,
+        label: ValueLabel::None,
     },
     Param {
         name: "Low velocity",
         kind: BAND,
         default: 0,
+        label: ValueLabel::Scale,
     },
     Param {
         name: "Mid velocity",
         kind: BAND,
         default: 0,
+        label: ValueLabel::Scale,
     },
     Param {
         name: "High velocity",
         kind: BAND,
         default: 0,
+        label: ValueLabel::Scale,
     },
     Param {
         name: "High pass",
         kind: ParamKind::Pitch,
         default: 0,
+        label: ValueLabel::None,
     },
     Param {
         name: "Low pass",
         kind: ParamKind::Pitch,
         default: NotePitch::MAX,
+        label: ValueLabel::None,
     },
     Param {
         name: "Filter slope",
         kind: BYTE,
         default: 8,
+        label: ValueLabel::None,
     },
 ];
 

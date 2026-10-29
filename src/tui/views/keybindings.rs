@@ -162,26 +162,6 @@ impl KeyTable {
     }
 }
 
-fn table_keymap(editable: bool) -> Keymap<KeyTableAction> {
-    use KeyTableAction::*;
-    let label = if editable { "Select" } else { "Scroll" };
-    let keymap = Keymap::new("keybindings")
-        .bind(Key::plain(KeyCode::Up), Up, label)
-        .bind(Key::plain(KeyCode::Down), Down, label)
-        .bind(Key::plain(KeyCode::PageUp), PageUp, "Page")
-        .bind(Key::plain(KeyCode::PageDown), PageDown, "Page")
-        .bind(Key::plain(KeyCode::Home), Top, "Top")
-        .bind(Key::plain(KeyCode::End), Bottom, "End");
-    if !editable {
-        return keymap;
-    }
-    return keymap.bind(Key::char(' '), Rebind, "Rebind").bind(
-        Key::plain(KeyCode::Delete),
-        Reset,
-        "Default",
-    );
-}
-
 impl KeyActions for KeyTable {
     type Action = KeyTableAction;
 
@@ -346,12 +326,6 @@ pub fn help_section() -> HelpSection {
         .entries(table_keymap(true).help_entries(KeyTable::describe));
 }
 
-fn table_dialog(title: &str, table: KeyTable) -> Dialog {
-    return Dialog::new(title, vec![table.boxed()])
-        .width(u16::MAX)
-        .focus_first();
-}
-
 pub fn keybindings_dialog(sections: Vec<HelpSection>, height: u8) -> Dialog {
     let table = KeyTable::new(sections, height.saturating_sub(2).max(1), true);
     return Dialog::new(
@@ -394,6 +368,32 @@ pub fn commands_dialog(height: u8) -> Dialog {
     let general = HelpSection::new("Values").entry("000", "No command");
     let sections = vec![general, midi, playback];
     return table_dialog("Commands", KeyTable::new(sections, height.max(1), false));
+}
+
+fn table_keymap(editable: bool) -> Keymap<KeyTableAction> {
+    use KeyTableAction::*;
+    let label = if editable { "Select" } else { "Scroll" };
+    let keymap = Keymap::new("keybindings")
+        .bind(Key::plain(KeyCode::Up), Up, label)
+        .bind(Key::plain(KeyCode::Down), Down, label)
+        .bind(Key::plain(KeyCode::PageUp), PageUp, "Page")
+        .bind(Key::plain(KeyCode::PageDown), PageDown, "Page")
+        .bind(Key::plain(KeyCode::Home), Top, "Top")
+        .bind(Key::plain(KeyCode::End), Bottom, "End");
+    if !editable {
+        return keymap;
+    }
+    return keymap.bind(Key::char(' '), Rebind, "Rebind").bind(
+        Key::plain(KeyCode::Delete),
+        Reset,
+        "Default",
+    );
+}
+
+fn table_dialog(title: &str, table: KeyTable) -> Dialog {
+    return Dialog::new(title, vec![table.boxed()])
+        .width(u16::MAX)
+        .focus_first();
 }
 
 /// One row per way to write each command, e.g. `L0y` and `L1y` for the legato command.

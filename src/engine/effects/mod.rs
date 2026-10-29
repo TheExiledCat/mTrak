@@ -10,7 +10,7 @@ use crate::{
     data::{
         effect::{EffectKind, EffectSettings},
         midi::{CC_MAX, PITCH_MAX, PULSES_PER_QUARTER},
-        note::NotePitch,
+        note::{NotePitch, SEMITONES_PER_OCTAVE},
     },
     engine::effects::{
         arp::ArpeggiatorEffect, echo::EchoEffect, envelope::EnvelopeEffect, eq::EqEffect,
@@ -84,6 +84,8 @@ pub enum ParamKind {
     Choice(&'static [&'static str]),
     /// A MIDI pitch, shown as a note name.
     Pitch,
+    /// A CC number, shown with its name.
+    Cc,
 }
 impl ParamKind {
     pub fn clamp(&self, value: u8) -> u8 {
@@ -93,6 +95,7 @@ impl ParamKind {
             ParamKind::Toggle => value.min(1),
             ParamKind::Choice(names) => value.min(names.len().saturating_sub(1) as u8),
             ParamKind::Pitch => value.min(PITCH_MAX),
+            ParamKind::Cc => value.min(CC_MAX),
         };
     }
 
@@ -108,7 +111,7 @@ impl ParamKind {
             ParamKind::Choice(names) => {
                 (value as usize * names.len() / (CC_MAX as usize + 1)) as u8
             }
-            ParamKind::Pitch => value as u8,
+            ParamKind::Pitch | ParamKind::Cc => value as u8,
         };
     }
 }
@@ -119,6 +122,32 @@ pub struct Param {
     pub name: &'static str,
     pub kind: ParamKind,
     pub default: u8,
+    pub label: ValueLabel,
+}
+
+/// What a number stands for, shown after it in dialogs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ValueLabel {
+    None,
+    /// A share of `FF`.
+    Percent,
+    /// A signed scale where 0 leaves a value as it is.
+    Scale,
+    /// A length in ticks, as a note length where it is one.
+    Ticks,
+    /// Semitones, as an interval.
+    Semitones,
+}
+impl ValueLabel {
+    pub fn text(&self, value: i32) -> String {
+        return match self {
+            ValueLabel::None => String::new(),
+            ValueLabel::Percent => percent(value, u8::MAX as i32),
+            ValueLabel::Scale => percent(0x80 + value, 0x80),
+            ValueLabel::Ticks => note_length(value),
+            ValueLabel::Semitones => interval(value),
+        };
+    }
 }
 
 /// Where playback is when an effect runs.
@@ -241,28 +270,6 @@ impl MidiEffectChain {
     pub fn push(&mut self, effect: Box<dyn MidiEffect>) {
         self.add(effect, Vec::new(), true);
     }
-    fn add(&mut self, effect: Box<dyn MidiEffect>, ccs: Vec<Option<u8>>, enabled: bool) {
-        let values = (0..effect.params().len())
-            .map(|i| effect.param(i))
-            .collect();
-        self.chain.push(ChainedEffect {
-            effect,
-            enabled,
-            ccs,
-            values,
-        });
-        self.map_ccs();
-    }
-    fn map_ccs(&mut self) {
-        self.mapped.clear();
-        for chained in &self.chain {
-            for cc in chained.ccs.iter().flatten() {
-                if !self.mapped.contains(cc) {
-                    self.mapped.push(*cc);
-                }
-            }
-        }
-    }
 
     /// Turns an effect on or off in place, so the effects around it keep what they're
     /// playing. A disabled effect releases what it has sounding through the effects after it.
@@ -330,15 +337,19 @@ impl MidiEffectChain {
         chained.restore_param(param);
         self.map_ccs();
     }
+
     pub fn is_empty(&self) -> bool {
         return self.chain.is_empty();
     }
+
     pub fn len(&self) -> usize {
         return self.chain.len();
     }
+
     pub fn get(&self, index: usize) -> Option<&dyn MidiEffect> {
         return self.chain.get(index).map(|chained| chained.effect.as_ref());
     }
+
     /// Sets a parameter of the effect at `effect`, clamped to what the parameter takes. This
     /// is its own value, which modulation goes back to. Indices out of range are ignored.
     pub fn set_param(&mut self, effect: usize, param: usize, value: u8) {
@@ -399,6 +410,30 @@ impl MidiEffectChain {
         self.send(messages, out);
     }
 
+    fn add(&mut self, effect: Box<dyn MidiEffect>, ccs: Vec<Option<u8>>, enabled: bool) {
+        let values = (0..effect.params().len())
+            .map(|i| effect.param(i))
+            .collect();
+        self.chain.push(ChainedEffect {
+            effect,
+            enabled,
+            ccs,
+            values,
+        });
+        self.map_ccs();
+    }
+
+    fn map_ccs(&mut self) {
+        self.mapped.clear();
+        for chained in &self.chain {
+            for cc in chained.ccs.iter().flatten() {
+                if !self.mapped.contains(cc) {
+                    self.mapped.push(*cc);
+                }
+            }
+        }
+    }
+
     /// Sends what came out of the last effect, keeping back the CCs parameters follow.
     fn send(&self, messages: Vec<Message>, out: &mut Vec<Message>) {
         out.extend(messages.into_iter().filter(|message| {
@@ -443,6 +478,60 @@ pub fn note_event(message: &Message) -> Option<NoteEvent> {
         },
         _ => return None,
     });
+}
+
+fn percent(value: i32, full: i32) -> String {
+    return format!("{}%", (value * 100 + full / 2) / full);
+}
+
+/// Ticks as a note length, 24 to a beat, or nothing if they aren't a common one.
+fn note_length(ticks: i32) -> String {
+    let length = match ticks.abs() {
+        2 => "1/32T",
+        3 => "1/32",
+        4 => "1/16T",
+        6 => "1/16",
+        8 => "1/8T",
+        9 => "1/16.",
+        12 => "1/8",
+        16 => "1/4T",
+        18 => "1/8.",
+        24 => "1/4",
+        32 => "1/2T",
+        36 => "1/4.",
+        48 => "1/2",
+        64 => "1/1T",
+        72 => "1/2.",
+        96 => "1 bar",
+        144 => "1/1.",
+        192 => "2 bars",
+        _ => return String::new(),
+    };
+    let sign = if ticks < 0 { "-" } else { "" };
+    return format!("{sign}{length}");
+}
+
+fn interval(semitones: i32) -> String {
+    const NAMES: [&str; SEMITONES_PER_OCTAVE as usize] = [
+        "", "m2", "M2", "m3", "M3", "4th", "tritone", "5th", "m6", "M6", "m7", "M7",
+    ];
+    let octave = SEMITONES_PER_OCTAVE as u32;
+    let (octaves, name) = (
+        semitones.unsigned_abs() / octave,
+        NAMES[(semitones.unsigned_abs() % octave) as usize],
+    );
+    let octaves = match octaves {
+        0 => String::new(),
+        1 => "oct".to_owned(),
+        n => format!("{n} oct"),
+    };
+    let text = match (octaves.is_empty(), name.is_empty()) {
+        (true, _) => name.to_owned(),
+        (false, true) => octaves,
+        (false, false) => format!("{octaves}+{name}"),
+    };
+    let sign = if semitones < 0 { "-" } else { "" };
+    return format!("{sign}{text}");
 }
 
 #[cfg(test)]
@@ -1007,6 +1096,26 @@ mod tests {
             (0, 1, 2)
         );
         assert_eq!(ParamKind::Pitch.cc_to_value(0xFF), PITCH_MAX);
+    }
+
+    #[test]
+    fn value_labels_say_what_numbers_stand_for() {
+        assert_eq!(ValueLabel::Percent.text(0x80), "50%");
+        assert_eq!(ValueLabel::Percent.text(0xFF), "100%");
+        assert_eq!(ValueLabel::Scale.text(0), "100%");
+        assert_eq!(ValueLabel::Scale.text(-0x80), "0%");
+        assert_eq!(ValueLabel::Scale.text(0x7F), "199%");
+        assert_eq!(ValueLabel::Ticks.text(6), "1/16");
+        assert_eq!(ValueLabel::Ticks.text(8), "1/8T");
+        assert_eq!(ValueLabel::Ticks.text(36), "1/4.");
+        assert_eq!(ValueLabel::Ticks.text(-12), "-1/8");
+        assert_eq!(ValueLabel::Ticks.text(7), "");
+        assert_eq!(ValueLabel::Semitones.text(7), "5th");
+        assert_eq!(ValueLabel::Semitones.text(-12), "-oct");
+        assert_eq!(ValueLabel::Semitones.text(13), "oct+m2");
+        assert_eq!(ValueLabel::Semitones.text(28), "2 oct+M3");
+        assert_eq!(ValueLabel::Semitones.text(0), "");
+        assert_eq!(ValueLabel::None.text(5), "");
     }
 
     #[test]

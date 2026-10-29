@@ -136,6 +136,74 @@ pub fn cc_by(channel: Channel, cc: u8, from: u8, offset: f32) -> Message {
     return Message::ControlChange(channel, cc, value.clamp(0, CC_MAX as i32) as u8);
 }
 
+/// The name the MIDI spec gives a CC. `None` for the ones it leaves undefined.
+pub fn cc_name(cc: u8) -> Option<String> {
+    if (32..64).contains(&cc) {
+        return cc_name(cc - 32).map(|name| format!("{name} LSB"));
+    }
+    let name = match cc {
+        0 => "Bank select",
+        1 => "Mod wheel",
+        2 => "Breath",
+        4 => "Foot pedal",
+        5 => "Portamento time",
+        6 => "Data entry",
+        7 => "Volume",
+        8 => "Balance",
+        10 => "Pan",
+        11 => "Expression",
+        12 => "Effect 1",
+        13 => "Effect 2",
+        16 => "General 1",
+        17 => "General 2",
+        18 => "General 3",
+        19 => "General 4",
+        64 => "Sustain",
+        65 => "Portamento",
+        66 => "Sostenuto",
+        67 => "Soft pedal",
+        68 => "Legato",
+        69 => "Hold 2",
+        70 => "Variation",
+        71 => "Resonance",
+        72 => "Release time",
+        73 => "Attack time",
+        74 => "Cutoff",
+        75 => "Decay time",
+        76 => "Vibrato rate",
+        77 => "Vibrato depth",
+        78 => "Vibrato delay",
+        79 => "Sound control 10",
+        80 => "General 5",
+        81 => "General 6",
+        82 => "General 7",
+        83 => "General 8",
+        84 => "Portamento control",
+        88 => "Velocity LSB",
+        91 => "Reverb",
+        92 => "Tremolo",
+        93 => "Chorus",
+        94 => "Detune",
+        95 => "Phaser",
+        96 => "Data increment",
+        97 => "Data decrement",
+        98 => "NRPN LSB",
+        99 => "NRPN MSB",
+        100 => "RPN LSB",
+        101 => "RPN MSB",
+        120 => "All sound off",
+        121 => "Reset controllers",
+        122 => "Local control",
+        123 => "All notes off",
+        124 => "Omni off",
+        125 => "Omni on",
+        126 => "Mono on",
+        127 => "Poly on",
+        _ => return None,
+    };
+    return Some(name.to_owned());
+}
+
 /// A channel message other than a note, moved to `channel`. `None` for notes and system
 /// messages.
 pub fn non_note_on_channel(message: Message, channel: Channel) -> Option<Message> {
@@ -182,6 +250,16 @@ mod tests {
     use midi::ToRawMessages;
 
     use super::*;
+
+    #[test]
+    fn ccs_have_their_spec_names() {
+        assert_eq!(cc_name(1).as_deref(), Some("Mod wheel"));
+        assert_eq!(cc_name(33).as_deref(), Some("Mod wheel LSB"));
+        assert_eq!(cc_name(74).as_deref(), Some("Cutoff"));
+        assert_eq!(cc_name(3), None);
+        assert_eq!(cc_name(35), None);
+        assert_eq!(cc_name(110), None);
+    }
 
     #[test]
     fn mod_wheel_bytes_read_as_cc_1() {

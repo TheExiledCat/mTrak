@@ -6,11 +6,11 @@ use crate::{
     data::{
         config::TITLE,
         effect::EffectKind,
-        midi::{CC_MAX, PITCH_MAX},
+        midi::{CC_MAX, PITCH_MAX, cc_name},
         note::NotePitch,
         pattern::{ClearOption, ClearTarget},
     },
-    engine::effects::{Param, ParamKind, effect_params},
+    engine::effects::{Param, ParamKind, ValueLabel, effect_params},
     tui::{
         app::AppState,
         framework::{
@@ -28,6 +28,9 @@ use crate::{
 const FIRST_YEAR: i32 = 2026;
 
 const REPOSITORY_URL: &str = "https://github.com/TheExiledCat/mTrak";
+
+const CC_MAPPING_ID: &str = "cc_mapping";
+const CC_NAME_WIDTH: usize = 16;
 
 pub fn open_midi_dialog(state: &mut AppState) {
     let mut in_names = state.get_midi_in_port_names();
@@ -180,10 +183,13 @@ pub fn open_instrument_dialog(state: &mut AppState) {
             TextPrompt::new("name", "Name")
                 .initial(&settings.name)
                 .boxed(),
-            NumberBox::new("volume", "Volume", 2)
-                .show_range()
-                .value(settings.volume as i32)
-                .boxed(),
+            labelled(
+                NumberBox::new("volume", "Volume", 2)
+                    .show_range()
+                    .value(settings.volume as i32),
+                ValueLabel::Percent,
+            )
+            .boxed(),
             NumberBox::new("pitch_wheel_range", "Bend range (semitones)", 2)
                 .show_range()
                 .value(settings.pitch_wheel_range as i32)
@@ -192,15 +198,20 @@ pub fn open_instrument_dialog(state: &mut AppState) {
                 .show_range()
                 .range(0, CC_MAX as i32)
                 .value(settings.default_cc as i32)
+                .value_label(cc_label)
                 .boxed(),
-            NumberBox::new("transpose", "Transpose (semitones)", 2)
-                .show_range()
-                .range(i8::MIN as i32, i8::MAX as i32)
-                .value(settings.transpose as i32)
-                .boxed(),
+            labelled(
+                NumberBox::new("transpose", "Transpose (semitones)", 2)
+                    .show_range()
+                    .range(i8::MIN as i32, i8::MAX as i32)
+                    .value(settings.transpose as i32),
+                ValueLabel::Semitones,
+            )
+            .boxed(),
             Buttons::new("effects", vec!["Effects"]).boxed(),
         ],
     )
+    .width(60)
     .hide_behind_child()
     .close_on_esc()
     .focus_first()
@@ -213,6 +224,97 @@ pub fn open_instrument_dialog(state: &mut AppState) {
     })
     .on_submit(move |state, result| {
         apply_instrument(state, instrument, &result);
+        return Ok(());
+    });
+    state.open_dialog(dialog);
+}
+
+pub fn open_about_dialog(state: &mut AppState) {
+    let logo = FIGlet::small()
+        .ok()
+        .and_then(|font| font.convert(TITLE).map(|figure| figure.to_string()))
+        .unwrap_or_else(|| TITLE.to_owned());
+    let year = Local::now().year();
+    let years = if year > FIRST_YEAR {
+        format!("{FIRST_YEAR}-{year}")
+    } else {
+        FIRST_YEAR.to_string()
+    };
+    let build = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    // pad the logo's lines to one width so centering keeps them lined up
+    let width = logo
+        .lines()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    let logo: Vec<String> = logo
+        .trim_end()
+        .lines()
+        .map(|line| format!("{line:<width$}"))
+        .collect();
+    let lines = [
+        logo.join("\n"),
+        String::new(),
+        format!("v{}", env!("CARGO_PKG_VERSION")),
+        format!(
+            "{build} build, {} {}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+        String::new(),
+        "A MIDI tracker for the terminal".to_owned(),
+        "Created by TheExiledCat".to_owned(),
+        format!(
+            "{} {years} TheExiledCat, MIT License",
+            glyphs::pick("\u{a9}", "(c)")
+        ),
+    ];
+    let mut components: Vec<Box<dyn DialogComponent>> = lines
+        .into_iter()
+        .map(|line| Label::new(line).centered().boxed() as Box<dyn DialogComponent>)
+        .collect();
+    components.push(Link::new(REPOSITORY_URL).boxed());
+    let dialog = Dialog::new("About", components)
+        .level(InfoLevel::Success)
+        .close_on_esc();
+    state.open_dialog(dialog);
+}
+
+/// Changes are made right away, so Esc closes it like Enter.
+pub fn open_global_dialog(state: &mut AppState) {
+    let dialog = Dialog::new(
+        "Global",
+        vec![
+            labelled(
+                NumberBox::new("velocity", "Velocity", 2)
+                    .show_range()
+                    .value(state.project().global_velocity as i32),
+                ValueLabel::Percent,
+            )
+            .boxed(),
+            labelled(
+                NumberBox::new("transpose", "Transpose (semitones)", 2)
+                    .show_range()
+                    .range(i8::MIN as i32, i8::MAX as i32)
+                    .value(state.project().transpose as i32),
+                ValueLabel::Semitones,
+            )
+            .boxed(),
+        ],
+    )
+    .width(60)
+    .close_on_esc()
+    .focus_first()
+    .on_update(|state, fields| {
+        apply_globals(state, fields);
+        return Ok(());
+    })
+    .on_submit(|state, result| {
+        apply_globals(state, &result);
         return Ok(());
     });
     state.open_dialog(dialog);
@@ -348,8 +450,6 @@ fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
     state.open_dialog(dialog);
 }
 
-const CC_MAPPING_ID: &str = "cc_mapping";
-
 /// Which CC each parameter of an effect follows, so pattern commands can change it. Changes are
 /// made right away, so Esc closes it like Enter.
 fn open_cc_mapping_dialog(state: &mut AppState, instrument: u8, effect: usize) {
@@ -369,6 +469,7 @@ fn open_cc_mapping_dialog(state: &mut AppState, instrument: u8, effect: usize) {
             Select::new(param.name, cc_options(state))
                 .label(param.name)
                 .selected(selected)
+                .typed_from(1)
                 .boxed() as Box<dyn DialogComponent>
         })
         .collect();
@@ -393,22 +494,41 @@ fn open_cc_mapping_dialog(state: &mut AppState, instrument: u8, effect: usize) {
 
 /// No CC, then every CC number, in hex or decimal as the config says.
 fn cc_options(state: &AppState) -> Vec<String> {
-    let numbers = (0..=CC_MAX).map(|cc| match state.config.hex_values {
-        true => format!("{cc:02X}"),
-        false => cc.to_string(),
+    let ccs = (0..=CC_MAX).map(|cc| {
+        let number = match state.config.hex_values {
+            true => format!("{cc:02X}"),
+            false => format!("{cc:<3}"),
+        };
+        match cc_name(cc) {
+            Some(name) => format!("{number} {}", truncate(&name, CC_NAME_WIDTH)),
+            None => number.trim_end().to_owned(),
+        }
     });
-    return std::iter::once("Off".to_owned()).chain(numbers).collect();
+    return std::iter::once("Off".to_owned()).chain(ccs).collect();
+}
+
+fn cc_label(cc: i32) -> String {
+    let name = cc_name(cc as u8).unwrap_or_default();
+    return truncate(&name, CC_NAME_WIDTH);
+}
+
+fn truncate(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().take(width - 1).collect();
+    return format!("{kept}{}", glyphs::pick("\u{2026}", "."));
 }
 
 fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
     return match param.kind {
         ParamKind::Number { min, max } => {
             let digits = if max > 0xF { 2 } else { 1 };
-            NumberBox::new(param.name, param.name, digits)
+            let number = NumberBox::new(param.name, param.name, digits)
                 .show_range()
                 .range(min as i32, max as i32)
-                .value(value as i32)
-                .boxed()
+                .value(value as i32);
+            labelled(number, param.label).boxed()
         }
         ParamKind::SignedNumber { min, max } => {
             let digits = if min.unsigned_abs().max(max.unsigned_abs()) > 0xF {
@@ -416,11 +536,11 @@ fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
             } else {
                 1
             };
-            NumberBox::new(param.name, param.name, digits)
+            let number = NumberBox::new(param.name, param.name, digits)
                 .show_range()
                 .range(min as i32, max as i32)
-                .value(value as i8 as i32)
-                .boxed()
+                .value(value as i8 as i32);
+            labelled(number, param.label).boxed()
         }
         ParamKind::Toggle => Checkbox::new(param.name, param.name)
             .checked(value != 0)
@@ -428,6 +548,12 @@ fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
         ParamKind::Choice(names) => Select::new(param.name, names.to_vec())
             .label(param.name)
             .selected(value as usize)
+            .boxed(),
+        ParamKind::Cc => NumberBox::new(param.name, param.name, 2)
+            .show_range()
+            .range(0, CC_MAX as i32)
+            .value(value as i32)
+            .value_label(cc_label)
             .boxed(),
         ParamKind::Pitch => {
             let pitches = (0..=PITCH_MAX).map(|pitch| NotePitch(pitch).to_string());
@@ -439,96 +565,20 @@ fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
     };
 }
 
+fn labelled(number: NumberBox, label: ValueLabel) -> NumberBox {
+    if label == ValueLabel::None {
+        return number;
+    }
+    return number.value_label(move |value| label.text(value));
+}
+
 fn param_value(param: &Param, result: &DialogResult) -> Option<u8> {
     return match param.kind {
-        ParamKind::Number { .. } => result.number(param.name).map(|n| n as u8),
+        ParamKind::Number { .. } | ParamKind::Cc => result.number(param.name).map(|n| n as u8),
         ParamKind::SignedNumber { .. } => result.number(param.name).map(|n| n as i8 as u8),
         ParamKind::Toggle => result.bool(param.name).map(|on| on as u8),
         ParamKind::Choice(_) | ParamKind::Pitch => result.choice(param.name).map(|i| i as u8),
     };
-}
-pub fn open_about_dialog(state: &mut AppState) {
-    let logo = FIGlet::small()
-        .ok()
-        .and_then(|font| font.convert(TITLE).map(|figure| figure.to_string()))
-        .unwrap_or_else(|| TITLE.to_owned());
-    let year = Local::now().year();
-    let years = if year > FIRST_YEAR {
-        format!("{FIRST_YEAR}-{year}")
-    } else {
-        FIRST_YEAR.to_string()
-    };
-    let build = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    // pad the logo's lines to one width so centering keeps them lined up
-    let width = logo
-        .lines()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or(0);
-    let logo: Vec<String> = logo
-        .trim_end()
-        .lines()
-        .map(|line| format!("{line:<width$}"))
-        .collect();
-    let lines = [
-        logo.join("\n"),
-        String::new(),
-        format!("v{}", env!("CARGO_PKG_VERSION")),
-        format!(
-            "{build} build, {} {}",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        ),
-        String::new(),
-        "A MIDI tracker for the terminal".to_owned(),
-        "Created by TheExiledCat".to_owned(),
-        format!(
-            "{} {years} TheExiledCat, MIT License",
-            glyphs::pick("\u{a9}", "(c)")
-        ),
-    ];
-    let mut components: Vec<Box<dyn DialogComponent>> = lines
-        .into_iter()
-        .map(|line| Label::new(line).centered().boxed() as Box<dyn DialogComponent>)
-        .collect();
-    components.push(Link::new(REPOSITORY_URL).boxed());
-    let dialog = Dialog::new("About", components)
-        .level(InfoLevel::Success)
-        .close_on_esc();
-    state.open_dialog(dialog);
-}
-
-/// Changes are made right away, so Esc closes it like Enter.
-pub fn open_global_dialog(state: &mut AppState) {
-    let dialog = Dialog::new(
-        "Global",
-        vec![
-            NumberBox::new("velocity", "Velocity", 2)
-                .show_range()
-                .value(state.project().global_velocity as i32)
-                .boxed(),
-            NumberBox::new("transpose", "Transpose (semitones)", 2)
-                .show_range()
-                .range(i8::MIN as i32, i8::MAX as i32)
-                .value(state.project().transpose as i32)
-                .boxed(),
-        ],
-    )
-    .close_on_esc()
-    .focus_first()
-    .on_update(|state, fields| {
-        apply_globals(state, fields);
-        return Ok(());
-    })
-    .on_submit(|state, result| {
-        apply_globals(state, &result);
-        return Ok(());
-    });
-    state.open_dialog(dialog);
 }
 
 fn apply_globals(state: &mut AppState, result: &DialogResult) {
@@ -581,6 +631,7 @@ mod tests {
             name: "Step",
             kind: ParamKind::SignedNumber { min: -12, max: 12 },
             default: 0,
+            label: ValueLabel::None,
         };
         let keys = [KeyCode::Down, KeyCode::Up, KeyCode::Up];
         assert_eq!(edit(param, -1i8 as u8, &keys), vec![0xFE, 0xFF, 0x00]);
@@ -593,6 +644,7 @@ mod tests {
             name: "Rate",
             kind: ParamKind::Number { min: 1, max: 0xFF },
             default: 6,
+            label: ValueLabel::None,
         };
         let keys = [KeyCode::Down, KeyCode::Down];
         assert_eq!(edit(param, 2, &keys), vec![1]);
@@ -605,6 +657,7 @@ mod tests {
             name: "Pitch",
             kind: ParamKind::Pitch,
             default: 60,
+            label: ValueLabel::None,
         };
         let field = param_field(&param, 60);
         let Some((_, DialogValue::Choice(choice))) = field.value() else {
@@ -630,6 +683,81 @@ mod tests {
                 assert_eq!(read, param.default, "{} {}", kind.name(), param.name);
             }
         }
+    }
+
+    #[test]
+    fn cc_options_name_each_cc_and_cut_long_names() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let options = cc_options(&state);
+        assert_eq!(options.len(), CC_MAX as usize + 2);
+        assert_eq!(options[0], "Off");
+        assert_eq!(options[2], "01 Mod wheel");
+        assert_eq!(options[4], "03");
+        assert_eq!(
+            options[0x55],
+            format!("54 Portamento cont{}", glyphs::pick("\u{2026}", "."))
+        );
+        state.config.hex_values = false;
+        let options = cc_options(&state);
+        assert_eq!(options[2], "1   Mod wheel");
+        assert_eq!(options[75], "74  Cutoff");
+        assert_eq!(options[4], "3");
+    }
+
+    /// How a field draws with values in hex or decimal and ranges on or off.
+    fn rendered(field: &mut Box<dyn DialogComponent>, hex: bool, ranges: bool) -> String {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        state.config.hex_values = hex;
+        state.config.show_value_ranges = ranges;
+        let area = ratatui::layout::Rect::new(0, 0, 60, 1);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        field.render(&state, area, &mut buf);
+        let line: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+        return line.trim_end().to_owned();
+    }
+
+    #[test]
+    fn labelled_params_follow_the_hex_and_range_settings() {
+        let feedback = effect_params(EffectKind::Echo)[1];
+        let mut field = param_field(&feedback, 0x80);
+        let all = [
+            (true, true, "80", "(00-FF)"),
+            (true, false, "80", ""),
+            (false, true, "128", "(0-255)"),
+            (false, false, "128", ""),
+        ];
+        for (hex, ranges, value, range) in all {
+            let line = rendered(&mut field, hex, ranges);
+            assert!(line.contains(value) && line.ends_with("50%"), "{line:?}");
+            assert_eq!(
+                line.contains(range) && !range.is_empty(),
+                ranges,
+                "{line:?}"
+            );
+        }
+        let step = effect_params(EffectKind::Arp)[0];
+        let mut field = param_field(&step, -12i8 as u8);
+        for (hex, ranges, value) in [(true, true, "-0C"), (false, false, "-012")] {
+            let line = rendered(&mut field, hex, ranges);
+            assert!(line.contains(value) && line.ends_with("-oct"), "{line:?}");
+        }
+        let cc = effect_params(EffectKind::Lfo)[5];
+        let mut field = param_field(&cc, 74);
+        assert!(rendered(&mut field, true, true).ends_with("4A ↕ Cutoff"));
+        assert!(rendered(&mut field, false, false).ends_with("74 ↕ Cutoff"));
+    }
+
+    #[test]
+    fn cc_params_are_numbers_named_after_the_cc() {
+        assert_eq!(cc_label(1), "Mod wheel");
+        assert_eq!(cc_label(3), "");
+        let param = Param {
+            name: "CC",
+            kind: ParamKind::Cc,
+            default: 1,
+            label: ValueLabel::None,
+        };
+        assert_eq!(edit(param, 0x7E, &[KeyCode::Up, KeyCode::Up]), vec![0x7F]);
     }
 
     #[test]

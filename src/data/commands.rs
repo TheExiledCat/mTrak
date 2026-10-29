@@ -1,7 +1,8 @@
 use std::{fmt::Display, str::FromStr};
 
-use crate::error::MTrakError;
 use MidiCommand::*;
+
+use crate::error::MTrakError;
 pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 10] = [
     ('S', SetCC),
     ('M', ChangeCC),
