@@ -1,4 +1,4 @@
-# mTrak v0.7.1
+# mTrak v0.8.0
 
 A lightweight MIDI tracker for the terminal.
 

@@ -1,5 +1,69 @@
 # Changelog
 
+## v0.8.0 - 2026-10-31
+
+### Added
+
+- **Live recording.** Turn on record mode with `Esc` and start the song or pattern: notes you
+  play on the keyboard or a MIDI controller are written into the cursor's track on the row
+  closest to when you played them. A note that lands on the next row isn't played twice when
+  playback reaches it.
+- **Block loop.** `Ctrl+B` loops the rows of the marked block (`-- LOOP BLCK --`); a bracket
+  next to the line numbers shows which rows. Press `Ctrl+B` again to let the pattern play on
+  past them.
+- **Metronome** (`Ctrl+G` in the util list): clicks on every beat, with an accent on the first
+  beat of each bar. Choose when it plays (off, while recording or always), which channels it
+  clicks on, the notes and velocities of the accent and the other beats, and how many beats a
+  bar has. Its settings are saved with the project.
+- **Song commands** (see [docs/COMMANDS.md](docs/COMMANDS.md)):
+  - `Bxx` jumps to sequence position `xx`, `Dxx` breaks to row `xx` of the next position, and
+    both together go to that row of that position.
+  - `EEx` holds a row `x` rows longer without replaying its notes.
+  - `EF0` stops playback once its row has played, which is how a song ends now that playback
+    always loops.
+  - `Gxx` sets the global velocity, `Hxy` slides it up by `x` or down by `y` every tick, and
+    `Cxx` scales the velocity of every note on its track.
+  - The Info dialog's song length follows jumps, breaks, delays and stops.
+- **New instrument effects** (see [docs/EFFECTS.md](docs/EFFECTS.md)):
+  - **Swing** delays every second line of a 1/4 to 1/32 grid, from straight at 50% to a
+    triplet shuffle at about 67%, with an accent for the notes on or off the beat.
+  - **Randomizer** moves each note's velocity, pitch or octave by a random amount up or down,
+    with a chance.
+  - **Scale** keeps notes in one of 13 scales on any root, with a transpose first; notes
+    halfway between two scale notes go down, up or either, or are dropped.
+  - **Note to CC** sends a CC, pitch bend, aftertouch or program change from each note's pitch
+    or velocity, with or without the note.
+  - **Probability** plays each note with a chance, or with its velocity as the chance, rolled
+    per note or per chord.
+- **Echo dry/wet**: fade out the repeats below 50% or the note itself above it. Existing
+  projects keep their sound.
+- **Rowfall**, a falling block game under `Alt+N` (listed in the util panel). It takes over the
+  screen while mTrak keeps playing; `Esc` or `Alt+N` goes back and the game waits. It has a
+  hold piece (`Space`), three previews, squares made of four whole pieces for bonus points,
+  and a top 10 leaderboard kept in `leaderboard.toml` in the config folder.
+- Themes have seven new colors for Rowfall's pieces, `piece_i` to `piece_l`, set in every
+  bundled theme. Bundled themes you already have keep their old file: delete it and restart
+  mTrak to get the new one.
+
+### Changed
+
+- **Playback always loops.** Enter plays the song (`-- PLAY SONG --`) and `Ctrl+Space` the
+  pattern (`-- PLAY PTN --`), both on repeat; the one-shot `REC SONG` and `REC PTN` modes are
+  gone. Use `EF0` to end a song.
+- **Dropdowns** in dialogs change in place with `Up`/`Down`, and `PgUp`/`PgDn` move a page, or
+  an octave in note lists. `Space` opens the whole list, which now has a scrollbar; `Esc`
+  closes it without changing anything. `X` ticks items in dropdowns with checkboxes, like the
+  metronome's channels.
+- CC settings, like an instrument's default CC or an LFO's CC, are dropdowns of named CCs.
+- `PgUp`/`PgDn` change number fields in bigger steps.
+- The play pattern key works while a dialog is open.
+- The project file format is now version 5. Projects from v0.6.0 on still open, and are
+  upgraded when saved.
+
+### Fixed
+
+- Dropdown arrows showed as `?` in ASCII mode.
+
 ## v0.7.1 - 2026-10-29
 
 ### Added
