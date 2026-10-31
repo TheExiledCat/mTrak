@@ -111,8 +111,9 @@ impl MidiEffect for RandomizerEffect {
         };
         let (channel, played) = (note.channel, note.pitch.0);
         if note.is_note_off {
-            let sent = self.sent.note_off(channel, played);
-            out.push(Message::NoteOff(channel, sent, note.velocity));
+            if let Some(sent) = self.sent.note_off(channel, played) {
+                out.push(Message::NoteOff(channel, sent, note.velocity));
+            }
             return;
         }
         let offset = self.offset();

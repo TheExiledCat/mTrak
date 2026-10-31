@@ -428,10 +428,8 @@ fn open_remap_instruments_dialog(state: &mut AppState) {
 
 /// Plays the notes of one pitch at another, e.g. to move a drum to another key.
 fn open_remap_pitches_dialog(state: &mut AppState) {
-    let pitches: Vec<String> = (NotePitch::MIN..=NotePitch::MAX)
-        .map(|pitch| NotePitch(pitch).to_string())
-        .collect();
-    let middle_c = (MIDDLE_C - NotePitch::MIN) as usize;
+    let pitches = pitch_names();
+    let middle_c = pitch_index(MIDDLE_C);
     let mut instruments = instrument_names(state);
     let all_instruments = instruments.len();
     instruments.push("All".to_owned());

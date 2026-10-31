@@ -45,8 +45,9 @@ pub struct ProbabilityEffect {
     chance: u8,
     chance_source: u8,
     roll: u8,
-    /// So every note of a chord gets the same roll.
-    last_roll: Option<(u32, u8, bool)>,
+    /// Each channel's roll for the notes starting on this pulse, so a chord plays or drops
+    /// as one. Forgotten on the next pulse.
+    chord_rolls: [Option<bool>; MIDI_CHANNEL_COUNT],
     dropped: [[bool; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
 }
 impl ProbabilityEffect {
@@ -55,17 +56,14 @@ impl ProbabilityEffect {
             chance: PARAMS[CHANCE].default,
             chance_source: PARAMS[CHANCE_SOURCE].default,
             roll: PARAMS[ROLL].default,
-            last_roll: None,
+            chord_rolls: [None; MIDI_CHANNEL_COUNT],
             dropped: [[false; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
         };
     }
 
     fn plays(&mut self, velocity: u8, channel: u8, timing: Option<Timing>) -> bool {
-        let chord = timing.filter(|_| self.roll == 1).map(|timing| timing.pulse);
-        if let (Some(pulse), Some((last_pulse, last_channel, plays))) = (chord, self.last_roll)
-            && pulse == last_pulse
-            && channel == last_channel
-        {
+        let chord = self.roll == 1 && timing.is_some();
+        if chord && let Some(plays) = self.chord_rolls[channel as usize] {
             return plays;
         }
         let chance = match self.chance_source {
@@ -77,7 +75,9 @@ impl ProbabilityEffect {
             chance if chance >= u8::MAX as u32 => true,
             chance => rand::rng().random_range(0..u8::MAX as u32) < chance,
         };
-        self.last_roll = chord.map(|pulse| (pulse, channel, plays));
+        if chord {
+            self.chord_rolls[channel as usize] = Some(plays);
+        }
         return plays;
     }
 }
@@ -124,8 +124,11 @@ impl MidiEffect for ProbabilityEffect {
             out.push(message);
         }
     }
+    fn tick(&mut self, _timing: Timing, _out: &mut Vec<Message>) {
+        self.chord_rolls = [None; MIDI_CHANNEL_COUNT];
+    }
     fn reset(&mut self, _out: &mut Vec<Message>) {
-        self.last_roll = None;
+        self.chord_rolls = [None; MIDI_CHANNEL_COUNT];
         self.dropped = [[false; PITCH_COUNT]; MIDI_CHANNEL_COUNT];
     }
 }
@@ -187,7 +190,7 @@ mod tests {
                 })
                 .collect();
             assert!(chord.iter().all(|&p| p == chord[0]));
-            effect.reset(&mut vec![]);
+            effect.tick(Timing::new(pulse), &mut vec![]);
         }
     }
 
@@ -200,5 +203,20 @@ mod tests {
             Message::NoteOn(Channel::Ch1, 60, 127),
             None
         ));
+    }
+
+    #[test]
+    fn a_chord_on_the_same_pulse_of_a_later_loop_rolls_again() {
+        let mut effect = ProbabilityEffect::new();
+        effect.chance = 0x80;
+        effect.roll = 1;
+        let timing = Some(Timing::new(0));
+        let rolls: Vec<bool> = (0..200)
+            .map(|_| {
+                effect.tick(Timing::new(0), &mut vec![]);
+                return play(&mut effect, Message::NoteOn(Channel::Ch1, 60, 100), timing);
+            })
+            .collect();
+        assert!(rolls.contains(&true) && rolls.contains(&false));
     }
 }

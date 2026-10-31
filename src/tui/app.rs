@@ -58,8 +58,10 @@ use crate::{
         undo::{UndoAction, UndoStack},
         views::{
             file_browser::{FileBrowser, Submit},
+            header::util::{UtilListAction, util_keymap},
             keybindings,
             main_view::{MainAction, MainView, global_keymap},
+            rowfall::RowfallView,
         },
     },
 };
@@ -84,8 +86,10 @@ pub struct App {
     pub root: Container,
     pub dialogs: Vec<Dialog>,
     pub file_browser: FileBrowser,
+    rowfall: RowfallView,
 
     global_keys: Keymap<MainAction>,
+    util_keys: Keymap<UtilListAction>,
     held_keys: HashSet<KeyCode>,
     reports_releases: bool,
 }
@@ -104,7 +108,9 @@ impl App {
             root: Container::new(MainView::new().boxed(), Padding::ZERO),
             dialogs: Vec::new(),
             file_browser: FileBrowser::new(),
+            rowfall: RowfallView::new(),
             global_keys: global_keymap(),
+            util_keys: util_keymap(),
             held_keys: HashSet::new(),
             reports_releases: false,
             state,
@@ -129,6 +135,16 @@ impl App {
             }
             match self.dialogs.last_mut() {
                 Some(dialog) => dialog.handle_event(&mut self.state, &event),
+                None if self.rowfall.is_open() => {
+                    match matches!(&event, Event::Key(key) if self.util_keys.lookup(key) == Some(UtilListAction::Rowfall))
+                    {
+                        true => self.rowfall.toggle(&mut self.state),
+                        false => {
+                            self.rowfall.handle_event(&mut self.state, &event);
+                        }
+                    }
+                    true
+                }
                 None => {
                     self.file_browser.handle_event(&mut self.state, &event)
                         || self.root.handle_event(&mut self.state, &event)
@@ -139,12 +155,16 @@ impl App {
         if let Some(path) = self.state.project_load_request.take() {
             self.load_project(path)?;
         }
+        if std::mem::take(&mut self.state.rowfall_requested) {
+            self.rowfall.toggle(&mut self.state);
+        }
         self.state.update();
         if self.file_browser.is_open() {
             self.file_browser.update(&mut self.state);
         } else {
             self.root.update(&mut self.state);
         }
+        self.rowfall.update(&mut self.state);
         for dialog in &mut self.dialogs {
             dialog.update(&mut self.state);
         }
@@ -155,7 +175,9 @@ impl App {
             let buf = f.buffer_mut();
             buf.set_style(area, self.state.theme.background);
             let file_browser = &mut self.file_browser;
-            if file_browser.is_open() {
+            if self.rowfall.is_open() {
+                self.rowfall.render(&self.state, area, buf);
+            } else if file_browser.is_open() {
                 file_browser.render(&self.state, area, buf);
             } else {
                 self.root.render(&self.state, area, buf);
@@ -177,6 +199,7 @@ impl App {
         let mut sections = Vec::new();
         self.root.help(&mut sections);
         self.file_browser.help(&mut sections);
+        self.rowfall.help(&mut sections);
         Dialog::help(&mut sections);
         sections.push(keybindings::help_section());
         return sections;
@@ -499,6 +522,7 @@ pub struct AppState {
     pending_dialogs: Vec<Dialog>,
     help_requested: bool,
     commands_requested: bool,
+    rowfall_requested: bool,
     clear_request: Option<(ClearOption, ClearTarget, Option<u8>)>,
     remap_request: Option<(RemapScope, Remap, bool)>,
     project_load_request: Option<PathBuf>,
@@ -573,6 +597,7 @@ impl AppState {
             cursor_jump: None,
             help_requested: false,
             commands_requested: false,
+            rowfall_requested: false,
             clear_request: None,
             remap_request: None,
             project_load_request: None,
@@ -919,6 +944,9 @@ impl AppState {
     }
     pub fn request_commands(&mut self) {
         self.commands_requested = true;
+    }
+    pub fn request_rowfall(&mut self) {
+        self.rowfall_requested = true;
     }
     pub fn request_exit(&mut self) {
         self.exit_requested = true;
