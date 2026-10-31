@@ -25,6 +25,15 @@ const FT2_PALETTE: Palette = Palette {
     warning: Color::Rgb(230, 190, 80),
     success: Color::Rgb(120, 200, 120),
     mark: Color::Rgb(38, 56, 80),
+    pieces: [
+        Color::Rgb(80, 200, 230),
+        Color::Rgb(230, 190, 80),
+        Color::Rgb(170, 110, 220),
+        Color::Rgb(120, 200, 120),
+        Color::Rgb(214, 82, 82),
+        Color::Rgb(90, 120, 230),
+        Color::Rgb(235, 150, 60),
+    ],
 };
 
 const ANSI16_PALETTE: Palette = Palette {
@@ -39,6 +48,15 @@ const ANSI16_PALETTE: Palette = Palette {
     warning: Color::Yellow,
     success: Color::Green,
     mark: Color::DarkGray,
+    pieces: [
+        Color::Cyan,
+        Color::Yellow,
+        Color::Magenta,
+        Color::Green,
+        Color::Red,
+        Color::Blue,
+        Color::LightRed,
+    ],
 };
 
 /// The colors a color theme is built from. Each color is used as a fill in some styles and as
@@ -56,11 +74,14 @@ pub struct Palette {
     pub warning: Color,
     pub success: Color,
     pub mark: Color,
+    /// Rowfall's pieces, in the order I, O, T, S, Z, J, L.
+    pub pieces: [Color; 7],
 }
 
 impl Palette {
     /// Every color with its key in a theme file and what it's used for.
-    pub fn entries(&mut self) -> [(&'static str, &'static str, &mut Color); 11] {
+    pub fn entries(&mut self) -> [(&'static str, &'static str, &mut Color); 18] {
+        let [i, o, t, s, z, j, l] = &mut self.pieces;
         return [
             (
                 "backdrop",
@@ -109,6 +130,13 @@ impl Palette {
                 &mut self.success,
             ),
             ("mark", "the fill behind a marked block", &mut self.mark),
+            ("piece_i", "Rowfall's I piece, the long one", i),
+            ("piece_o", "Rowfall's O piece, the square", o),
+            ("piece_t", "Rowfall's T piece", t),
+            ("piece_s", "Rowfall's S piece", s),
+            ("piece_z", "Rowfall's Z piece", z),
+            ("piece_j", "Rowfall's J piece", j),
+            ("piece_l", "Rowfall's L piece", l),
         ];
     }
 
@@ -231,6 +259,8 @@ pub struct Theme {
     pub danger: Style,
     /// the single column being edited, patched on top of `selection`, e.g. the volume digit under the cursor
     pub cursor: Style,
+    /// Rowfall's pieces, in the order I, O, T, S, Z, J, L
+    pub pieces: [Style; 7],
 }
 
 impl Theme {
@@ -300,6 +330,7 @@ impl Theme {
             selection_subtle: Style::new().fg(palette.text).bg(palette.mark),
             danger: Style::new().fg(palette.surface).bg(palette.danger),
             cursor: Style::new().fg(palette.surface).bg(palette.text),
+            pieces: palette.pieces.map(|color| Style::new().fg(color)),
         };
     }
 
@@ -327,6 +358,7 @@ impl Theme {
             danger: Style::new().reversed().bold(),
             // undo the cell's reverse so the edited column stands out from the rest of the cell
             cursor: Style::new().not_reversed().bold().underlined(),
+            pieces: [Style::new(); 7],
         };
     }
 }

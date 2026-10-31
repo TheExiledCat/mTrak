@@ -74,6 +74,8 @@ fn cc_value(value: u8) -> u8 {
 
 const MIDI_CHANNEL_COUNT: usize = MIDI_CHANNEL_MAX as usize + 1;
 const MOD_WHEEL_CC: u8 = 1;
+/// FT2's global volume tops out at 64 and ours at 255, so H steps are 4x bigger to feel the same.
+const GLOBAL_SLIDE_STEP: i16 = 4;
 
 /// Maps a 00-FF command value to a 14 bit pitch bend: 00 is full down, 80 is no bend and
 /// FF is full up.
@@ -373,11 +375,26 @@ impl MidiCommandHandler {
         self.pressed = [false; MIDI_CHANNEL_COUNT];
     }
 }
-/// Keeps the tempo set by playback commands, which carries over pattern boundaries until it is
-/// reset by 00 or by playback starting or stopping.
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct RowFlow {
+    pub jump: Option<u8>,
+    pub break_row: Option<u8>,
+    pub delay: u8,
+    pub stop: bool,
+}
+
+/// What playback commands set. The tempo carries over pattern boundaries until an F00, and
+/// everything resets when playback starts or stops.
 pub struct PlaybackCommandHandler {
     bpm: Option<u8>,
     speed: Option<u8>,
+    global_velocity: Option<u8>,
+    global_slide: Option<i16>,
+    /// H00 repeats the last slide, like FT2's effect memory.
+    global_slide_memory: i16,
+    track_velocities: [u8; TRACK_COUNT as usize],
+    flow: RowFlow,
 }
 impl Default for PlaybackCommandHandler {
     fn default() -> Self {
@@ -390,6 +407,11 @@ impl PlaybackCommandHandler {
         return Self {
             bpm: None,
             speed: None,
+            global_velocity: None,
+            global_slide: None,
+            global_slide_memory: 0,
+            track_velocities: [u8::MAX; TRACK_COUNT as usize],
+            flow: RowFlow::default(),
         };
     }
 
@@ -402,8 +424,30 @@ impl PlaybackCommandHandler {
         return self.speed;
     }
 
+    pub fn global_velocity(&self) -> Option<u8> {
+        return self.global_velocity;
+    }
+    pub fn track_velocity(&self, track: usize) -> u8 {
+        return self.track_velocities.get(track).copied().unwrap_or(u8::MAX);
+    }
+
+    pub fn start_row(&mut self) {
+        self.global_slide = None;
+        self.flow = RowFlow::default();
+    }
+    pub fn take_flow(&mut self) -> RowFlow {
+        return std::mem::take(&mut self.flow);
+    }
+    pub fn tick(&mut self, song_velocity: u8) {
+        let Some(step) = self.global_slide else {
+            return;
+        };
+        let current = self.global_velocity.unwrap_or(song_velocity) as i16;
+        self.global_velocity = Some((current + step).clamp(0, u8::MAX as i16) as u8);
+    }
+
     /// Runs a playback action and says what happens to the note on its cell.
-    pub fn apply(&mut self, action: PlaybackAction) -> NoteAction {
+    pub fn apply(&mut self, track: usize, action: PlaybackAction) -> NoteAction {
         return match action {
             PlaybackAction::ResetTempo => {
                 self.bpm = None;
@@ -432,14 +476,49 @@ impl PlaybackCommandHandler {
             PlaybackAction::LegatoHold(overlap) => NoteAction::Legato(overlap),
             PlaybackAction::Cut(tick) => NoteAction::Cut(tick),
             PlaybackAction::RetrigNote(every) => NoteAction::RetrigNote(every),
+            PlaybackAction::PositionJump(position) => {
+                self.flow.jump = Some(position);
+                NoteAction::Play
+            }
+            PlaybackAction::PatternBreak(row) => {
+                self.flow.break_row = Some(row);
+                NoteAction::Play
+            }
+            PlaybackAction::PatternDelay(rows) => {
+                self.flow.delay = self.flow.delay.max(rows);
+                NoteAction::Play
+            }
+            PlaybackAction::StopSong => {
+                self.flow.stop = true;
+                NoteAction::Play
+            }
+            PlaybackAction::SetGlobalVelocity(velocity) => {
+                self.global_velocity = Some(velocity);
+                NoteAction::Play
+            }
+            PlaybackAction::GlobalVelocitySlide { up, down } => {
+                // like FT2's Hxy, x wins when both are set
+                let step = match (up, down) {
+                    (0, 0) => self.global_slide_memory,
+                    (0, down) => -(down as i16) * GLOBAL_SLIDE_STEP,
+                    (up, _) => up as i16 * GLOBAL_SLIDE_STEP,
+                };
+                self.global_slide_memory = step;
+                self.global_slide = Some(step);
+                NoteAction::Play
+            }
+            PlaybackAction::SetTrackVelocity(velocity) => {
+                if let Some(slot) = self.track_velocities.get_mut(track) {
+                    *slot = velocity;
+                }
+                NoteAction::Play
+            }
             PlaybackAction::Unused => NoteAction::Play,
         };
     }
 
-    /// Forgets the tempo, e.g. when playback starts or stops.
     pub fn reset(&mut self) {
-        self.bpm = None;
-        self.speed = None;
+        *self = Self::new();
     }
 }
 
@@ -644,7 +723,7 @@ mod tests {
 
     fn tempo(handler: &mut PlaybackCommandHandler, value: u8) {
         assert_eq!(
-            handler.apply(PlaybackCommand::SetTempo.decode(value)),
+            handler.apply(0, PlaybackCommand::SetTempo.decode(value)),
             NoteAction::Play
         );
     }
@@ -674,11 +753,11 @@ mod tests {
         let mut handler = PlaybackCommandHandler::new();
         for _ in 0..100 {
             assert_eq!(
-                handler.apply(PlaybackCommand::Probability.decode(0x00)),
+                handler.apply(0, PlaybackCommand::Probability.decode(0x00)),
                 NoteAction::Skip
             );
             assert_eq!(
-                handler.apply(PlaybackCommand::Probability.decode(0xFF)),
+                handler.apply(0, PlaybackCommand::Probability.decode(0xFF)),
                 NoteAction::Play
             );
         }
@@ -688,11 +767,11 @@ mod tests {
     fn late_delay_holds_the_note_back_unless_it_is_10() {
         let mut handler = PlaybackCommandHandler::new();
         assert_eq!(
-            handler.apply(PlaybackCommand::Extended.decode(0xD0)),
+            handler.apply(0, PlaybackCommand::Extended.decode(0xD0)),
             NoteAction::Play
         );
         assert_eq!(
-            handler.apply(PlaybackCommand::Extended.decode(0xD3)),
+            handler.apply(0, PlaybackCommand::Extended.decode(0xD3)),
             NoteAction::Delay(3)
         );
     }
@@ -701,7 +780,7 @@ mod tests {
     fn retrig_with_zeros_is_still_a_retrig() {
         let mut handler = PlaybackCommandHandler::new();
         assert_eq!(
-            handler.apply(PlaybackCommand::Retrig.decode(0x00)),
+            handler.apply(0, PlaybackCommand::Retrig.decode(0x00)),
             NoteAction::Retrig {
                 every: 0,
                 volume: 0
@@ -713,14 +792,14 @@ mod tests {
     fn retrig_splits_volume_and_interval() {
         let mut handler = PlaybackCommandHandler::new();
         assert_eq!(
-            handler.apply(PlaybackCommand::Retrig.decode(0x02)),
+            handler.apply(0, PlaybackCommand::Retrig.decode(0x02)),
             NoteAction::Retrig {
                 every: 2,
                 volume: 0
             }
         );
         assert_eq!(
-            handler.apply(PlaybackCommand::Retrig.decode(0xA3)),
+            handler.apply(0, PlaybackCommand::Retrig.decode(0xA3)),
             NoteAction::Retrig {
                 every: 3,
                 volume: 0xA

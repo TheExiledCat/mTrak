@@ -233,12 +233,16 @@ FastTracker 2's `E` commands: the first digit picks the command, the second is i
 | `90`-`9F` | Retrig note: replays the note every that many ticks in its row        |
 | `C0`-`CF` | Note cut: releases the track's note on that tick of the row           |
 | `D0`-`DF` | Note delay: starts the note that many ticks into its row              |
+| `E0`-`EF` | Pattern delay: holds the row that many rows longer                    |
+| `F0`-`FF` | Stop: stops playback once the row has played                          |
 
 ```
 C-4|1|--|ED3   at speed 6, the note starts halfway through its row
 D-4|1|--|E82   at speed 6, the note starts on tick 4 of the row above
 C-4|1|--|E92   at speed 6, hits on ticks 0, 2 and 4
 ---|1|--|EC3   the note playing is released on tick 3
+---|1|--|EE3   the row lasts 4 rows
+---|1|--|EF0   playback stops at the end of this row
 ```
 
 **Note delay (`ED`) and early delay (`E8`):**
@@ -268,6 +272,17 @@ C-4|1|--|E92   at speed 6, hits on ticks 0, 2 and 4
 - `EC0` releases the note straight away and the cell's own note doesn't play. On a cell
   without a note, a cut releases the note that's playing. A cut also stops a previous note
   still sounding from an `L1y`. A cut past the end of the row doesn't happen.
+
+**Pattern delay (`EE`):**
+
+- Like FT2's `EEx`: the row lasts `x` more rows. Its notes don't play again, but slides,
+  retrigs and effects keep going. With several on one row, the longest wins.
+
+**Stop (`EF`):**
+
+- Playing always loops, so this is how a song ends: playback stops once the row has played,
+  and the notes still sounding are released. The second digit doesn't matter.
+- `EF` isn't in FastTracker 2; it uses an `E` slot FT2 leaves free.
 
 Other `E` values do nothing yet; the note plays normally.
 
@@ -341,6 +356,72 @@ E-4|1|--|L12   E-4 starts on its row, D-4 keeps sounding 2 more ticks
   no meaning for MIDI, so mTrak uses the letter for legato.
 - `20` and up do nothing yet; the note plays normally.
 
+### `B` Position jump
+
+Like FT2's `Bxx`: after this row, playback goes to sequence position `xx` and starts its
+pattern from the top. A position past the end of the song goes to the first one.
+
+```
+---|1|--|B03   carry on at sequence position 03
+```
+
+- Only works while the song plays: playing a pattern or a block ignores it.
+- With a `D` on the same row, the song goes to that row of position `xx` instead of its top.
+
+### `D` Pattern break
+
+Like FT2's `Dxx`: after this row, the song moves on to the next sequence position as if the
+pattern had ended, starting at row `xx`. A row past the end of that pattern starts it from
+the top.
+
+```
+---|1|--|D10   skip the rest of this pattern, carry on at row 10 of the next
+```
+
+- Rows are hex like everywhere else in mTrak, so `D10` is row `10`. FT2 reads the value as
+  decimal.
+- A pattern with repeats in the sequence counts as ending, so a break moves on to its next
+  repeat.
+- While playing a single pattern, the break jumps to row `xx` of the same pattern. A block loop
+  ignores it.
+
+### `G` Global velocity
+
+Like FT2's `Gxx`: scales the velocity of every note, like `Velocity` in the Global dialog,
+from `00` (silent) to `FF` (as they are). It lasts until playback starts or stops, and then
+goes back to the song's own.
+
+```
+---|1|--|G80   every note at about half its velocity from here on
+```
+
+### `H` Global velocity slide
+
+Like FT2's `Hxy`: slides the global velocity up by `x` or down by `y` steps on every tick of
+the row but its first. A step is 4 out of the global velocity's `FF`, since FT2's global
+volume only goes up to 64.
+
+```
+---|1|--|H02   at speed 6, 5 ticks of 8 down: 28 lower by the end of the row
+---|1|--|H00   the same again
+```
+
+- If both are set, `x` wins.
+- `H00` repeats the last slide.
+- It only runs on rows that have it, so put it on every row the slide should last.
+
+### `C` Track velocity
+
+Scales the velocity of every note on the track from this row on, from `00` (silent) to `FF`
+(as they are). It lasts until another `C` on the track, or until playback starts or stops.
+
+```
+---|1|--|C80   this track at about half velocity from here on
+```
+
+- FT2's `C` sets the volume of the note on its row; here it keeps scaling the track, on top
+  of each note's own volume and the global velocity.
+
 ## Slides
 
 A slide moves from its own value to a target, updating once per tick. With a speed (`SPD`, or
@@ -359,6 +440,9 @@ given BPM, a slide over the same amount of time is equally smooth at any speed.
 - **`S` during a slide:** an `S` before the target stops slides that change a CC, since they'd
   be changing a different one. Velocity-only slides carry on.
 
+`H` is the exception: it moves by the same step on every tick of its own row, the
+FastTracker 2 way, instead of towards a target.
+
 ## Muting
 
 A muted channel sends no MIDI, but its commands keep running in the background. If you mute
@@ -375,6 +459,6 @@ start during the pattern before. Muting also cuts notes still sounding from an `
 
 Starting or stopping playback resets all command state: selected CCs go back to each
 instrument's default CC, running slides end, delayed notes, retrigs and cuts that haven't
-happened yet are dropped, notes still sounding from an `L1y` are cut, and the tempo goes back
-to the song's BPM and speed. Channels that were sent a pitch bend or aftertouch get them
+happened yet are dropped, notes still sounding from an `L1y` are cut, the tempo goes back
+to the song's BPM and speed, and the global and track velocities go back to the song's. Channels that were sent a pitch bend or aftertouch get them
 reset to no bend and no pressure, even when muted, so your synth is never left out of tune.

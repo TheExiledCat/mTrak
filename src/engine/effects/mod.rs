@@ -4,7 +4,13 @@ pub mod envelope;
 pub mod eq;
 pub mod harmonizer;
 pub mod lfo;
+pub mod note_to_cc;
+pub mod probability;
+pub mod randomizer;
+pub mod scale;
+pub mod swing;
 use midi::{Channel, Message, U7};
+use num::FromPrimitive;
 
 use crate::{
     data::{
@@ -12,9 +18,14 @@ use crate::{
         midi::{CC_MAX, PITCH_MAX, PULSES_PER_QUARTER},
         note::{NotePitch, SEMITONES_PER_OCTAVE},
     },
-    engine::effects::{
-        arp::ArpeggiatorEffect, echo::EchoEffect, envelope::EnvelopeEffect, eq::EqEffect,
-        harmonizer::Harmonizer, lfo::LfoEffect,
+    engine::{
+        effects::{
+            arp::ArpeggiatorEffect, echo::EchoEffect, envelope::EnvelopeEffect, eq::EqEffect,
+            harmonizer::Harmonizer, lfo::LfoEffect, note_to_cc::NoteToCcEffect,
+            probability::ProbabilityEffect, randomizer::RandomizerEffect, scale::ScaleEffect,
+            swing::SwingEffect,
+        },
+        notes::{MIDI_CHANNEL_COUNT, PITCH_COUNT},
     },
     tui::framework::core_extensions::Boxed,
 };
@@ -29,6 +40,11 @@ pub fn create_effect(settings: &EffectSettings) -> Box<dyn MidiEffect> {
         EffectKind::Lfo => LfoEffect::new().boxed(),
         EffectKind::Echo => EchoEffect::new().boxed(),
         EffectKind::Envelope => EnvelopeEffect::new().boxed(),
+        EffectKind::Swing => SwingEffect::new().boxed(),
+        EffectKind::Randomize => RandomizerEffect::new().boxed(),
+        EffectKind::Scale => ScaleEffect::new().boxed(),
+        EffectKind::NoteToCc => NoteToCcEffect::new().boxed(),
+        EffectKind::Probability => ProbabilityEffect::new().boxed(),
     };
     for (index, (param, value)) in effect.params().iter().zip(&settings.values).enumerate() {
         effect.set_param(index, param.kind.clamp(*value));
@@ -478,6 +494,60 @@ pub fn note_event(message: &Message) -> Option<NoteEvent> {
         },
         _ => return None,
     });
+}
+
+/// Lets a note off follow its note to wherever an effect moved it.
+pub struct SentPitches {
+    pitches: [[Option<u8>; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
+    /// Two held notes can land on the same pitch, which only ends when both have let go.
+    holders: [[u8; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
+}
+impl SentPitches {
+    pub fn new() -> Self {
+        return Self {
+            pitches: [[None; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
+            holders: [[0; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
+        };
+    }
+
+    pub fn note_on(&mut self, channel: Channel, played: u8, sent: u8) {
+        let channel = channel as usize;
+        if let Some(previous) = self.pitches[channel][played as usize].replace(sent) {
+            let holders = &mut self.holders[channel][previous as usize];
+            *holders = holders.saturating_sub(1);
+        }
+        self.holders[channel][sent as usize] += 1;
+    }
+    /// The pitch to send a note off to, or `None` while another note still holds it.
+    pub fn note_off(&mut self, channel: Channel, played: u8) -> Option<u8> {
+        let channel = channel as usize;
+        let Some(sent) = self.pitches[channel][played as usize].take() else {
+            return Some(played);
+        };
+        let holders = &mut self.holders[channel][sent as usize];
+        *holders = holders.saturating_sub(1);
+        return (*holders == 0).then_some(sent);
+    }
+    /// Only the moved notes need it: the rest still get their own note off from upstream.
+    pub fn release_changed(&mut self, out: &mut Vec<Message>) {
+        for (channel, pitches) in self.pitches.iter_mut().enumerate() {
+            let midi_channel = Channel::from_usize(channel).unwrap();
+            for (played, sent) in pitches.iter_mut().enumerate() {
+                if let Some(sent) = sent.take()
+                    && sent as usize != played
+                    && std::mem::take(&mut self.holders[channel][sent as usize]) > 0
+                {
+                    out.push(Message::NoteOff(midi_channel, sent, 0));
+                }
+            }
+        }
+        self.holders = [[0; PITCH_COUNT]; MIDI_CHANNEL_COUNT];
+    }
+}
+impl Default for SentPitches {
+    fn default() -> Self {
+        return Self::new();
+    }
 }
 
 fn percent(value: i32, full: i32) -> String {

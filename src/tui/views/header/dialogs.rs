@@ -6,8 +6,9 @@ use crate::{
     data::{
         config::TITLE,
         effect::EffectKind,
-        midi::{CC_MAX, PITCH_MAX, cc_name},
-        note::NotePitch,
+        metronome::MetronomeMode,
+        midi::{CC_MAX, PITCH_MAX, VELOCITY_MAX, cc_name},
+        note::{NotePitch, SEMITONES_PER_OCTAVE},
         pattern::{ClearOption, ClearTarget, Remap, RemapScope},
         project::ProjectStats,
     },
@@ -265,11 +266,9 @@ pub fn open_instrument_dialog(state: &mut AppState) {
                 .show_range()
                 .value(settings.pitch_wheel_range as i32)
                 .boxed(),
-            NumberBox::new("default_cc", "Default CC", 2)
-                .show_range()
-                .range(0, CC_MAX as i32)
-                .value(settings.default_cc as i32)
-                .value_label(cc_label)
+            Select::new("default_cc", cc_names(state))
+                .label("Default CC")
+                .selected(settings.default_cc as usize)
                 .boxed(),
             labelled(
                 NumberBox::new("transpose", "Transpose (semitones)", 2)
@@ -429,10 +428,8 @@ fn open_remap_instruments_dialog(state: &mut AppState) {
 
 /// Plays the notes of one pitch at another, e.g. to move a drum to another key.
 fn open_remap_pitches_dialog(state: &mut AppState) {
-    let pitches: Vec<String> = (NotePitch::MIN..=NotePitch::MAX)
-        .map(|pitch| NotePitch(pitch).to_string())
-        .collect();
-    let middle_c = (MIDDLE_C - NotePitch::MIN) as usize;
+    let pitches = pitch_names();
+    let middle_c = pitch_index(MIDDLE_C);
     let mut instruments = instrument_names(state);
     let all_instruments = instruments.len();
     instruments.push("All".to_owned());
@@ -445,10 +442,12 @@ fn open_remap_pitches_dialog(state: &mut AppState) {
             Select::new("from", pitches.clone())
                 .label("From")
                 .selected(middle_c)
+                .page_step(SEMITONES_PER_OCTAVE as usize)
                 .boxed(),
             Select::new("to", pitches)
                 .label("To")
                 .selected(middle_c)
+                .page_step(SEMITONES_PER_OCTAVE as usize)
                 .boxed(),
             Select::new("instrument", instruments)
                 .label("Instrument")
@@ -541,7 +540,7 @@ fn apply_instrument(state: &mut AppState, instrument: u8, result: &DialogResult)
     if let Some(range) = result.number("pitch_wheel_range") {
         state.set_bend_range(instrument, range as u8);
     }
-    if let Some(control) = result.number("default_cc") {
+    if let Some(control) = result.choice("default_cc") {
         state.set_default_cc(instrument, control as u8);
     }
     if let Some(transpose) = result.number("transpose") {
@@ -637,7 +636,7 @@ fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
     let mut fields: Vec<Box<dyn DialogComponent>> = params
         .iter()
         .zip(&values)
-        .map(|(param, value)| param_field(param, *value))
+        .map(|(param, value)| param_field(state, param, *value))
         .collect();
     fields.push(Buttons::new(CC_MAPPING_ID, vec!["CC mapping"]).boxed());
     let dialog = Dialog::new(format!("{} {:X}", settings.kind.name(), effect), fields)
@@ -703,24 +702,26 @@ fn open_cc_mapping_dialog(state: &mut AppState, instrument: u8, effect: usize) {
     state.open_dialog(dialog);
 }
 
-/// No CC, then every CC number, in hex or decimal as the config says.
-fn cc_options(state: &AppState) -> Vec<String> {
-    let ccs = (0..=CC_MAX).map(|cc| {
-        let number = match state.config.hex_values {
-            true => format!("{cc:02X}"),
-            false => format!("{cc:<3}"),
-        };
-        match cc_name(cc) {
-            Some(name) => format!("{number} {}", truncate(&name, CC_NAME_WIDTH)),
-            None => number.trim_end().to_owned(),
-        }
-    });
-    return std::iter::once("Off".to_owned()).chain(ccs).collect();
+/// Every CC number with its name, in hex or decimal as the config says.
+fn cc_names(state: &AppState) -> Vec<String> {
+    return (0..=CC_MAX)
+        .map(|cc| {
+            let number = match state.config.hex_values {
+                true => format!("{cc:02X}"),
+                false => format!("{cc:<3}"),
+            };
+            match cc_name(cc) {
+                Some(name) => format!("{number} {}", truncate(&name, CC_NAME_WIDTH)),
+                None => number.trim_end().to_owned(),
+            }
+        })
+        .collect();
 }
 
-fn cc_label(cc: i32) -> String {
-    let name = cc_name(cc as u8).unwrap_or_default();
-    return truncate(&name, CC_NAME_WIDTH);
+fn cc_options(state: &AppState) -> Vec<String> {
+    return std::iter::once("Off".to_owned())
+        .chain(cc_names(state))
+        .collect();
 }
 
 fn truncate(text: &str, width: usize) -> String {
@@ -731,7 +732,7 @@ fn truncate(text: &str, width: usize) -> String {
     return format!("{kept}{}", glyphs::pick("\u{2026}", "."));
 }
 
-fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
+fn param_field(state: &AppState, param: &Param, value: u8) -> Box<dyn DialogComponent> {
     return match param.kind {
         ParamKind::Number { min, max } => {
             let digits = if max > 0xF { 2 } else { 1 };
@@ -760,17 +761,16 @@ fn param_field(param: &Param, value: u8) -> Box<dyn DialogComponent> {
             .label(param.name)
             .selected(value as usize)
             .boxed(),
-        ParamKind::Cc => NumberBox::new(param.name, param.name, 2)
-            .show_range()
-            .range(0, CC_MAX as i32)
-            .value(value as i32)
-            .value_label(cc_label)
+        ParamKind::Cc => Select::new(param.name, cc_names(state))
+            .label(param.name)
+            .selected(value as usize)
             .boxed(),
         ParamKind::Pitch => {
             let pitches = (0..=PITCH_MAX).map(|pitch| NotePitch(pitch).to_string());
             Select::new(param.name, pitches.collect())
                 .label(param.name)
                 .selected(value as usize)
+                .page_step(SEMITONES_PER_OCTAVE as usize)
                 .boxed()
         }
     };
@@ -785,11 +785,111 @@ fn labelled(number: NumberBox, label: ValueLabel) -> NumberBox {
 
 fn param_value(param: &Param, result: &DialogResult) -> Option<u8> {
     return match param.kind {
-        ParamKind::Number { .. } | ParamKind::Cc => result.number(param.name).map(|n| n as u8),
+        ParamKind::Number { .. } => result.number(param.name).map(|n| n as u8),
         ParamKind::SignedNumber { .. } => result.number(param.name).map(|n| n as i8 as u8),
         ParamKind::Toggle => result.bool(param.name).map(|on| on as u8),
-        ParamKind::Choice(_) | ParamKind::Pitch => result.choice(param.name).map(|i| i as u8),
+        ParamKind::Choice(_) | ParamKind::Pitch | ParamKind::Cc => {
+            result.choice(param.name).map(|i| i as u8)
+        }
     };
+}
+
+pub fn open_metronome_dialog(state: &mut AppState) {
+    let metronome = state.project().metronome;
+    let modes: Vec<&str> = MetronomeMode::iter().map(|mode| mode.name()).collect();
+    let mode = MetronomeMode::iter()
+        .position(|mode| mode == metronome.mode)
+        .unwrap_or(0);
+    let channels = (0..instrument_names(state).len() as u8)
+        .map(|channel| metronome.sends_to(channel))
+        .collect();
+    let velocity = |id, label, value: u8| {
+        return NumberBox::new(id, label, 2)
+            .show_range()
+            .range(0, VELOCITY_MAX as i32)
+            .value(value as i32)
+            .boxed();
+    };
+    let dialog = Dialog::new(
+        "Metronome",
+        vec![
+            Select::new("mode", modes)
+                .label("Play")
+                .selected(mode)
+                .boxed(),
+            Select::new("channels", instrument_names(state))
+                .label("Channels")
+                .checkboxes(channels)
+                .boxed(),
+            Select::new("accent_note", pitch_names())
+                .label("Accent note")
+                .selected(pitch_index(metronome.accent_note))
+                .page_step(SEMITONES_PER_OCTAVE as usize)
+                .boxed(),
+            velocity(
+                "accent_velocity",
+                "Accent velocity",
+                metronome.accent_velocity,
+            ),
+            Select::new("beat_note", pitch_names())
+                .label("Beat note")
+                .selected(pitch_index(metronome.beat_note))
+                .page_step(SEMITONES_PER_OCTAVE as usize)
+                .boxed(),
+            velocity("beat_velocity", "Beat velocity", metronome.beat_velocity),
+            NumberBox::new("beats_per_bar", "Beats per bar", 2)
+                .show_range()
+                .range(1, 0x10)
+                .value(metronome.beats_per_bar as i32)
+                .boxed(),
+        ],
+    )
+    .width(60)
+    .close_on_esc()
+    .on_update(|state, fields| {
+        apply_metronome(state, fields);
+        return Ok(());
+    })
+    .on_submit(|state, result| {
+        apply_metronome(state, &result);
+        return Ok(());
+    });
+    state.open_dialog(dialog);
+}
+
+fn pitch_names() -> Vec<String> {
+    return (NotePitch::MIN..=NotePitch::MAX)
+        .map(|pitch| NotePitch(pitch).to_string())
+        .collect();
+}
+
+fn pitch_index(pitch: u8) -> usize {
+    return pitch.clamp(NotePitch::MIN, NotePitch::MAX) as usize - NotePitch::MIN as usize;
+}
+
+fn apply_metronome(state: &mut AppState, result: &DialogResult) {
+    let mut metronome = state.project().metronome;
+    if let Some(mode) = result
+        .choice("mode")
+        .and_then(|i| MetronomeMode::iter().nth(i))
+    {
+        metronome.mode = mode;
+    }
+    if let Some(checks) = result.checks("channels") {
+        for (channel, on) in checks.into_iter().enumerate() {
+            metronome.set_channel(channel as u8, on);
+        }
+    }
+    let pitch = |id| result.choice(id).map(|i| NotePitch::MIN + i as u8);
+    let number = |id| result.number(id).map(|n| n as u8);
+    metronome.accent_note = pitch("accent_note").unwrap_or(metronome.accent_note);
+    metronome.beat_note = pitch("beat_note").unwrap_or(metronome.beat_note);
+    metronome.accent_velocity = number("accent_velocity").unwrap_or(metronome.accent_velocity);
+    metronome.beat_velocity = number("beat_velocity").unwrap_or(metronome.beat_velocity);
+    metronome.beats_per_bar = number("beats_per_bar").unwrap_or(metronome.beats_per_bar);
+    if metronome != state.project().metronome {
+        state.set_metronome(metronome);
+    }
 }
 
 fn apply_globals(state: &mut AppState, result: &DialogResult) {
@@ -820,15 +920,14 @@ mod tests {
     fn edit(param: Param, value: u8, keys: &[KeyCode]) -> Vec<u8> {
         let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
         let seen = Rc::new(RefCell::new(Vec::new()));
-        let mut dialog = Dialog::new("", vec![param_field(&param, value)])
-            .focus_first()
-            .on_update({
-                let seen = seen.clone();
-                move |_, fields| {
-                    seen.borrow_mut().extend(param_value(&param, fields));
-                    return Ok(());
-                }
-            });
+        let field = param_field(&state, &param, value);
+        let mut dialog = Dialog::new("", vec![field]).focus_first().on_update({
+            let seen = seen.clone();
+            move |_, fields| {
+                seen.borrow_mut().extend(param_value(&param, fields));
+                return Ok(());
+            }
+        });
         for key in keys {
             let event = Event::Key(KeyEvent::new(*key, KeyModifiers::NONE));
             dialog.handle_event(&mut state, &event);
@@ -870,7 +969,8 @@ mod tests {
             default: 60,
             label: ValueLabel::None,
         };
-        let field = param_field(&param, 60);
+        let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let field = param_field(&state, &param, 60);
         let Some((_, DialogValue::Choice(choice))) = field.value() else {
             panic!("a pitch is a choice");
         };
@@ -879,9 +979,10 @@ mod tests {
 
     #[test]
     fn every_effect_param_has_a_field_that_reads_back_its_default() {
+        let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
         for kind in EffectKind::iter() {
             for param in effect_params(kind) {
-                let field = param_field(param, param.default);
+                let field = param_field(&state, param, param.default);
                 let (id, value) = field.value().unwrap();
                 assert_eq!(id, param.name);
                 let read = match (param.kind, value) {
@@ -929,8 +1030,9 @@ mod tests {
 
     #[test]
     fn labelled_params_follow_the_hex_and_range_settings() {
+        let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
         let feedback = effect_params(EffectKind::Echo)[1];
-        let mut field = param_field(&feedback, 0x80);
+        let mut field = param_field(&state, &feedback, 0x80);
         let all = [
             (true, true, "80", "(00-FF)"),
             (true, false, "80", ""),
@@ -947,28 +1049,28 @@ mod tests {
             );
         }
         let step = effect_params(EffectKind::Arp)[0];
-        let mut field = param_field(&step, -12i8 as u8);
+        let mut field = param_field(&state, &step, -12i8 as u8);
         for (hex, ranges, value) in [(true, true, "-0C"), (false, false, "-012")] {
             let line = rendered(&mut field, hex, ranges);
             assert!(line.contains(value) && line.ends_with("-oct"), "{line:?}");
         }
-        let cc = effect_params(EffectKind::Lfo)[5];
-        let mut field = param_field(&cc, 74);
-        assert!(rendered(&mut field, true, true).ends_with("4A ↕ Cutoff"));
-        assert!(rendered(&mut field, false, false).ends_with("74 ↕ Cutoff"));
     }
 
     #[test]
-    fn cc_params_are_numbers_named_after_the_cc() {
-        assert_eq!(cc_label(1), "Mod wheel");
-        assert_eq!(cc_label(3), "");
+    fn cc_params_are_dropdowns_of_named_ccs() {
         let param = Param {
             name: "CC",
             kind: ParamKind::Cc,
             default: 1,
             label: ValueLabel::None,
         };
-        assert_eq!(edit(param, 0x7E, &[KeyCode::Up, KeyCode::Up]), vec![0x7F]);
+        assert_eq!(
+            edit(param, 0x7E, &[KeyCode::Down, KeyCode::Down]),
+            vec![0x7F]
+        );
+        let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let mut field = param_field(&state, &effect_params(EffectKind::Lfo)[5], 74);
+        assert!(rendered(&mut field, true, true).contains("4A Cutoff"));
     }
 
     #[test]

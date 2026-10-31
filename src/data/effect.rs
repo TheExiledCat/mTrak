@@ -10,6 +10,11 @@ pub enum EffectKind {
     Lfo,
     Echo,
     Envelope,
+    Swing,
+    Randomize,
+    Scale,
+    NoteToCc,
+    Probability,
 }
 impl EffectKind {
     pub fn name(&self) -> &'static str {
@@ -20,6 +25,11 @@ impl EffectKind {
             EffectKind::Lfo => "LFO",
             EffectKind::Echo => "Echo",
             EffectKind::Envelope => "Envelope",
+            EffectKind::Swing => "Swing",
+            EffectKind::Randomize => "Randomizer",
+            EffectKind::Scale => "Scale",
+            EffectKind::NoteToCc => "Note to CC",
+            EffectKind::Probability => "Probability",
         };
     }
 }

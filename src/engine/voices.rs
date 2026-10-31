@@ -173,6 +173,11 @@ impl Voices {
         self.velocity = velocity;
     }
 
+    #[cfg(test)]
+    pub fn global_velocity(&self) -> u8 {
+        return self.velocity;
+    }
+
     pub fn set_transpose(&mut self, transpose: i8) {
         self.transpose = transpose;
     }

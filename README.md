@@ -15,13 +15,16 @@ any hardware or software synth.
 - No menu diving
 - Pattern editor with 8 tracks per pattern, FT2-style keyboard note entry and navigation
 - Song sequence with per-pattern repeats
+- Song, pattern and block loop playback, live recording into the playing pattern, and a
+  metronome
 - MIDI output on all 16 channels, with one instrument per channel and instrument configuration
 - Midi input for note data, clock sync and start/stop
   (see [docs/SYNC.md](docs/SYNC.md))
 - Command column for MIDI and playback commands, using FT2 syntax where applicable
   (see [docs/COMMANDS.md](docs/COMMANDS.md))
-- Live MIDI effects on each instrument: arpeggiator, chords, a velocity EQ, an echo, an LFO
-  and an envelope, with every setting changeable from pattern CC commands
+- Live MIDI effects on each instrument: arpeggiator, chords, a velocity EQ, an echo, an LFO,
+  an envelope, swing, a randomizer, a scale, note to CC and probability, with every setting
+  changeable from pattern CC commands
   (see [docs/EFFECTS.md](docs/EFFECTS.md))
 - Per-channel activity meters, channel muting and a MIDI event monitor
 - Built-in file browser for opening and saving projects
@@ -81,6 +84,20 @@ common ones. Keys can be rebound on that screen or in `keybinds.toml`, see
 
 Press `/` to see every pattern command with a short description. The full guide is
 [docs/COMMANDS.md](docs/COMMANDS.md), which is also included in every release zip.
+
+### Playing and recording
+
+`Enter` plays the song from the current sequence position, `Ctrl+Space` the current pattern,
+and `Ctrl+B` loops the rows of the marked block; press it again to let the pattern play on
+past them. Playback always loops; `Space` stops it, and an `EF0` command in the pattern stops
+it when it's reached.
+
+`Esc` turns record mode on or off. In record mode, notes you play while the song plays, on the
+keyboard or a MIDI controller, are written into the cursor's track on the row closest to when
+you played them.
+
+`Ctrl+G` sets up the metronome: when it plays, the channels it clicks on, and the notes and
+velocities of the accent and the other beats.
 
 ### Effects
 
@@ -149,12 +166,12 @@ Planned features, in no particular order:
 - [ ] **Multiple output ports**: map instruments to different MIDI devices, not just channels on one port
 - [ ] **Program change and bank select per instrument**, so loading a project restores the right patches
 - [X] **Panic button** (`~`): all notes off and reset controllers, for stuck notes
-- [ ] **Live record**:
-    - [ ] play notes in while the song is playing, for beatmaking
-    - [ ] send metronome to channel
-- [ ] **Live edit**:
+- [X] **Live record**:
+    - [X] play notes in while the song is playing, for beatmaking
+    - [X] send metronome to channel
+- [X] **Live edit**:
     - [X] row lock edit: option to stop the cursor following the playback row, so you can edit a pattern while it plays (handy for loops)
-    - [ ] block loop: loop the currently marked block
+    - [X] block loop: loop the currently marked block
 - [X] **Block operations**:
     - [X] select, copy, paste 
     - [X] transpose across rows and tracks
@@ -175,13 +192,14 @@ Planned features, in no particular order:
         - [ ] filter cutoff, etc.
     - [ ] FT2-style per-tick slides: velocity (`A`), pitch up/down (`1`/`2`) and their fine versions
     - [ ] Tone portamento (`3`), gliding the pitch to the next note
-    - [ ] Song modification
-        - [ ] Pattern break
-        - [ ] Jump song position
-        - [ ] Pattern delay
-        - [ ] Set global velocity
-        - [ ] Set track velocity
-        - [ ] Glide global velocity
+    - [X] Song modification
+        - [X] Pattern break (`D`)
+        - [X] Jump song position (`B`)
+        - [X] Pattern delay (`EE`)
+        - [X] Stop playback (`EF`)
+        - [X] Set global velocity (`G`)
+        - [X] Set track velocity (`C`)
+        - [X] Glide global velocity (`H`)
 - [ ] **Autosave and crash recovery**
 - [x] **Custom themes**
     - [x] theme files, with ports of popular color schemes
@@ -195,11 +213,11 @@ Planned features, in no particular order:
     - [x] Midi EQ
     - [x] Chord mode / Harmonizer
     - [x] Delay (Echo)
-    - [ ] Swing
-    - [ ] Randomizer
-    - [ ] Scale mode
-    - [ ] Note to CC
-    - [ ] Global Probability
+    - [X] Swing
+    - [X] Randomizer
+    - [X] Scale mode
+    - [X] Note to CC
+    - [X] Global Probability
     - [x] CC LFO
     - [ ] Potential custom plugin format scripting method (no VSTs though)
 - [ ] ...and more

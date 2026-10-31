@@ -16,9 +16,10 @@ use crate::{
     data::{
         commands::{CommandKind, MidiCommand, PlaybackAction},
         config::TITLE,
+        metronome::{Metronome, MetronomeMode},
         midi::{
             DEFAULT_BPM, DEFAULT_SPEED, MIDI_CHANNEL_MAX, MidiEvent, PULSES_PER_QUARTER,
-            VELOCITY_MAX, pulse_duration, raw_message_to_bytes,
+            VELOCITY_MAX, pulse_duration, raw_message_to_bytes, scale_velocity,
         },
         note::{Note, NoteKind},
         pattern::{Pattern, PatternId},
@@ -26,8 +27,8 @@ use crate::{
     },
     engine::{
         command_handler::{
-            CommandContext, MidiCommandHandler, NoteAction, PlaybackCommandHandler, SlideTarget,
-            retrig_velocity,
+            CommandContext, MidiCommandHandler, NoteAction, PlaybackCommandHandler, RowFlow,
+            SlideTarget, retrig_velocity,
         },
         effects::{MidiEffectChain, Timing},
         handle::{ClockSource, EngineCommand, EngineStatus},
@@ -37,23 +38,24 @@ use crate::{
     tui::constants::TRACK_COUNT,
 };
 
+/// How long a metronome click lasts, a 1/16.
+const CLICK_PULSES: u32 = PULSES_PER_QUARTER / 4;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum PlayMode {
     Paused,
     Song,
-    SongLoop,
-    PatternLoop,
     Pattern,
+    Block,
 }
 impl PlayMode {
     /// Converts the stored atomic value back into a mode.
     pub fn from_u8(value: u8) -> Self {
         return match value {
             1 => PlayMode::Song,
-            2 => PlayMode::SongLoop,
-            3 => PlayMode::PatternLoop,
-            4 => PlayMode::Pattern,
+            2 => PlayMode::Pattern,
+            3 => PlayMode::Block,
             _ => PlayMode::Paused,
         };
     }
@@ -128,11 +130,19 @@ pub struct MtrakEngine {
     sequence: Vec<SequenceRow>,
     bpm: u8,
     speed: u8,
+    /// The song's own, before G and H change it.
+    global_velocity: u8,
+    row_delay: u8,
+    stop_after_row: bool,
     send_midi_clock: bool,
+    metronome: Metronome,
+    recording: bool,
+    click_release: Option<(u32, Vec<Message>)>,
     output_connection: Option<MidiOutputConnection>,
     pending_events: Vec<MidiEvent>,
     mode: PlayMode,
     position: Position,
+    block: (usize, usize),
     clock: Option<Clock>,
     clock_source: ClockSource,
     /// Where the clock input's Continue picks up in the song, kept when playback stops.
@@ -157,6 +167,8 @@ pub struct MtrakEngine {
     retrig_counters: [u32; TRACK_COUNT as usize],
     /// Each track's last retrig interval and velocity change, like FT2's effect memory.
     retrig_memory: [(u8, u8); TRACK_COUNT as usize],
+    /// Cells of the next row whose note was just recorded live, and already heard.
+    recorded_ahead: Vec<(PatternId, usize, usize)>,
 
     midi_command_handler: MidiCommandHandler,
     playback_command_handler: PlaybackCommandHandler,
@@ -181,9 +193,16 @@ impl MtrakEngine {
             sequence: Vec::new(),
             bpm: DEFAULT_BPM,
             speed: DEFAULT_SPEED,
+            global_velocity: u8::MAX,
+            row_delay: 0,
+            stop_after_row: false,
             send_midi_clock: false,
+            metronome: Metronome::new(),
+            recording: false,
+            click_release: None,
             output_connection: None,
             mode: PlayMode::Paused,
+            block: (0, 0),
             position: Position {
                 sequence_index: 0,
                 repeat: 0,
@@ -206,6 +225,7 @@ impl MtrakEngine {
             last_notes: [None; TRACK_COUNT as usize],
             retrig_counters: [0; TRACK_COUNT as usize],
             retrig_memory: [(0, 0); TRACK_COUNT as usize],
+            recorded_ahead: Vec::new(),
 
             midi_command_handler: MidiCommandHandler::new(),
             playback_command_handler: PlaybackCommandHandler::new(),
@@ -239,9 +259,26 @@ impl MtrakEngine {
     fn apply(&mut self, command: EngineCommand) {
         match command {
             EngineCommand::SetOutputPort(port) => self.connect_out(port),
-            EngineCommand::PlayPattern(id, looping) => self.play_pattern(id, looping),
-            EngineCommand::PlaySong(sequence_index, looping) => {
-                self.play_song(sequence_index, looping)
+            EngineCommand::PlayPattern(id) => self.play_pattern(id),
+            EngineCommand::PlaySong(sequence_index) => self.play_song(sequence_index),
+            EngineCommand::PlayBlock {
+                pattern,
+                first_row,
+                last_row,
+            } => self.play_block(pattern, first_row, last_row),
+            EngineCommand::EndBlockLoop => self.end_block_loop(),
+            EngineCommand::SkipRecordedNote {
+                pattern,
+                row,
+                track,
+            } => {
+                let ahead = self
+                    .clock
+                    .as_ref()
+                    .is_some_and(|clock| clock.tick * 2 >= self.ticks_per_line() as u32);
+                if ahead {
+                    self.recorded_ahead.push((pattern, row, track));
+                }
             }
             EngineCommand::Panic => self.panic(),
             EngineCommand::SwitchPattern(id) => self.switch_pattern(id),
@@ -276,7 +313,10 @@ impl MtrakEngine {
             EngineCommand::SetGlobalVolume { channel, volume } => {
                 self.voices.set_global_volume(channel as usize, volume)
             }
-            EngineCommand::SetGlobalVelocity(velocity) => self.voices.set_global_velocity(velocity),
+            EngineCommand::SetGlobalVelocity(velocity) => {
+                self.global_velocity = velocity;
+                self.sync_global_velocity();
+            }
             EngineCommand::SetTranspose(transpose) => self.voices.set_transpose(transpose),
             EngineCommand::SetChannelTranspose { channel, transpose } => self
                 .voices
@@ -339,6 +379,8 @@ impl MtrakEngine {
                 }
             }
             EngineCommand::SetMidiClock(enabled) => self.send_midi_clock = enabled,
+            EngineCommand::SetMetronome(metronome) => self.metronome = metronome,
+            EngineCommand::SetRecording(recording) => self.recording = recording,
             EngineCommand::SetClockSource(source) => self.set_clock_source(source),
             EngineCommand::ExternalClock(timestamp) => self.external_pulse(timestamp),
             EngineCommand::ExternalStart => self.pending_transport = Some(PendingTransport::Start),
@@ -491,7 +533,7 @@ impl MtrakEngine {
     /// Plays the song from the top on loop, for the clock input's Start.
     fn start_cued(&mut self) {
         self.position = self.song_start();
-        self.start(PlayMode::SongLoop, Message::Start, true, 0);
+        self.start(PlayMode::Song, Message::Start, true, 0);
     }
 
     /// Picks up where the clock input stopped, or where its song position pointed.
@@ -500,7 +542,7 @@ impl MtrakEngine {
             return self.start_cued();
         };
         self.position = position;
-        self.start(PlayMode::SongLoop, Message::Continue, true, tick);
+        self.start(PlayMode::Song, Message::Continue, true, tick);
     }
 
     /// Sets where the clock input's Continue picks up, from a song position pointer.
@@ -544,24 +586,17 @@ impl MtrakEngine {
         return None;
     }
 
-    /// Plays a single pattern from row 0, once or on repeat.
-    fn play_pattern(&mut self, id: PatternId, looping: bool) {
+    fn play_pattern(&mut self, id: PatternId) {
         let position = Position {
             sequence_index: 0,
             repeat: 0,
             pattern: id,
             row: 0,
         };
-        let mode = if looping {
-            PlayMode::PatternLoop
-        } else {
-            PlayMode::Pattern
-        };
-        self.play_from(mode, position);
+        self.play_from(PlayMode::Pattern, position);
     }
 
-    /// Plays the sequence starting at the given index.
-    fn play_song(&mut self, sequence_index: usize, looping: bool) {
+    fn play_song(&mut self, sequence_index: usize) {
         let Some(sequence_row) = self.sequence.get(sequence_index) else {
             return;
         };
@@ -571,17 +606,41 @@ impl MtrakEngine {
             pattern: sequence_row.pattern_id,
             row: 0,
         };
-        let mode = if looping {
-            PlayMode::SongLoop
-        } else {
-            PlayMode::Song
+        self.play_from(PlayMode::Song, position);
+    }
+
+    fn play_block(&mut self, id: PatternId, first_row: usize, last_row: usize) {
+        let rows = self
+            .patterns
+            .get(id.0 as usize)
+            .map_or(0, |p| p.row_count() as usize);
+        if rows == 0 {
+            return;
+        }
+        let last_row = last_row.min(rows - 1);
+        self.block = (first_row.min(last_row), last_row);
+        let position = Position {
+            sequence_index: 0,
+            repeat: 0,
+            pattern: id,
+            row: self.block.0,
         };
-        self.play_from(mode, position);
+        self.play_from(PlayMode::Block, position);
+    }
+
+    /// Lets the pattern play on past the end of the block, without restarting anything.
+    fn end_block_loop(&mut self) {
+        if self.mode != PlayMode::Block {
+            return;
+        }
+        self.mode = PlayMode::Pattern;
+        self.status.set_play_mode(PlayMode::Pattern);
+        self.reschedule_early_notes();
     }
 
     /// Carries on in pattern `id` from the next row.
     fn switch_pattern(&mut self, id: PatternId) {
-        if self.clock.is_none() || !matches!(self.mode, PlayMode::PatternLoop | PlayMode::Pattern) {
+        if self.clock.is_none() || self.mode != PlayMode::Pattern {
             return;
         }
         let rows = self
@@ -607,7 +666,7 @@ impl MtrakEngine {
 
     /// Jumps to the start of sequence position `sequence_index` on the next row.
     fn jump_to_sequence(&mut self, sequence_index: usize) {
-        if self.clock.is_none() || !matches!(self.mode, PlayMode::SongLoop | PlayMode::Song) {
+        if self.clock.is_none() || self.mode != PlayMode::Song {
             return;
         }
         let Some(sequence_row) = self.sequence.get(sequence_index) else {
@@ -660,6 +719,8 @@ impl MtrakEngine {
             self.play_row();
         }
         self.finish_effects();
+        self.click_metronome();
+        self.publish_quantized_position();
         self.time_next_pulse(now);
     }
 
@@ -678,10 +739,10 @@ impl MtrakEngine {
         if let Some(clock) = &self.clock {
             let next_tick = clock.tick + 1;
             self.resume = match self.mode {
-                PlayMode::Song | PlayMode::SongLoop if next_tick < self.ticks_per_line() as u32 => {
+                PlayMode::Song if next_tick < self.ticks_per_line() as u32 => {
                     Some((self.position, next_tick))
                 }
-                PlayMode::Song | PlayMode::SongLoop => self
+                PlayMode::Song => self
                     .next_position(&self.position)
                     .map(|position| (position, 0)),
                 _ => None,
@@ -691,6 +752,7 @@ impl MtrakEngine {
         self.mode = PlayMode::Paused;
         self.status.set_play_mode(PlayMode::Paused);
         let mut out = vec![Message::Stop];
+        out.extend(self.click_release.take().map_or(vec![], |(_, offs)| offs));
         self.voices.release_all(&mut out);
         out.extend(self.reset_commands());
         let mut events: Vec<MidiEvent> = out.into_iter().map(MidiEvent::Message).collect();
@@ -769,7 +831,20 @@ impl MtrakEngine {
             clock.tick = 0;
         }
         self.send_clock();
-        if row_done {
+        if row_done && self.stop_after_row {
+            self.stop();
+            self.resume = None;
+            return;
+        }
+        if row_done && self.row_delay > 0 {
+            self.row_delay -= 1;
+            self.pattern_pulse += 1;
+            if self.row_delay == 0 {
+                self.schedule_early_notes();
+            }
+            self.tick_effects();
+            self.command_tick();
+        } else if row_done {
             let previous_row = self.position.row;
             self.advance_row();
             if self.clock.is_none() {
@@ -788,7 +863,46 @@ impl MtrakEngine {
             self.command_tick();
         }
         self.finish_effects();
+        self.click_metronome();
+        self.publish_quantized_position();
         self.time_next_pulse(pulse_time);
+    }
+
+    /// Beats are counted from the top of the pattern, so the accent always lands on its first row.
+    fn click_metronome(&mut self) {
+        let mut out = vec![];
+        if let Some((pulses, _)) = &mut self.click_release {
+            *pulses = pulses.saturating_sub(1);
+        }
+        if self
+            .click_release
+            .as_ref()
+            .is_some_and(|(pulses, _)| *pulses == 0)
+        {
+            out.extend(self.click_release.take().map_or(vec![], |(_, offs)| offs));
+        }
+        let clicks = match self.metronome.mode {
+            MetronomeMode::Off => false,
+            MetronomeMode::Recording => self.recording,
+            MetronomeMode::Always => true,
+        };
+        if clicks && self.pattern_pulse % PULSES_PER_QUARTER == 0 {
+            out.extend(self.click_release.take().map_or(vec![], |(_, offs)| offs));
+            let beat = self.pattern_pulse / PULSES_PER_QUARTER;
+            let metronome = self.metronome;
+            let (note, velocity) = match beat % metronome.beats_per_bar.max(1) as u32 {
+                0 => (metronome.accent_note, metronome.accent_velocity),
+                _ => (metronome.beat_note, metronome.beat_velocity),
+            };
+            let mut offs = vec![];
+            for channel in (0..=MIDI_CHANNEL_MAX).filter(|&c| metronome.sends_to(c)) {
+                let channel = Channel::from_u8(channel).unwrap();
+                out.push(Message::NoteOn(channel, note, velocity.min(VELOCITY_MAX)));
+                offs.push(Message::NoteOff(channel, note, 0));
+            }
+            self.click_release = Some((CLICK_PULSES, offs));
+        }
+        self.output_messages(out);
     }
 
     fn send_clock(&mut self) {
@@ -815,10 +929,17 @@ impl MtrakEngine {
         }
     }
 
-    /// The row played after `position`, handling pattern repeats and the sequence;
-    /// `None` when the song ends.
+    /// `None` only when the pattern it needs is gone.
     fn next_position(&self, position: &Position) -> Option<Position> {
         let mut next = *position;
+        if self.mode == PlayMode::Block {
+            let (first_row, last_row) = self.block;
+            next.row = match next.row {
+                row if row >= last_row || row < first_row => first_row,
+                row => row + 1,
+            };
+            return Some(next);
+        }
         next.row += 1;
         let row_count = self
             .patterns
@@ -828,10 +949,8 @@ impl MtrakEngine {
             return Some(next);
         }
         next.row = 0;
-        match self.mode {
-            PlayMode::PatternLoop => return Some(next),
-            PlayMode::Pattern => return None,
-            _ => {}
+        if self.mode == PlayMode::Pattern {
+            return Some(next);
         }
 
         next.repeat += 1;
@@ -845,9 +964,6 @@ impl MtrakEngine {
         next.repeat = 0;
         next.sequence_index += 1;
         if next.sequence_index >= self.sequence.len() {
-            if self.mode == PlayMode::Song {
-                return None;
-            }
             next.sequence_index = 0;
         }
         next.pattern = self.sequence.get(next.sequence_index)?.pattern_id;
@@ -861,8 +977,10 @@ impl MtrakEngine {
                 .get(id.0 as usize)
                 .map_or(0, |p| p.row_count() as usize)
         };
-        if matches!(self.mode, PlayMode::PatternLoop | PlayMode::Pattern) {
-            return rows(self.position.pattern);
+        match self.mode {
+            PlayMode::Pattern => return rows(self.position.pattern),
+            PlayMode::Block => return self.block.1 - self.block.0 + 1,
+            _ => {}
         }
         return self
             .sequence
@@ -920,9 +1038,13 @@ impl MtrakEngine {
         self.last_notes = [None; TRACK_COUNT as usize];
         self.retrig_counters = [0; TRACK_COUNT as usize];
         self.retrig_memory = [(0, 0); TRACK_COUNT as usize];
+        self.recorded_ahead.clear();
+        self.row_delay = 0;
+        self.stop_after_row = false;
         let mut events = vec![];
         self.midi_command_handler.reset(&mut events);
         self.playback_command_handler.reset();
+        self.sync_global_velocity();
         return events
             .into_iter()
             .flat_map(MidiEvent::into_messages)
@@ -941,6 +1063,24 @@ impl MtrakEngine {
         return self
             .current_pattern()
             .map_or([false; 16], |pattern| pattern.channel_mutes);
+    }
+
+    /// Live recording writes here: this row for the first half of it, the next row after that.
+    fn publish_quantized_position(&self) {
+        let Some(clock) = &self.clock else {
+            return;
+        };
+        let position = match clock.tick * 2 < self.ticks_per_line() as u32 {
+            true => Some(self.position),
+            false => self
+                .pending_jump
+                .or_else(|| self.next_position(&self.position)),
+        };
+        let Some(position) = position else {
+            return;
+        };
+        self.status
+            .set_record_position(position.pattern.0 as usize, position.row);
     }
 
     /// Shares the play position with the UI.
@@ -966,6 +1106,7 @@ impl MtrakEngine {
             return;
         };
         let tracks = row.tracks.clone();
+        self.playback_command_handler.start_row();
         let mut out = vec![];
         self.voices.release_channels(&mutes, &mut out);
         self.voices.tick(&mut out);
@@ -974,6 +1115,12 @@ impl MtrakEngine {
         self.scheduled_notes = [None; TRACK_COUNT as usize];
         self.early_notes = [None; TRACK_COUNT as usize];
         let started_early = std::mem::take(&mut self.started_early);
+        let here = (self.position.pattern, self.position.row);
+        let recorded_ahead: Vec<usize> = std::mem::take(&mut self.recorded_ahead)
+            .into_iter()
+            .filter(|&(pattern, row, _)| (pattern, row) == here)
+            .map(|(_, _, track)| track)
+            .collect();
         for (track, note) in tracks.iter().enumerate() {
             let action = match note.command.kind {
                 CommandKind::None => NoteAction::Play,
@@ -992,11 +1139,12 @@ impl MtrakEngine {
                 }
                 CommandKind::Playback(command) => self
                     .playback_command_handler
-                    .apply(command.decode(note.command.value)),
+                    .apply(track, command.decode(note.command.value)),
             };
             match action {
                 // the row before already started this note
                 _ if started_early[track] == Some(*note) => {}
+                _ if recorded_ahead.contains(&track) => {}
                 NoteAction::Play => self.play_note(track, note, None, &mutes, &mut out),
                 NoteAction::Legato(overlap) => {
                     self.play_note(track, note, Some(overlap), &mutes, &mut out)
@@ -1076,8 +1224,85 @@ impl MtrakEngine {
                 }
             }
         }
-        self.schedule_early_notes();
+        let flow = self.playback_command_handler.take_flow();
+        self.apply_flow(flow);
+        self.sync_global_velocity();
+        // a delayed row plans the next row's early notes on its last pass instead
+        if self.row_delay == 0 {
+            self.schedule_early_notes();
+        }
         self.dispatch_messages(out);
+    }
+
+    fn apply_flow(&mut self, flow: RowFlow) {
+        self.stop_after_row = flow.stop;
+        self.row_delay = flow.delay;
+        if let Some(target) = self.flow_target(flow) {
+            self.pending_jump = Some(target);
+        }
+    }
+
+    /// FT2's B and D. Playing a single pattern, a break stays inside it; a block loop ignores both.
+    fn flow_target(&self, flow: RowFlow) -> Option<Position> {
+        let row_count = |id: PatternId| {
+            self.patterns
+                .get(id.0 as usize)
+                .map_or(0, |p| p.row_count() as usize)
+        };
+        // same as FT2: breaking past the end just starts the pattern over
+        let break_row = |target: &mut Position| {
+            if let Some(row) = flow.break_row {
+                let row = row as usize;
+                target.row = if row < row_count(target.pattern) {
+                    row
+                } else {
+                    0
+                };
+            }
+        };
+        return match self.mode {
+            PlayMode::Pattern => {
+                flow.break_row?;
+                let mut target = self.position;
+                break_row(&mut target);
+                Some(target)
+            }
+            PlayMode::Song if flow.jump.is_some() || flow.break_row.is_some() => {
+                let mut target = match flow.jump {
+                    Some(index) => {
+                        let index = match (index as usize) < self.sequence.len() {
+                            true => index as usize,
+                            false => 0,
+                        };
+                        Position {
+                            sequence_index: index,
+                            repeat: 0,
+                            pattern: self.sequence.get(index)?.pattern_id,
+                            row: 0,
+                        }
+                    }
+                    None => {
+                        let last_row = row_count(self.position.pattern).saturating_sub(1);
+                        let end = Position {
+                            row: last_row,
+                            ..self.position
+                        };
+                        self.next_position(&end)?
+                    }
+                };
+                break_row(&mut target);
+                Some(target)
+            }
+            _ => None,
+        };
+    }
+
+    fn sync_global_velocity(&mut self) {
+        let velocity = self
+            .playback_command_handler
+            .global_velocity()
+            .unwrap_or(self.global_velocity);
+        self.voices.set_global_velocity(velocity);
     }
 
     /// Sends a cell's note, or releases the track's note for a note off. With `legato`, the
@@ -1097,7 +1322,11 @@ impl MtrakEngine {
                 self.last_notes[track] = Some(*note);
                 self.retrig_counters[track] = 0;
                 let channel = note.instrument_id.unwrap_or(0).min(MIDI_CHANNEL_MAX);
-                match velocity(note.velocity, self.midi_command_handler.velocity(track)) {
+                let track_velocity = self.playback_command_handler.track_velocity(track);
+                let velocity = velocity(note.velocity, self.midi_command_handler.velocity(track))
+                    .map(|velocity| scale_velocity(velocity, track_velocity, u8::MAX))
+                    .filter(|&velocity| velocity > 0);
+                match velocity {
                     Some(velocity) if !mutes[channel as usize] => match legato {
                         Some(overlap) => self
                             .voices
@@ -1259,6 +1488,8 @@ impl MtrakEngine {
 
     /// Runs commands for the ticks between rows.
     fn command_tick(&mut self) {
+        self.playback_command_handler.tick(self.global_velocity);
+        self.sync_global_velocity();
         let events = self.tick_commands();
         let mutes = self.current_mutes();
         let mut out = audible(events, &mutes);
@@ -1533,7 +1764,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(4, &[(0, 0, note("C-4 2 40"))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(
             harness.messages(),
             vec![Message::Start, Message::NoteOn(Channel::Ch3, 60, 0x40)]
@@ -1545,7 +1776,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(2, &[])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         assert!(!harness.messages().contains(&Message::TimingClock));
     }
@@ -1556,7 +1787,7 @@ mod tests {
         harness.engine.apply(EngineCommand::SetMidiClock(true));
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(
             harness.messages(),
             vec![Message::Start, Message::TimingClock]
@@ -1575,7 +1806,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(4, &[])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert!(harness.messages().is_empty());
@@ -1586,7 +1817,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(4, &[(0, 0, note("C-4 0 --"))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert!(
             harness
                 .messages()
@@ -1602,7 +1833,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert_eq!(
@@ -1622,7 +1853,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert_eq!(
@@ -1639,7 +1870,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert_eq!(
@@ -1656,7 +1887,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(
             harness.messages(),
             vec![
@@ -1674,7 +1905,7 @@ mod tests {
         let mut harness = Harness::new(vec![muted]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(
             harness.messages(),
             vec![Message::Start, Message::NoteOn(Channel::Ch5, 62, 0x7F)]
@@ -1692,7 +1923,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(harness.messages(), vec![Message::Start]);
         harness.next_row();
         assert_eq!(
@@ -1708,7 +1939,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(4, &[(0, 0, cell)])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(
             harness.messages(),
             vec![
@@ -1732,7 +1963,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert_eq!(
@@ -1778,7 +2009,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         assert_eq!(cc_values(&harness.messages()), vec![127, 64]);
     }
@@ -1788,7 +2019,7 @@ mod tests {
         let mut harness = Harness::new(vec![slide_pattern()]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         harness.next_row();
@@ -1811,7 +2042,7 @@ mod tests {
         let mut harness = Harness::new(vec![slide_pattern()]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         for _ in 0..3 {
             harness.next_row();
         }
@@ -1832,7 +2063,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.next_row();
         // up to 0C (6 in 7 bit) over a row, then back down over the next
@@ -1858,7 +2089,7 @@ mod tests {
                 repeats: 1,
             },
         ]));
-        harness.engine.apply(EngineCommand::PlaySong(0, true));
+        harness.engine.apply(EngineCommand::PlaySong(0));
         harness.next_row();
         harness.next_row();
         assert_eq!(cc_values(&harness.messages()), vec![0, 2, 4, 6, 8, 10, 12]);
@@ -1876,7 +2107,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.next_row();
         assert_eq!(cc_values(&harness.messages()), vec![0x20]);
@@ -1887,7 +2118,7 @@ mod tests {
         let mut harness = Harness::new(vec![slide_pattern()]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.engine.apply(EngineCommand::Stop);
         harness.messages();
@@ -1902,8 +2133,7 @@ mod tests {
         let mut control = Harness::new(vec![slide_pattern()]);
         let mut harness = Harness::new(vec![slide_pattern()]);
         for h in [&mut control, &mut harness] {
-            h.engine
-                .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            h.engine.apply(EngineCommand::PlayPattern(PatternId(0)));
             h.next_row();
             h.messages();
         }
@@ -1937,7 +2167,7 @@ mod tests {
         let mut harness = Harness::new(vec![muted]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(harness.messages(), vec![Message::Start]);
         harness.engine.apply(EngineCommand::SetPattern(
             PatternId(0),
@@ -1960,7 +2190,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(4, &[(0, 0, cell)])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(
             harness.messages(),
             vec![
@@ -2010,7 +2240,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         for _ in 0..5 {
             harness.next_row();
         }
@@ -2032,7 +2262,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(harness.messages(), vec![Message::Start]);
         harness.next_row();
         harness.next_row();
@@ -2055,7 +2285,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.messages();
         harness.next_row();
@@ -2081,7 +2311,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.next_row();
         assert_eq!(note_velocities(&harness.messages()), vec![0x10, 48]);
@@ -2100,7 +2330,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.next_row();
         assert_eq!(note_velocities(&harness.messages()), vec![48]);
@@ -2123,7 +2353,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         let first_row = harness.messages();
@@ -2160,7 +2390,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(
             harness.messages(),
             vec![
@@ -2188,7 +2418,7 @@ mod tests {
         let mut harness = Harness::new(vec![muted]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(harness.messages(), vec![Message::Start]);
         harness.engine.apply(EngineCommand::Stop);
         assert_eq!(
@@ -2223,7 +2453,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         for _ in 0..4 {
             harness.next_row();
         }
@@ -2240,7 +2470,7 @@ mod tests {
         let mut harness = Harness::new(vec![ended]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         for _ in 0..3 {
             harness.next_row();
@@ -2269,7 +2499,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.messages();
         harness.next_row();
@@ -2298,7 +2528,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert_eq!(
@@ -2312,7 +2542,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(2, &[(0, 0, note("C-4 0 7F"))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         harness.next_row();
@@ -2326,16 +2556,20 @@ mod tests {
     }
 
     #[test]
-    fn one_shot_pattern_stops_after_the_last_row() {
+    fn pattern_loops_after_the_last_row() {
         let mut harness = Harness::new(vec![pattern(2, &[(0, 0, note("C-4 0 7F"))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         harness.next_row();
-        assert!(harness.messages().contains(&Message::Stop));
-        assert_eq!(harness.engine.mode, PlayMode::Paused);
+        assert!(
+            harness
+                .messages()
+                .contains(&Message::NoteOn(Channel::Ch1, 60, 0x7F))
+        );
+        assert_eq!(harness.engine.mode, PlayMode::Pattern);
     }
 
     #[test]
@@ -2354,7 +2588,7 @@ mod tests {
                 repeats: 1,
             },
         ]));
-        harness.engine.apply(EngineCommand::PlaySong(0, true));
+        harness.engine.apply(EngineCommand::PlaySong(0));
         harness.messages();
         harness.next_row();
         assert!(
@@ -2377,7 +2611,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(4, &[(0, 0, note("C-4 0 7F"))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.engine.apply(EngineCommand::Stop);
         let messages = harness.messages();
@@ -2398,7 +2632,7 @@ mod tests {
         let mut harness = Harness::new(vec![]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(3), true));
+            .apply(EngineCommand::PlayPattern(PatternId(3)));
         assert_eq!(harness.messages()[0], Message::Stop);
         assert!(harness.engine.clock.is_none());
     }
@@ -2428,7 +2662,7 @@ mod tests {
             Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0xD2))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(harness.messages(), vec![Message::Start]);
         harness.command_tick();
         assert!(harness.messages().is_empty());
@@ -2450,7 +2684,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.messages();
         harness.command_tick();
@@ -2474,7 +2708,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.messages();
         harness.command_tick();
@@ -2490,7 +2724,7 @@ mod tests {
             Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0xD6))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.next_row();
         assert!(note_velocities(&harness.messages()).is_empty());
@@ -2502,7 +2736,7 @@ mod tests {
             Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0xD0))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(
             harness.messages(),
             vec![Message::Start, Message::NoteOn(Channel::Ch1, 60, 0x40)]
@@ -2543,7 +2777,7 @@ mod tests {
             )]);
             harness
                 .engine
-                .apply(EngineCommand::PlayPattern(PatternId(0), true));
+                .apply(EngineCommand::PlayPattern(PatternId(0)));
             assert_eq!(note_on_ticks(&mut harness), expected, "R{every:02X}");
         }
     }
@@ -2556,7 +2790,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         assert_eq!(note_velocities(&harness.messages()), vec![127, 125, 123]);
     }
@@ -2569,7 +2803,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         assert_eq!(note_velocities(&harness.messages()), vec![127, 95, 63, 31]);
     }
@@ -2582,7 +2816,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.messages();
         assert!(note_on_ticks(&mut harness).is_empty());
@@ -2596,7 +2830,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(note_on_ticks(&mut harness), vec![0, 1, 2, 3, 4, 5]);
     }
 
@@ -2618,14 +2852,14 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         let mut velocities = note_velocities(&harness.messages());
         for _ in 0..3 {
             harness.next_row();
             velocities.extend(note_velocities(&harness.messages()));
         }
         // R33: every 3 ticks counting the row start, -8; R00: the same; R12: every 2, -2
-        assert_eq!(velocities, vec![127, 119, 111, 103, 95, 93, 91, 89]);
+        assert_eq!(velocities[..8], [127, 119, 111, 103, 95, 93, 91, 89]);
     }
 
     #[test]
@@ -2636,7 +2870,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         assert_eq!(note_velocities(&harness.messages()), vec![0x40, 0x40, 0x40]);
     }
@@ -2658,7 +2892,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert_eq!(note_on_ticks(&mut harness), vec![0, 1, 2, 3, 4, 5]);
@@ -2680,7 +2914,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert_eq!(
@@ -2703,7 +2937,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert_eq!(
@@ -2730,7 +2964,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         for _ in 0..3 {
             harness.command_tick();
@@ -2760,7 +2994,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.messages();
         for _ in 0..5 {
@@ -2780,7 +3014,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(2, &[(0, 0, cut(note("C-4 0 40"), 0xC3))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(
             harness.messages(),
             vec![Message::Start, Message::NoteOn(Channel::Ch1, 60, 0x40)]
@@ -2801,7 +3035,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(2, &[(0, 0, note("C-4 0 40")), (1, 0, cut)])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.messages();
         harness.command_tick();
@@ -2822,7 +3056,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert_eq!(
@@ -2836,7 +3070,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(2, &[(0, 0, cut(note("C-4 0 40"), 0xC6))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         for _ in 1..6 {
             harness.command_tick();
@@ -2855,7 +3089,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         for _ in 0..3 {
             harness.command_tick();
@@ -2886,7 +3120,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.messages();
         harness.next_row();
@@ -2906,7 +3140,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         for _ in 0..4 {
             harness.command_tick();
@@ -2932,7 +3166,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         for _ in 0..5 {
             harness.command_tick();
@@ -2963,7 +3197,7 @@ mod tests {
                 repeats: 1,
             },
         ]));
-        harness.engine.apply(EngineCommand::PlaySong(0, true));
+        harness.engine.apply(EngineCommand::PlaySong(0));
         harness.messages();
         for _ in 0..5 {
             harness.command_tick();
@@ -2982,7 +3216,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         for _ in 0..5 {
             harness.command_tick();
         }
@@ -3008,7 +3242,7 @@ mod tests {
             Harness::new(vec![pattern(2, &[(0, 0, delayed(note("C-4 0 40"), 0xD2))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.engine.apply(EngineCommand::Stop);
         assert!(harness.engine.scheduled_notes.iter().all(Option::is_none));
     }
@@ -3030,7 +3264,7 @@ mod tests {
                 repeats: 1,
             },
         ]));
-        harness.engine.apply(EngineCommand::PlaySong(0, true));
+        harness.engine.apply(EngineCommand::PlaySong(0));
         assert_eq!(harness.engine.bpm(), 0x90);
         harness.next_row();
         assert_eq!(harness.engine.position.pattern.0, 1);
@@ -3046,7 +3280,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(4, &[(0, 0, tempo(0xFA))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         let next_pulse = harness.engine.clock.as_ref().unwrap().next_pulse;
         harness.engine.pulse();
         let clock = harness.engine.clock.as_ref().unwrap();
@@ -3058,7 +3292,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(4, &[(0, 0, tempo(0x90))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.engine.apply(EngineCommand::Stop);
         assert_eq!(harness.engine.bpm(), DEFAULT_BPM);
     }
@@ -3173,7 +3407,7 @@ mod tests {
         ]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness
             .engine
             .apply(EngineCommand::SwitchPattern(PatternId(1)));
@@ -3187,11 +3421,11 @@ mod tests {
         let mut harness = synced(vec![pattern(1, &[]), pattern(1, &[])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(1), true));
+            .apply(EngineCommand::PlayPattern(PatternId(1)));
         harness.engine.apply(EngineCommand::Stop);
         harness.engine.apply(EngineCommand::ExternalStart);
         external_pulses(&mut harness, 0, 1);
-        assert_eq!(harness.engine.mode, PlayMode::SongLoop);
+        assert_eq!(harness.engine.mode, PlayMode::Song);
         assert!(harness.engine.position.pattern == PatternId(0));
         external_pulses(&mut harness, 20_000, 6);
         assert!(harness.engine.position.pattern == PatternId(1));
@@ -3202,11 +3436,11 @@ mod tests {
         let mut harness = synced(vec![pattern(4, &[]), pattern(4, &[])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(1), true));
+            .apply(EngineCommand::PlayPattern(PatternId(1)));
         harness.engine.apply(EngineCommand::Stop);
         harness.engine.apply(EngineCommand::ExternalContinue);
         external_pulses(&mut harness, 0, 1);
-        assert_eq!(harness.engine.mode, PlayMode::SongLoop);
+        assert_eq!(harness.engine.mode, PlayMode::Song);
         assert!(harness.engine.position.pattern == PatternId(0));
         assert_eq!(harness.engine.position.row, 0);
     }
@@ -3242,15 +3476,15 @@ mod tests {
         }
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
-        assert_eq!(harness.engine.mode, PlayMode::PatternLoop);
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        assert_eq!(harness.engine.mode, PlayMode::Pattern);
         assert!(!harness.engine.clock.as_ref().unwrap().follows_input);
         let period = harness.engine.pulse_duration();
         assert!(period > Duration::from_micros(9_900) && period < Duration::from_micros(10_100));
         external_pulses(&mut harness, 2_000_000, 6);
         assert_eq!(harness.engine.position.row, 0);
         harness.engine.apply(EngineCommand::ExternalStop);
-        assert_eq!(harness.engine.mode, PlayMode::PatternLoop);
+        assert_eq!(harness.engine.mode, PlayMode::Pattern);
     }
 
     #[test]
@@ -3312,7 +3546,7 @@ mod tests {
         harness.engine.apply(EngineCommand::ExternalSongPosition(8));
         harness.engine.apply(EngineCommand::ExternalContinue);
         external_pulses(&mut harness, 0, 1);
-        assert_eq!(harness.engine.mode, PlayMode::SongLoop);
+        assert_eq!(harness.engine.mode, PlayMode::Song);
         assert!(harness.engine.position.pattern == PatternId(0));
         assert_eq!(harness.engine.position.row, 2);
     }
@@ -3364,7 +3598,7 @@ mod tests {
         let mut harness = with_speed(Harness::new(vec![pattern(8, &[])]), 3);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(pulses_to_row(&mut harness, 4), 12);
     }
 
@@ -3373,7 +3607,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(8, &[(1, 0, tempo(0x03))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(pulses_to_row(&mut harness, 1), 6);
         assert_eq!(pulses_to_row(&mut harness, 5), 12);
     }
@@ -3386,7 +3620,7 @@ mod tests {
         );
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.engine.pulse();
         assert!(harness.messages().is_empty());
@@ -3438,7 +3672,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert_eq!(note_on_ticks(&mut harness), vec![1, 3, 5]);
@@ -3454,7 +3688,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.messages();
         for _ in 0..3 {
@@ -3476,7 +3710,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(2, &[(0, 0, retriggered(empty, 1))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(note_on_ticks(&mut harness), Vec::<u32>::new());
     }
 
@@ -3496,7 +3730,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         let mut velocities = note_velocities(&harness.messages());
         for _ in 0..3 {
             harness.next_row();
@@ -3518,7 +3752,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert_eq!(note_on_ticks(&mut harness), vec![5]);
@@ -3543,7 +3777,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         let mut note_ons = vec![];
         for _ in 1..6 {
@@ -3565,7 +3799,7 @@ mod tests {
         ]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.messages();
         harness
@@ -3577,7 +3811,7 @@ mod tests {
         assert!(harness.engine.position.pattern == PatternId(1));
         assert_eq!(harness.engine.position.row, 2);
         assert_eq!(note_velocities(&harness.messages()), vec![0x40]);
-        assert_eq!(harness.engine.mode, PlayMode::PatternLoop);
+        assert_eq!(harness.engine.mode, PlayMode::Pattern);
     }
 
     #[test]
@@ -3586,7 +3820,7 @@ mod tests {
         harness
             .engine
             .apply(EngineCommand::SetClockSource(ClockSource::Internal));
-        harness.engine.apply(EngineCommand::PlaySong(0, true));
+        harness.engine.apply(EngineCommand::PlaySong(0));
         harness.next_row();
         harness.engine.apply(EngineCommand::JumpToSequence(2));
         assert_eq!(harness.engine.status.sequence_index(), 2);
@@ -3605,7 +3839,7 @@ mod tests {
             .apply(EngineCommand::SetClockSource(ClockSource::Internal));
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.engine.apply(EngineCommand::JumpToSequence(1));
         harness.next_row();
         assert!(harness.engine.position.pattern == PatternId(0));
@@ -3624,7 +3858,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         assert_eq!(note_on_ticks(&mut harness), vec![0, 2, 4]);
     }
 
@@ -3642,7 +3876,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.next_row();
         assert_eq!(note_on_ticks(&mut harness), vec![3]);
@@ -3662,7 +3896,7 @@ mod tests {
         )]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), false));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         let mut messages = harness.messages();
         for _ in 0..3 {
             harness.next_row();
@@ -3684,7 +3918,7 @@ mod tests {
         harness.engine.apply(EngineCommand::ExternalStart);
         external_pulses(&mut harness, 0, 3);
         harness.engine.advance_clock();
-        assert_eq!(harness.engine.mode, PlayMode::SongLoop);
+        assert_eq!(harness.engine.mode, PlayMode::Song);
         harness.engine.last_external_pulse_at = Some(Instant::now() - Duration::from_secs(5));
         harness.messages();
         harness.engine.advance_clock();
@@ -3702,7 +3936,7 @@ mod tests {
         let mut harness = Harness::new(vec![pattern(2, &[(0, 0, note("C-4 0 40"))])]);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.engine.apply(EngineCommand::Panic);
         assert_eq!(harness.engine.mode, PlayMode::Paused);
@@ -3788,7 +4022,7 @@ mod tests {
         octave_up_on_channel_3(&mut harness);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         let messages = harness.messages();
         assert!(messages.contains(&Message::NoteOn(Channel::Ch3, 72, 0x40)));
         assert!(messages.contains(&Message::NoteOn(Channel::Ch2, 60, 0x40)));
@@ -3820,7 +4054,7 @@ mod tests {
         let seen = octave_up_on_channel_3(&mut harness);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         let ticks = harness.engine.ticks_per_line() as u32;
         assert_eq!(
@@ -3835,7 +4069,7 @@ mod tests {
         let seen = octave_up_on_channel_3(&mut harness);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.next_row();
         let ticks = harness.engine.ticks_per_line() as u32;
@@ -3852,7 +4086,7 @@ mod tests {
         let seen = octave_up_on_channel_3(&mut harness);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.next_row();
         harness.next_row();
         let notes = &seen.lock().unwrap().notes;
@@ -3903,7 +4137,7 @@ mod tests {
         octave_up_on_channel_3(&mut harness);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.messages();
         harness.engine.apply(EngineCommand::Stop);
         assert!(
@@ -3987,7 +4221,7 @@ mod tests {
         arp_on_channel_3(&mut harness, DEFAULT_SPEED);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         for _ in 0..0x1F {
             harness.next_row();
         }
@@ -4012,7 +4246,7 @@ mod tests {
         arp_on_channel_3(&mut harness, 2);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         let mut notes = channel_3_notes(harness.messages());
         harness.next_row();
         notes.extend(channel_3_notes(harness.messages()));
@@ -4036,7 +4270,7 @@ mod tests {
         arp_on_channel_3(&mut harness, 2);
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         harness.engine.pulse();
         harness.engine.pulse();
         harness.messages();
@@ -4084,7 +4318,7 @@ mod tests {
             .apply(EngineCommand::SetEffectChain { channel: 2, chain });
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         for _ in 0..0x20 * 4 {
             harness.next_row();
         }
@@ -4117,7 +4351,7 @@ mod tests {
         });
         harness
             .engine
-            .apply(EngineCommand::PlayPattern(PatternId(0), true));
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
         for _ in 0..3 {
             harness.next_row();
         }
@@ -4132,5 +4366,447 @@ mod tests {
         harness.engine.apply(EngineCommand::Stop);
         let echo = harness.engine.effect_chains[2].get(0).unwrap();
         assert_eq!(echo.param(echo::FEEDBACK_PARAM), 0x80);
+    }
+    fn playback(mut cell: Note, command: PlaybackCommand, value: u8) -> Note {
+        cell.command = Command::new(CommandKind::Playback(command), value);
+        return cell;
+    }
+
+    fn sequence(patterns: &[u8]) -> EngineCommand {
+        return EngineCommand::SetSequence(
+            patterns
+                .iter()
+                .map(|&id| SequenceRow {
+                    pattern_id: PatternId(id),
+                    repeats: 1,
+                })
+                .collect(),
+        );
+    }
+
+    fn rows_played(harness: &mut Harness, rows: usize) -> Vec<(u8, usize)> {
+        let mut played = vec![];
+        for _ in 0..rows {
+            harness.next_row();
+            played.push((
+                harness.engine.position.pattern.0,
+                harness.engine.position.row,
+            ));
+        }
+        return played;
+    }
+
+    #[test]
+    fn block_loop_plays_its_rows_on_repeat() {
+        let mut harness = Harness::new(vec![pattern(8, &[(2, 0, note("C-4 0 7F"))])]);
+        harness.engine.apply(EngineCommand::PlayBlock {
+            pattern: PatternId(0),
+            first_row: 2,
+            last_row: 4,
+        });
+        assert_eq!(harness.engine.mode, PlayMode::Block);
+        assert_eq!(harness.engine.position.row, 2);
+        assert_eq!(
+            rows_played(&mut harness, 4),
+            vec![(0, 3), (0, 4), (0, 2), (0, 3)]
+        );
+    }
+
+    #[test]
+    fn position_jump_plays_that_sequence_position_next() {
+        let mut harness = Harness::new(vec![
+            pattern(
+                4,
+                &[(
+                    1,
+                    0,
+                    playback(Note::empty(), PlaybackCommand::PositionJump, 2),
+                )],
+            ),
+            pattern(4, &[]),
+            pattern(4, &[]),
+        ]);
+        harness.engine.apply(sequence(&[0, 1, 2]));
+        harness.engine.apply(EngineCommand::PlaySong(0));
+        assert_eq!(rows_played(&mut harness, 2), vec![(0, 1), (2, 0)]);
+        assert_eq!(harness.engine.position.sequence_index, 2);
+    }
+
+    #[test]
+    fn pattern_break_carries_on_at_its_row_of_the_next_position() {
+        let mut harness = Harness::new(vec![
+            pattern(
+                4,
+                &[(
+                    0,
+                    0,
+                    playback(Note::empty(), PlaybackCommand::PatternBreak, 2),
+                )],
+            ),
+            pattern(4, &[]),
+        ]);
+        harness.engine.apply(sequence(&[0, 1]));
+        harness.engine.apply(EngineCommand::PlaySong(0));
+        assert_eq!(rows_played(&mut harness, 2), vec![(1, 2), (1, 3)]);
+    }
+
+    #[test]
+    fn jump_and_break_on_one_row_go_to_that_row_of_that_position() {
+        let mut harness = Harness::new(vec![
+            pattern(
+                4,
+                &[
+                    (
+                        0,
+                        0,
+                        playback(Note::empty(), PlaybackCommand::PositionJump, 2),
+                    ),
+                    (
+                        0,
+                        1,
+                        playback(Note::empty(), PlaybackCommand::PatternBreak, 3),
+                    ),
+                ],
+            ),
+            pattern(4, &[]),
+            pattern(4, &[]),
+        ]);
+        harness.engine.apply(sequence(&[0, 1, 2]));
+        harness.engine.apply(EngineCommand::PlaySong(0));
+        assert_eq!(rows_played(&mut harness, 1), vec![(2, 3)]);
+    }
+
+    #[test]
+    fn pattern_break_past_the_end_starts_the_pattern_from_the_top() {
+        let mut harness = Harness::new(vec![
+            pattern(
+                4,
+                &[(
+                    0,
+                    0,
+                    playback(Note::empty(), PlaybackCommand::PatternBreak, 9),
+                )],
+            ),
+            pattern(4, &[]),
+        ]);
+        harness.engine.apply(sequence(&[0, 1]));
+        harness.engine.apply(EngineCommand::PlaySong(0));
+        assert_eq!(rows_played(&mut harness, 1), vec![(1, 0)]);
+    }
+
+    #[test]
+    fn pattern_break_in_a_playing_pattern_stays_in_it() {
+        let mut harness = Harness::new(vec![pattern(
+            4,
+            &[(
+                0,
+                0,
+                playback(Note::empty(), PlaybackCommand::PatternBreak, 3),
+            )],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        assert_eq!(rows_played(&mut harness, 2), vec![(0, 3), (0, 0)]);
+    }
+
+    #[test]
+    fn block_loop_ignores_jumps_and_breaks() {
+        let mut harness = Harness::new(vec![pattern(
+            4,
+            &[(
+                1,
+                0,
+                playback(Note::empty(), PlaybackCommand::PatternBreak, 3),
+            )],
+        )]);
+        harness.engine.apply(EngineCommand::PlayBlock {
+            pattern: PatternId(0),
+            first_row: 0,
+            last_row: 1,
+        });
+        assert_eq!(rows_played(&mut harness, 2), vec![(0, 1), (0, 0)]);
+    }
+
+    #[test]
+    fn pattern_delay_holds_the_row_without_replaying_its_note() {
+        let mut harness = Harness::new(vec![pattern(
+            4,
+            &[(0, 0, extended(note("C-4 0 7F"), 0xE2))],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        harness.messages();
+        assert_eq!(rows_played(&mut harness, 3), vec![(0, 0), (0, 0), (0, 1)]);
+        assert!(note_velocities(&harness.messages()).is_empty());
+    }
+
+    #[test]
+    fn stop_command_stops_playback_after_its_row() {
+        let mut harness = Harness::new(vec![pattern(
+            4,
+            &[(1, 0, extended(note("C-4 0 7F"), 0xF0))],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        harness.next_row();
+        assert_eq!(harness.engine.mode, PlayMode::Pattern);
+        assert!(
+            harness
+                .messages()
+                .contains(&Message::NoteOn(Channel::Ch1, 60, 0x7F))
+        );
+        harness.next_row();
+        assert_eq!(harness.engine.mode, PlayMode::Paused);
+        assert!(harness.messages().contains(&Message::Stop));
+    }
+
+    #[test]
+    fn global_velocity_command_scales_notes_until_playback_restarts() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[
+                (
+                    0,
+                    0,
+                    playback(Note::empty(), PlaybackCommand::SetGlobalVelocity, 0x80),
+                ),
+                (1, 0, note("C-4 0 7E")),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        harness.next_row();
+        assert_eq!(note_velocities(&harness.messages()), vec![64]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        harness.next_row();
+        assert_eq!(note_velocities(&harness.messages()), vec![64]);
+        harness.engine.apply(EngineCommand::Stop);
+        assert_eq!(harness.engine.voices.global_velocity(), u8::MAX);
+    }
+
+    #[test]
+    fn global_velocity_slide_moves_every_tick_after_the_first() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[(
+                0,
+                0,
+                playback(Note::empty(), PlaybackCommand::GlobalVelocitySlide, 0x02),
+            )],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        harness.next_row();
+        // 5 ticks of 2 * 4 down from FF
+        assert_eq!(harness.engine.voices.global_velocity(), 0xFF - 5 * 8);
+        harness.next_row();
+        assert_eq!(harness.engine.voices.global_velocity(), 0xFF - 5 * 8);
+    }
+
+    #[test]
+    fn track_velocity_scales_only_its_track() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[
+                (
+                    0,
+                    0,
+                    playback(Note::empty(), PlaybackCommand::SetTrackVelocity, 0x80),
+                ),
+                (1, 0, note("C-4 0 7E")),
+                (1, 1, note("D-4 1 7E")),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        harness.next_row();
+        assert_eq!(note_velocities(&harness.messages()), vec![64, 0x7E]);
+    }
+
+    #[test]
+    fn quantized_position_is_the_closest_row() {
+        let mut harness = Harness::new(vec![pattern(4, &[])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        let status = harness.engine.status.clone();
+        assert_eq!(status.record_position(), (0, 0));
+        for _ in 0..2 {
+            harness.engine.pulse();
+        }
+        assert_eq!(status.record_position(), (0, 0));
+        harness.engine.pulse();
+        assert_eq!(status.record_position(), (0, 1));
+    }
+    fn metronome(mode: MetronomeMode) -> Metronome {
+        let mut metronome = Metronome::new();
+        metronome.mode = mode;
+        metronome.beats_per_bar = 2;
+        return metronome;
+    }
+
+    fn clicks(messages: &[Message]) -> Vec<u8> {
+        return messages
+            .iter()
+            .filter_map(|m| match m {
+                Message::NoteOn(Channel::Ch10, pitch, _) => Some(*pitch),
+                _ => None,
+            })
+            .collect();
+    }
+
+    #[test]
+    fn metronome_clicks_every_beat_with_an_accent_on_each_bar() {
+        let mut harness = Harness::new(vec![pattern(16, &[])]);
+        harness.engine.apply(EngineCommand::SetMetronome(metronome(
+            MetronomeMode::Always,
+        )));
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        let mut messages = harness.messages();
+        for _ in 0..12 {
+            harness.next_row();
+            messages.extend(harness.messages());
+        }
+        let (accent, beat) = (Metronome::new().accent_note, Metronome::new().beat_note);
+        assert_eq!(clicks(&messages), vec![accent, beat, accent, beat]);
+        assert!(messages.contains(&Message::NoteOff(Channel::Ch10, accent, 0)));
+    }
+
+    #[test]
+    fn metronome_while_recording_only_clicks_in_record_mode() {
+        let mut harness = Harness::new(vec![pattern(4, &[])]);
+        harness.engine.apply(EngineCommand::SetMetronome(metronome(
+            MetronomeMode::Recording,
+        )));
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        assert!(clicks(&harness.messages()).is_empty());
+        harness.engine.apply(EngineCommand::SetRecording(true));
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        assert_eq!(clicks(&harness.messages()).len(), 1);
+    }
+
+    #[test]
+    fn stopping_releases_a_sounding_click() {
+        let mut harness = Harness::new(vec![pattern(4, &[])]);
+        harness.engine.apply(EngineCommand::SetMetronome(metronome(
+            MetronomeMode::Always,
+        )));
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        harness.messages();
+        harness.engine.apply(EngineCommand::Stop);
+        let accent = Metronome::new().accent_note;
+        assert!(
+            harness
+                .messages()
+                .contains(&Message::NoteOff(Channel::Ch10, accent, 0))
+        );
+    }
+
+    #[test]
+    fn ending_a_block_loop_plays_on_through_the_pattern() {
+        let mut harness = Harness::new(vec![pattern(4, &[])]);
+        harness.engine.apply(EngineCommand::PlayBlock {
+            pattern: PatternId(0),
+            first_row: 0,
+            last_row: 1,
+        });
+        harness.next_row();
+        harness.engine.apply(EngineCommand::EndBlockLoop);
+        assert_eq!(harness.engine.mode, PlayMode::Pattern);
+        assert_eq!(rows_played(&mut harness, 3), vec![(0, 2), (0, 3), (0, 0)]);
+    }
+
+    #[test]
+    fn a_note_recorded_ahead_isnt_played_again_on_that_pass() {
+        let mut harness = Harness::new(vec![pattern(2, &[(1, 0, note("C-4 0 7F"))])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        for _ in 0..3 {
+            harness.engine.pulse();
+        }
+        harness.engine.apply(EngineCommand::SkipRecordedNote {
+            pattern: PatternId(0),
+            row: 1,
+            track: 0,
+        });
+        harness.messages();
+        harness.next_row();
+        assert!(note_velocities(&harness.messages()).is_empty());
+        harness.next_row();
+        harness.next_row();
+        assert_eq!(note_velocities(&harness.messages()), vec![0x7F]);
+    }
+
+    #[test]
+    fn a_note_recorded_into_the_playing_row_isnt_skipped_later() {
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, note("C-4 0 7F"))])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        harness.engine.apply(EngineCommand::SkipRecordedNote {
+            pattern: PatternId(0),
+            row: 0,
+            track: 0,
+        });
+        harness.messages();
+        harness.next_row();
+        harness.next_row();
+        assert_eq!(note_velocities(&harness.messages()), vec![0x7F]);
+    }
+
+    #[test]
+    fn a_note_recorded_ahead_in_a_one_row_loop_isnt_played_twice() {
+        let mut harness = Harness::new(vec![pattern(4, &[(2, 0, note("C-4 0 7F"))])]);
+        harness.engine.apply(EngineCommand::PlayBlock {
+            pattern: PatternId(0),
+            first_row: 2,
+            last_row: 2,
+        });
+        for _ in 0..4 {
+            harness.engine.pulse();
+        }
+        harness.engine.apply(EngineCommand::SkipRecordedNote {
+            pattern: PatternId(0),
+            row: 2,
+            track: 0,
+        });
+        harness.messages();
+        harness.next_row();
+        assert!(note_velocities(&harness.messages()).is_empty());
+    }
+
+    #[test]
+    fn an_early_note_after_a_delayed_row_starts_just_before_it() {
+        let mut harness = Harness::new(vec![pattern(
+            4,
+            &[
+                (0, 1, extended(Note::empty(), 0xE1)),
+                (1, 0, extended(note("C-4 0 7F"), 0x82)),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        harness.messages();
+        assert!(note_on_ticks(&mut harness).is_empty());
+        harness.engine.pulse();
+        assert_eq!(note_on_ticks(&mut harness), vec![4]);
     }
 }
