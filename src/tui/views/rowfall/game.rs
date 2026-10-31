@@ -26,6 +26,8 @@ const LINES_PER_LEVEL: u32 = 10;
 const MAX_LEVEL: u32 = 20;
 /// A square is four whole pieces filling a 4x4 block.
 const SQUARE_SIZE: usize = 4;
+/// How long full lines stay on screen while they're wiped away, before the rows above drop.
+const CLEAR_TIME: Duration = Duration::from_millis(250);
 /// Extra points for each row of a square a cleared line goes through, on top of the line's own.
 const SILVER_STRIP_POINTS: u32 = 5;
 const GOLD_STRIP_POINTS: u32 = 10;
@@ -140,6 +142,8 @@ pub struct Game {
     fall: Duration,
     lock: Option<Duration>,
     lowest_y: i8,
+    /// The full rows being wiped, and how long they've been at it. The game waits meanwhile.
+    clearing: Option<(Vec<usize>, Duration)>,
 }
 
 impl Game {
@@ -160,6 +164,7 @@ impl Game {
             fall: Duration::ZERO,
             lock: None,
             lowest_y: 0,
+            clearing: None,
         };
         game.fill_previews();
         let first = game.take_next();
@@ -191,6 +196,13 @@ impl Game {
         return Duration::from_secs_f64(seconds.max(0.01));
     }
 
+    /// The rows being wiped and how far along it is, from 0 to 1.
+    pub fn clearing(&self) -> Option<(&[usize], f32)> {
+        let (rows, elapsed) = self.clearing.as_ref()?;
+        let progress = elapsed.as_secs_f32() / CLEAR_TIME.as_secs_f32();
+        return Some((rows, progress.min(1.0)));
+    }
+
     /// Where the piece would land, for the ghost.
     pub fn ghost(&self) -> Piece {
         let mut ghost = self.piece;
@@ -204,6 +216,13 @@ impl Game {
     }
 
     pub fn tick(&mut self, elapsed: Duration) {
+        if let Some((_, time)) = &mut self.clearing {
+            *time += elapsed;
+            if *time >= CLEAR_TIME {
+                self.finish_clearing();
+            }
+            return;
+        }
         if self.over {
             return;
         }
@@ -233,14 +252,14 @@ impl Game {
             x: self.piece.x + dx,
             ..self.piece
         };
-        if !self.over && self.fits(&moved) {
+        if !self.waiting() && self.fits(&moved) {
             self.piece = moved;
         }
     }
 
     /// The original's kicks: in place, then one down, one to each side and one up.
     pub fn rotate(&mut self, clockwise: bool) {
-        if self.over {
+        if self.waiting() {
             return;
         }
         let rotation = match clockwise {
@@ -263,14 +282,14 @@ impl Game {
     }
 
     pub fn soft_drop(&mut self) {
-        if !self.over && self.step_down() {
+        if !self.waiting() && self.step_down() {
             self.fall = Duration::ZERO;
         }
     }
 
     /// Drops the piece to the floor without locking it, so it can still slide.
     pub fn firm_drop(&mut self) {
-        if self.over {
+        if self.waiting() {
             return;
         }
         while self.step_down() {}
@@ -279,7 +298,7 @@ impl Game {
 
     /// Once per piece. The held piece comes back in its spawn orientation.
     pub fn hold_piece(&mut self) {
-        if self.over || self.held_this_piece {
+        if self.waiting() || self.held_this_piece {
             return;
         }
         let current = self.piece.kind;
@@ -289,6 +308,10 @@ impl Game {
         };
         self.spawn(next);
         self.held_this_piece = true;
+    }
+
+    fn waiting(&self) -> bool {
+        return self.over || self.clearing.is_some();
     }
 
     fn step_down(&mut self) -> bool {
@@ -374,7 +397,24 @@ impl Game {
             return;
         }
         self.form_squares();
-        self.clear_lines();
+        let full: Vec<usize> = (0..HEIGHT)
+            .filter(|&y| self.board[y].iter().all(Option::is_some))
+            .collect();
+        if full.is_empty() {
+            self.next_piece();
+        } else {
+            self.clearing = Some((full, Duration::ZERO));
+        }
+    }
+
+    fn finish_clearing(&mut self) {
+        if let Some((full, _)) = self.clearing.take() {
+            self.clear_lines(&full);
+        }
+        self.next_piece();
+    }
+
+    fn next_piece(&mut self) {
         self.held_this_piece = false;
         let next = self.take_next();
         self.spawn(next);
@@ -422,18 +462,12 @@ impl Game {
 
     /// A point a line and one more for four, plus 5 for each row of a silver square and 10
     /// for each row of a gold one that goes with them.
-    fn clear_lines(&mut self) {
-        let full: Vec<usize> = (0..HEIGHT)
-            .filter(|&y| self.board[y].iter().all(Option::is_some))
-            .collect();
-        if full.is_empty() {
-            return;
-        }
+    fn clear_lines(&mut self, full: &[usize]) {
         let mut points = full.len() as u32;
         if full.len() == 4 {
             points += 1;
         }
-        for &y in &full {
+        for &y in full {
             let mut squares: Vec<(Square, u32)> = Vec::new();
             for cell in self.board[y].iter().flatten() {
                 if let Some(square) = cell.square
@@ -488,6 +522,9 @@ mod tests {
         game.piece.x = x;
         game.firm_drop();
         game.lock_piece();
+        if game.clearing.is_some() {
+            game.finish_clearing();
+        }
     }
 
     fn fill_row(game: &mut Game, y: usize, except: &[usize]) {
@@ -624,5 +661,29 @@ mod tests {
         }
         game.lock_piece();
         assert!(game.over);
+    }
+
+    #[test]
+    fn full_lines_wait_to_be_wiped_before_they_clear() {
+        let mut game = game_with(Kind::O);
+        fill_row(&mut game, HEIGHT - 1, &[0]);
+        game.piece = Piece {
+            kind: Kind::I,
+            rotation: 1,
+            x: -2,
+            y: 0,
+        };
+        game.firm_drop();
+        game.lock_piece();
+        assert_eq!(
+            game.clearing().map(|(rows, _)| rows.to_vec()),
+            Some(vec![HEIGHT - 1])
+        );
+        game.shift(1);
+        game.tick(Duration::from_millis(100));
+        assert_eq!(game.lines, 0);
+        game.tick(Duration::from_millis(200));
+        assert!(game.clearing().is_none());
+        assert_eq!(game.lines, 1);
     }
 }

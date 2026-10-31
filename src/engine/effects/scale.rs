@@ -108,7 +108,16 @@ impl ScaleEffect {
 
     fn snap(&self, pitch: u8) -> Option<u8> {
         let pitch = pitch as i16 + self.transpose as i16;
-        let in_range = |p: i16| p.clamp(NotePitch::MIN as i16, NotePitch::MAX as i16) as u8;
+        // an octave keeps a note in the scale, so it's how notes come back into range
+        let in_range = |mut p: i16| {
+            while p > NotePitch::MAX as i16 {
+                p -= SEMITONES_PER_OCTAVE as i16;
+            }
+            while p < NotePitch::MIN as i16 {
+                p += SEMITONES_PER_OCTAVE as i16;
+            }
+            return p as u8;
+        };
         if self.in_scale(pitch) {
             return Some(in_range(pitch));
         }
@@ -177,8 +186,9 @@ impl MidiEffect for ScaleEffect {
             if std::mem::take(dropped) {
                 return;
             }
-            let sent = self.sent.note_off(channel, played);
-            out.push(Message::NoteOff(channel, sent, note.velocity));
+            if let Some(sent) = self.sent.note_off(channel, played) {
+                out.push(Message::NoteOff(channel, sent, note.velocity));
+            }
             return;
         }
         let snapped = self.snap(played);
@@ -251,5 +261,27 @@ mod tests {
     fn every_scale_starts_on_its_root() {
         assert!(SCALES.iter().all(|scale| scale & 1 == 1));
         assert_eq!(SCALES.len(), SCALE_NAMES.len());
+    }
+
+    #[test]
+    fn two_notes_snapped_to_one_pitch_end_when_both_let_go() {
+        let mut scale = ScaleEffect::new();
+        let mut out = vec![];
+        scale.process(Message::NoteOn(Channel::Ch1, 60, 100), None, &mut out);
+        scale.process(Message::NoteOn(Channel::Ch1, 61, 100), None, &mut out);
+        out.clear();
+        scale.process(Message::NoteOff(Channel::Ch1, 61, 0), None, &mut out);
+        assert!(out.is_empty());
+        scale.process(Message::NoteOff(Channel::Ch1, 60, 0), None, &mut out);
+        assert_eq!(out, vec![Message::NoteOff(Channel::Ch1, 60, 0)]);
+    }
+
+    #[test]
+    fn transposing_past_the_top_stays_in_the_scale() {
+        let mut scale = ScaleEffect::new();
+        scale.transpose = 12;
+        let snapped = snapped(&mut scale, NotePitch::MAX).unwrap();
+        assert!(snapped <= NotePitch::MAX);
+        assert!(scale.in_scale(snapped as i16));
     }
 }

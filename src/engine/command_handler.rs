@@ -74,6 +74,8 @@ fn cc_value(value: u8) -> u8 {
 
 const MIDI_CHANNEL_COUNT: usize = MIDI_CHANNEL_MAX as usize + 1;
 const MOD_WHEEL_CC: u8 = 1;
+/// FT2's global volume tops out at 64 and ours at 255, so H steps are 4x bigger to feel the same.
+const GLOBAL_SLIDE_STEP: i16 = 4;
 
 /// Maps a 00-FF command value to a 14 bit pitch bend: 00 is full down, 80 is no bend and
 /// FF is full up.
@@ -373,8 +375,6 @@ impl MidiCommandHandler {
         self.pressed = [false; MIDI_CHANNEL_COUNT];
     }
 }
-/// FT2's global volume tops out at 64 and ours at 255, so H steps are 4x bigger to feel the same.
-const GLOBAL_SLIDE_STEP: i16 = 4;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct RowFlow {

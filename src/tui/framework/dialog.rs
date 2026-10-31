@@ -93,7 +93,6 @@ impl DialogResult {
         };
     }
 
-    /// The button of a row of buttons that was pressed last, if any was.
     pub fn checks(&self, id: &str) -> Option<Vec<bool>> {
         return match self.get(id)? {
             DialogValue::Checks(checks) => Some(checks.clone()),
@@ -101,6 +100,7 @@ impl DialogResult {
         };
     }
 
+    /// The button of a row of buttons that was pressed last, if any was.
     pub fn pressed(&self, id: &str) -> Option<usize> {
         return match self.values.get(id) {
             Some(DialogValue::Press { button, count }) if *count > 0 => Some(*button),

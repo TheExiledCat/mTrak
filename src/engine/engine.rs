@@ -38,6 +38,9 @@ use crate::{
     tui::constants::TRACK_COUNT,
 };
 
+/// How long a metronome click lasts, a 1/16.
+const CLICK_PULSES: u32 = PULSES_PER_QUARTER / 4;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum PlayMode {
@@ -73,8 +76,6 @@ struct Clock {
     /// Each pulse is a tick of the row, which ends after the speed's worth of them.
     tick: u32,
 }
-
-const CLICK_PULSES: u32 = PULSES_PER_QUARTER / 4;
 
 /// The shortest wait for a pulse before a silent clock input counts as stopped.
 const CLOCK_DROPOUT_MIN: Duration = Duration::from_millis(500);
@@ -271,8 +272,11 @@ impl MtrakEngine {
                 row,
                 track,
             } => {
-                let playing = (self.position.pattern, self.position.row);
-                if self.clock.is_some() && playing != (pattern, row) {
+                let ahead = self
+                    .clock
+                    .as_ref()
+                    .is_some_and(|clock| clock.tick * 2 >= self.ticks_per_line() as u32);
+                if ahead {
                     self.recorded_ahead.push((pattern, row, track));
                 }
             }
@@ -835,6 +839,9 @@ impl MtrakEngine {
         if row_done && self.row_delay > 0 {
             self.row_delay -= 1;
             self.pattern_pulse += 1;
+            if self.row_delay == 0 {
+                self.schedule_early_notes();
+            }
             self.tick_effects();
             self.command_tick();
         } else if row_done {
@@ -1220,7 +1227,10 @@ impl MtrakEngine {
         let flow = self.playback_command_handler.take_flow();
         self.apply_flow(flow);
         self.sync_global_velocity();
-        self.schedule_early_notes();
+        // a delayed row plans the next row's early notes on its last pass instead
+        if self.row_delay == 0 {
+            self.schedule_early_notes();
+        }
         self.dispatch_messages(out);
     }
 
@@ -4728,6 +4738,9 @@ mod tests {
         harness
             .engine
             .apply(EngineCommand::PlayPattern(PatternId(0)));
+        for _ in 0..3 {
+            harness.engine.pulse();
+        }
         harness.engine.apply(EngineCommand::SkipRecordedNote {
             pattern: PatternId(0),
             row: 1,
@@ -4756,5 +4769,44 @@ mod tests {
         harness.next_row();
         harness.next_row();
         assert_eq!(note_velocities(&harness.messages()), vec![0x7F]);
+    }
+
+    #[test]
+    fn a_note_recorded_ahead_in_a_one_row_loop_isnt_played_twice() {
+        let mut harness = Harness::new(vec![pattern(4, &[(2, 0, note("C-4 0 7F"))])]);
+        harness.engine.apply(EngineCommand::PlayBlock {
+            pattern: PatternId(0),
+            first_row: 2,
+            last_row: 2,
+        });
+        for _ in 0..4 {
+            harness.engine.pulse();
+        }
+        harness.engine.apply(EngineCommand::SkipRecordedNote {
+            pattern: PatternId(0),
+            row: 2,
+            track: 0,
+        });
+        harness.messages();
+        harness.next_row();
+        assert!(note_velocities(&harness.messages()).is_empty());
+    }
+
+    #[test]
+    fn an_early_note_after_a_delayed_row_starts_just_before_it() {
+        let mut harness = Harness::new(vec![pattern(
+            4,
+            &[
+                (0, 1, extended(Note::empty(), 0xE1)),
+                (1, 0, extended(note("C-4 0 7F"), 0x82)),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        harness.messages();
+        assert!(note_on_ticks(&mut harness).is_empty());
+        harness.engine.pulse();
+        assert_eq!(note_on_ticks(&mut harness), vec![4]);
     }
 }
