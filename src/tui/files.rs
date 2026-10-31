@@ -13,6 +13,7 @@ use crate::{
 const FOLDER_ROOT_NAME: &str = "mtrak";
 const CONFIG_FILE_NAME: &str = "config.toml";
 pub const KEYBINDS_FILE_NAME: &str = "keybinds.toml";
+const LEADERBOARD_FILE_NAME: &str = "leaderboard.toml";
 const THEMES_FOLDER_NAME: &str = "themes";
 /// Where the custom theme was kept before themes got their own folder.
 const OLD_THEME_FILE_NAME: &str = "theme.toml";
@@ -76,6 +77,9 @@ pub fn get_config_file_path() -> Result<PathBuf> {
 }
 pub fn get_keybinds_file_path() -> Result<PathBuf> {
     return config_file(KEYBINDS_FILE_NAME);
+}
+pub fn get_leaderboard_file_path() -> Result<PathBuf> {
+    return config_file(LEADERBOARD_FILE_NAME);
 }
 pub fn get_themes_directory() -> Result<PathBuf> {
     return config_file(THEMES_FOLDER_NAME);

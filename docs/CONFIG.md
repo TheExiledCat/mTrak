@@ -94,6 +94,9 @@ these eleven colors:
 | `success`      | Success, e.g. the About dialog's border                                       |
 | `mark`         | The fill behind a marked block                                                |
 
+Seven more color the pieces of Rowfall, the game under `Alt+N`: `piece_i` (the long one),
+`piece_o` (the square), `piece_t`, `piece_s`, `piece_z`, `piece_j` and `piece_l`.
+
 Colors are hex (`"#49688C"`) or ANSI color names (`"Red"`, `"DarkGray"`, `"LightBlue"`, ...).
 Colors you leave out come from the palette named by `base`, `"ft2"` (the default) or
 `"ansi16"`, so a theme can change just a few:

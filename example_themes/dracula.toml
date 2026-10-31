@@ -35,3 +35,12 @@ success      = "#50FA7B"
 
 # the fill behind a marked block
 mark         = "#6272A4"
+
+# the pieces of Rowfall, the game under Alt+N
+piece_i = "#8BE9FD"
+piece_o = "#F1FA8C"
+piece_t = "#BD93F9"
+piece_s = "#50FA7B"
+piece_z = "#FF5555"
+piece_j = "#FF79C6"
+piece_l = "#FFB86C"

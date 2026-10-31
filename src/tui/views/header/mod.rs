@@ -6,7 +6,7 @@ mod midi_events;
 mod pattern_info;
 mod sequence;
 mod song_panel;
-mod util;
+pub mod util;
 
 use ratatui::{
     crossterm::event::Event::{self},
