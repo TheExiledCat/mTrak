@@ -1521,6 +1521,13 @@ impl Select {
         return self;
     }
 
+    /// Typing a number picks the option this many places further down, for lists that start
+    /// with options that aren't numbered, like an `Off`.
+    pub fn typed_from(mut self, index: usize) -> Self {
+        self.typed_from = index;
+        return self;
+    }
+
     fn is_open(&self) -> bool {
         return self.open.is_some();
     }
@@ -1558,13 +1565,6 @@ impl Select {
             (true, false) => glyphs::pick("\u{25B2}", "^ "),
             (false, false) => glyphs::pick(" ", "  "),
         };
-    }
-
-    /// Typing a number picks the option this many places further down, for lists that start
-    /// with options that aren't numbered, like an `Off`.
-    pub fn typed_from(mut self, index: usize) -> Self {
-        self.typed_from = index;
-        return self;
     }
 
     /// Picks the option for the digits typed so far, in hex or decimal as the config says. A

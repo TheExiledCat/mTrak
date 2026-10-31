@@ -34,6 +34,7 @@ pub enum UtilListAction {
     Remap,
     Info,
     About,
+    Rowfall,
     Extend,
 }
 
@@ -43,21 +44,28 @@ pub struct UtilList {
     keymap: Keymap<UtilListAction>,
 }
 
+/// Also read by the app, which closes Rowfall with the key that opens it.
+pub fn util_keymap() -> Keymap<UtilListAction> {
+    use UtilListAction::*;
+    return Keymap::new("util")
+        .bind(Key::ctrl('r'), Instruments, "Instrument")
+        .bind(Key::ctrl('e'), Global, "Global")
+        .bind(Key::ctrl('g'), Metronome, "Metronome")
+        .bind(Key::alt('z'), Clear, "Clear")
+        .bind(Key::ctrl('k'), Remap, "Remap")
+        .bind(Key::ctrl('o'), Midi, "Midi")
+        .bind(Key::ctrl('p'), Config, "Config")
+        .bind(Key::ctrl('x'), Extend, "Extend")
+        .bind(Key::ctrl('f'), Info, "Info")
+        .bind(Key::alt('n'), Rowfall, "Rowfall")
+        .bind(Key::ctrl('t'), About, "About");
+}
+
 impl UtilList {
     pub fn new() -> Self {
-        use UtilListAction::*;
-        let keymap = Keymap::new("util")
-            .bind(Key::ctrl('r'), Instruments, "Instrument")
-            .bind(Key::ctrl('e'), Global, "Global")
-            .bind(Key::ctrl('g'), Metronome, "Metronome")
-            .bind(Key::alt('z'), Clear, "Clear")
-            .bind(Key::ctrl('k'), Remap, "Remap")
-            .bind(Key::ctrl('o'), Midi, "Midi")
-            .bind(Key::ctrl('p'), Config, "Config")
-            .bind(Key::ctrl('x'), Extend, "Extend")
-            .bind(Key::ctrl('f'), Info, "Info")
-            .bind(Key::ctrl('t'), About, "About");
-        return Self { keymap };
+        return Self {
+            keymap: util_keymap(),
+        };
     }
 
     pub fn extend_hint(&self) -> String {
@@ -128,6 +136,7 @@ impl KeyActions for UtilList {
             UtilListAction::Midi => open_midi_dialog(state),
             UtilListAction::Config => open_config_dialog(state),
             UtilListAction::About => open_about_dialog(state),
+            UtilListAction::Rowfall => state.request_rowfall(),
             UtilListAction::Clear => open_clear_dialog(state),
             UtilListAction::Remap => open_remap_dialog(state),
             UtilListAction::Info => open_info_dialog(state),
@@ -144,6 +153,7 @@ impl KeyActions for UtilList {
             UtilListAction::Midi => "Set the MIDI ports and clock",
             UtilListAction::Config => "Edit the settings in config.toml",
             UtilListAction::About => "About mTrak",
+            UtilListAction::Rowfall => "Play Rowfall while the song keeps going",
             UtilListAction::Clear => "Clear part of the current pattern",
             UtilListAction::Remap => "Move notes to another instrument or pitch",
             UtilListAction::Info => "Show the project's size and how much is in it",
