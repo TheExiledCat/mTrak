@@ -1,13 +1,19 @@
 use midi::{Channel, Message};
 use num::FromPrimitive;
 
-use crate::engine::{
-    effects::{MidiEffect, Param, ParamKind, Timing, ValueLabel, note_event},
-    notes::{Countdown, MIDI_CHANNEL_COUNT, PITCH_COUNT},
+use crate::{
+    data::midi::scale_velocity,
+    engine::{
+        effects::{MidiEffect, Param, ParamKind, Timing, ValueLabel, note_event},
+        notes::{Countdown, MIDI_CHANNEL_COUNT, PITCH_COUNT},
+    },
 };
 
 pub const RATE_PARAM: usize = 0;
 pub const FEEDBACK_PARAM: usize = 1;
+pub const MIX_PARAM: usize = 2;
+/// 50%: the note and its echoes both play at full velocity.
+const EVEN_MIX: u8 = 0x80;
 
 const PARAMS: &[Param] = &[
     Param {
@@ -26,6 +32,15 @@ const PARAMS: &[Param] = &[
             max: u8::MAX,
         },
         default: 0x80,
+        label: ValueLabel::Percent,
+    },
+    Param {
+        name: "Dry/wet",
+        kind: ParamKind::Number {
+            min: 0,
+            max: u8::MAX,
+        },
+        default: EVEN_MIX,
         label: ValueLabel::Percent,
     },
 ];
@@ -75,6 +90,7 @@ enum EchoEvent {
 pub struct EchoEffect {
     rate: u8,
     feedback: u8,
+    mix: u8,
     /// Ticks since playback started.
     now: u32,
     next_id: u32,
@@ -92,6 +108,7 @@ impl EchoEffect {
         return Self {
             rate: PARAMS[RATE_PARAM].default,
             feedback: PARAMS[FEEDBACK_PARAM].default,
+            mix: PARAMS[MIX_PARAM].default,
             now: 0,
             next_id: 0,
             voices: [[None; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
@@ -100,6 +117,14 @@ impl EchoEffect {
             events: Countdown::new(),
             due: Vec::new(),
         };
+    }
+
+    fn dry_level(&self) -> u8 {
+        if self.mix <= EVEN_MIX {
+            return EVEN_MIX;
+        }
+        let left = (u8::MAX - self.mix) as u16;
+        return (left * EVEN_MIX as u16 / (u8::MAX - EVEN_MIX) as u16) as u8;
     }
 
     fn voice(&mut self, channel: Channel, pitch: u8) -> &mut Option<u32> {
@@ -141,9 +166,20 @@ impl EchoEffect {
         playing: bool,
         out: &mut Vec<Message>,
     ) {
-        let id = self.start(channel, pitch, velocity, out);
+        let (dry, wet) = match playing {
+            true => (self.dry_level(), self.mix.min(EVEN_MIX)),
+            false => (EVEN_MIX, 0),
+        };
+        let id = match scale_velocity(velocity, dry, EVEN_MIX) {
+            0 => {
+                let id = self.next_id;
+                self.next_id = self.next_id.wrapping_add(1);
+                id
+            }
+            dry => self.start(channel, pitch, dry, out),
+        };
         let feedback = if playing { self.feedback as u32 } else { 0 };
-        let mut velocity = velocity as u32;
+        let mut velocity = scale_velocity(velocity, wet, EVEN_MIX) as u32;
         let mut pending = 0;
         loop {
             velocity = velocity * feedback / 0x100;
@@ -252,6 +288,7 @@ impl MidiEffect for EchoEffect {
         return match index {
             RATE_PARAM => self.rate,
             FEEDBACK_PARAM => self.feedback,
+            MIX_PARAM => self.mix,
             _ => 0,
         };
     }
@@ -260,6 +297,7 @@ impl MidiEffect for EchoEffect {
         match index {
             RATE_PARAM => self.rate = value,
             FEEDBACK_PARAM => self.feedback = value,
+            MIX_PARAM => self.mix = value,
             _ => {}
         }
     }
@@ -480,5 +518,32 @@ mod tests {
         echo.reset(&mut out);
         assert_eq!(out, vec![off(60)]);
         assert!(run(&mut echo, 0..=10, &[]).concat().is_empty());
+    }
+
+    #[test]
+    fn dry_wet_fades_out_the_echoes_or_the_note() {
+        let first_echo = |mix: u8| {
+            let mut echo = echo(1, 0x80);
+            echo.mix = mix;
+            let mut out = vec![];
+            echo.process(
+                Message::NoteOn(Channel::Ch1, 60, 100),
+                Some(Timing::new(0)),
+                &mut out,
+            );
+            echo.tick(Timing::new(1), &mut out);
+            echo.after_pulse(Timing::new(1), &mut out);
+            return out
+                .into_iter()
+                .filter_map(|m| match m {
+                    Message::NoteOn(_, _, velocity) => Some(velocity),
+                    _ => None,
+                })
+                .collect::<Vec<u8>>();
+        };
+        assert_eq!(first_echo(EVEN_MIX), vec![100, 50]);
+        assert_eq!(first_echo(0), vec![100]);
+        assert_eq!(first_echo(u8::MAX), vec![50]);
+        assert_eq!(first_echo(0x40), vec![100, 25]);
     }
 }

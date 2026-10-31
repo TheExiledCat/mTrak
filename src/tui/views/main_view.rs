@@ -58,37 +58,42 @@ impl MainView {
             header: Header::new(),
             content: Container::new(TimeLineView::new().boxed(), Padding::ZERO),
             footer: Footer::new(),
-            keys: Keymap::new("global")
-                .bind(Key::plain(KeyCode::Enter), MainAction::PlaySong, "Play SNG")
-                .bind(
-                    Key::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
-                    MainAction::PlayPattern,
-                    "Play PTN",
-                )
-                .bind(Key::char('~'), MainAction::Panic, "Panic")
-                .bind(Key::ctrl('z'), MainAction::Undo, "Undo")
-                .bind(Key::ctrl('y'), MainAction::Redo, "Redo")
-                .bind(Key::ctrl('s'), MainAction::Save, "Save")
-                .bind(
-                    Key::new(KeyCode::Char('s'), KeyModifiers::ALT),
-                    MainAction::SaveAs,
-                    "Save As",
-                )
-                .bind(
-                    Key::new(KeyCode::Char('o'), KeyModifiers::ALT),
-                    MainAction::File,
-                    "File",
-                )
-                .bind(
-                    Key::new(constants::EXIT_KEY, KeyModifiers::CONTROL),
-                    MainAction::Quit,
-                    "Quit",
-                )
-                .bind(Key::char('?'), MainAction::Help, "Keys")
-                .bind(Key::char('/'), MainAction::Commands, "Cmds"),
+            keys: global_keymap(),
         };
     }
 }
+/// Also read by the app, which lets the play pattern key through while a dialog is open.
+pub fn global_keymap() -> Keymap<MainAction> {
+    return Keymap::new("global")
+        .bind(Key::plain(KeyCode::Enter), MainAction::PlaySong, "Play SNG")
+        .bind(
+            Key::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+            MainAction::PlayPattern,
+            "Play PTN",
+        )
+        .bind(Key::char('~'), MainAction::Panic, "Panic")
+        .bind(Key::ctrl('z'), MainAction::Undo, "Undo")
+        .bind(Key::ctrl('y'), MainAction::Redo, "Redo")
+        .bind(Key::ctrl('s'), MainAction::Save, "Save")
+        .bind(
+            Key::new(KeyCode::Char('s'), KeyModifiers::ALT),
+            MainAction::SaveAs,
+            "Save As",
+        )
+        .bind(
+            Key::new(KeyCode::Char('o'), KeyModifiers::ALT),
+            MainAction::File,
+            "File",
+        )
+        .bind(
+            Key::new(constants::EXIT_KEY, KeyModifiers::CONTROL),
+            MainAction::Quit,
+            "Quit",
+        )
+        .bind(Key::char('?'), MainAction::Help, "Keys")
+        .bind(Key::char('/'), MainAction::Commands, "Cmds");
+}
+
 impl KeyActions for MainView {
     type Action = MainAction;
 

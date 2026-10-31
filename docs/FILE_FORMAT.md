@@ -1,7 +1,7 @@
 # Project file format
 
 This page describes how mTrak saves a project (`.mtrak`), so other programs can read and write
-it. It describes file version 4, written by mTrak v0.7.0 and later.
+it. It describes file version 5, written by mTrak v0.8.0 and later.
 
 A project file is a short header followed by a [MessagePack](https://msgpack.org) payload.
 Everything in the payload is a map with named fields, except the notes in a pattern, which are
@@ -37,9 +37,22 @@ doesn't know, so other programs can add their own.
 | `record_input_velocity` | bool             | Whether recording keeps the velocity of incoming notes       |
 | `midi_output`           | string or nil    | The name of the MIDI output port                             |
 | `send_midi_clock`       | bool             | Whether mTrak sends MIDI clock to the output                 |
+| `metronome`             | map              | When and how the metronome clicks, see below                 |
 | `sequence`              | array of maps    | The song's order of patterns, see below                      |
 | `instruments`           | array of 16 maps | One instrument per MIDI channel, see below                   |
 | `patterns`              | array of maps    | Every pattern; a pattern's number is its index, see below    |
+
+### Metronome
+
+| Field             | Type   | Contents                                                             |
+| ----------------- | ------ | -------------------------------------------------------------------- |
+| `mode`            | string | `Off`, `Recording` (only while recording) or `Always`                |
+| `channels`        | int    | The channels it clicks on, a bit per channel: bit 0 is channel 1, bit 15 channel 16 |
+| `accent_note`     | int    | The MIDI note on the first beat of each bar                          |
+| `accent_velocity` | int    | Its velocity, `0`-`127`                                              |
+| `beat_note`       | int    | The MIDI note on the other beats                                     |
+| `beat_velocity`   | int    | Its velocity, `0`-`127`                                              |
+| `beats_per_bar`   | int    | Beats in a bar, `1`-`16`                                             |
 
 ### Sequence
 
@@ -69,7 +82,7 @@ The effects on an instrument's channel, in the order notes go through them. Each
 
 | Field     | Type          | Contents                                                     |
 | --------- | ------------- | ------------------------------------------------------------ |
-| `kind`    | string        | Which effect it is: `Eq`, `Arp`, `Harmonize`, `Lfo`, `Echo` or `Envelope`, see below |
+| `kind`    | string        | Which effect it is: `Eq`, `Arp`, `Harmonize`, `Lfo`, `Echo`, `Envelope`, `Swing`, `Randomize`, `Scale`, `NoteToCc` or `Probability`, see below |
 | `values`  | array of ints | Each of the effect's parameters, `0`-`255`, in the order below |
 | `enabled` | bool          | `false` if the effect is turned off: notes pass it unchanged, and it keeps its place and values |
 | `param_ccs` | array of ints or nils | The CC each parameter follows, `0`-`127`, in the same order as `values`; nil for none. Parameters past its end follow none |
@@ -156,6 +169,60 @@ plays; when stopped, notes pass it unchanged. Its values:
 | ----- | --------- | ------------------------------------------------------------------------- | ------- |
 | 0     | Rate      | Ticks between the repeats, `1`-`255`                                      | `12`    |
 | 1     | Feedback  | Each repeat's velocity is the one before times this / 256, rounded down, `0`-`255`; `0` plays no repeats | `128` |
+| 2     | Dry/wet   | `0`-`255`. Below `128` the repeats get quieter, down to none at `0`; above it the note itself does, down to silent at `255`. At `128` both play at full velocity | `128` |
+
+The `Swing` effect delays the notes on every second line of a grid, and can make them louder or
+quieter than the notes on the beat. Notes off the grid aren't moved. It only runs while the song
+plays. Its values:
+
+| Index | Parameter | Values                                                                    | Default |
+| ----- | --------- | ------------------------------------------------------------------------- | ------- |
+| 0     | Grid      | `0` 1/4 (24 ticks), `1` 1/8 (12), `2` 1/16 (6), `3` 1/32 (3)               | `2`     |
+| 1     | Swing     | `128`-`252`: where the swung line lands in a pair of grid steps, as a share of 256. `128` doesn't move it; the delay is the pair's ticks times this / 256, rounded, minus one step | `170` |
+| 2     | Accent    | `0`-`255`. Below `128` the swung notes' velocity is scaled by this / 128; above it the notes on the beat are scaled by (256 - this) / 128 | `128` |
+
+A delayed note's note off is delayed just as much, so it keeps its length.
+
+The `Randomize` effect moves each note's velocity, pitch or octave by a random amount. Its values:
+
+| Index | Parameter     | Values                                                                 | Default |
+| ----- | ------------- | ---------------------------------------------------------------------- | ------- |
+| 0     | Randomize     | `0` velocity, `1` pitch, `2` octave                                    | `0`     |
+| 1     | Down by up to | `0`-`127`: the furthest it moves down, in velocity steps, semitones or octaves | `16` |
+| 2     | Up by up to   | `0`-`127`: the furthest it moves up                                    | `16`    |
+| 3     | Chance        | `0`-`255`: how often a note is moved; `255` always, otherwise this many times out of 255 | `255` |
+
+Velocities stay within `1`-`127` and pitches within `12`-`127`; a note an octave would move
+outside that isn't moved.
+
+The `Scale` effect moves notes outside a scale to the closest note in it. Its values:
+
+| Index | Parameter   | Values                                                                 | Default |
+| ----- | ----------- | ---------------------------------------------------------------------- | ------- |
+| 0     | Root        | `0`-`11`, C to B                                                       | `0`     |
+| 1     | Scale       | `0` major, `1` minor, `2` harmonic minor, `3` melodic minor, `4` dorian, `5` phrygian, `6` lydian, `7` mixolydian, `8` locrian, `9` major pentatonic, `10` minor pentatonic, `11` blues, `12` whole tone | `0` |
+| 2     | Between two | A note as close to the scale note below as to the one above goes `0` down, `1` up, `2` either at random; `3` drops every note outside the scale | `0` |
+| 3     | Transpose   | Signed semitones added before the scale, `-12`-`12`, two's complement  | `0`     |
+
+The `NoteToCc` effect sends a message for every note, made from the note's pitch or velocity.
+Its values:
+
+| Index | Parameter  | Values                                                                  | Default |
+| ----- | ---------- | ----------------------------------------------------------------------- | ------- |
+| 0     | Value from | `0` the note's pitch, `1` its velocity                                  | `0`     |
+| 1     | Send as    | `0` a CC, `1` pitch bend (the value times 128), `2` channel aftertouch, `3` program change | `0` |
+| 2     | CC         | The CC it sends, `0`-`127`, for `Send as` `0`                           | `74`    |
+| 3     | Play notes | `1` to play the note too, `0` to only send the message                  | `1`     |
+
+The `Probability` effect lets each note through with a chance. Its values:
+
+| Index | Parameter   | Values                                                                 | Default |
+| ----- | ----------- | ---------------------------------------------------------------------- | ------- |
+| 0     | Chance      | `0`-`255`: a note plays this many times out of 255; `255` always       | `192`   |
+| 1     | Chance from | `0` the chance above, `1` the note's velocity, scaled so `127` always plays | `0` |
+| 2     | Roll for    | `0` each note on its own, `1` each chord: the notes starting on the same tick play or drop together | `0` |
+
+A dropped note's note off is dropped too.
 
 ### Patterns
 
@@ -198,4 +265,5 @@ Some cells and their bytes:
 
 ## Older versions
 
+- [File version 4](archive/FILE_FORMAT_v4.md), written by mTrak v0.7.0 to v0.7.1.
 - [File version 3](archive/FILE_FORMAT_v3.md), written by mTrak v0.6.0.

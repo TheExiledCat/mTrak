@@ -12,6 +12,7 @@ use midir::MidiOutputPort;
 use crate::{
     data::{
         effect::EffectSettings,
+        metronome::Metronome,
         midi::MidiEvent,
         note::NotePitch,
         pattern::{Pattern, PatternId},
@@ -26,8 +27,21 @@ use crate::{
 
 pub enum EngineCommand {
     SetOutputPort(Option<MidiOutputPort>),
-    PlayPattern(PatternId, bool),
-    PlaySong(usize, bool),
+    PlayPattern(PatternId),
+    PlaySong(usize),
+    PlayBlock {
+        pattern: PatternId,
+        first_row: usize,
+        last_row: usize,
+    },
+    EndBlockLoop,
+    /// Live recording just wrote this cell and played its note, so it isn't played again
+    /// when playback reaches it.
+    SkipRecordedNote {
+        pattern: PatternId,
+        row: usize,
+        track: usize,
+    },
     /// Stops playback and silences and resets every channel.
     Panic,
     /// While playing a pattern, carries on in another one from the next row.
@@ -105,6 +119,8 @@ pub enum EngineCommand {
         cc: Option<u8>,
     },
     SetMidiClock(bool),
+    SetMetronome(Metronome),
+    SetRecording(bool),
     SetClockSource(ClockSource),
     /// A clock pulse from the clock input, with midir's timestamp in microseconds.
     ExternalClock(u64),
@@ -129,6 +145,8 @@ pub struct EngineStatus {
     row: AtomicUsize,
     output_connected: AtomicBool,
     synced_bpm: AtomicU8,
+    record_pattern: AtomicUsize,
+    record_row: AtomicUsize,
 }
 impl EngineStatus {
     pub fn play_mode(&self) -> PlayMode {
@@ -146,6 +164,12 @@ impl EngineStatus {
     pub fn output_connected(&self) -> bool {
         return self.output_connected.load(Ordering::Relaxed);
     }
+    pub fn record_position(&self) -> (usize, usize) {
+        return (
+            self.record_pattern.load(Ordering::Relaxed),
+            self.record_row.load(Ordering::Relaxed),
+        );
+    }
     /// The tempo measured from the clock input.
     pub fn synced_bpm(&self) -> u8 {
         return self.synced_bpm.load(Ordering::Relaxed);
@@ -158,6 +182,10 @@ impl EngineStatus {
         self.sequence_index.store(sequence_index, Ordering::Relaxed);
         self.pattern.store(pattern, Ordering::Relaxed);
         self.row.store(row, Ordering::Relaxed);
+    }
+    pub fn set_record_position(&self, pattern: usize, row: usize) {
+        self.record_pattern.store(pattern, Ordering::Relaxed);
+        self.record_row.store(row, Ordering::Relaxed);
     }
     pub fn set_synced_bpm(&self, bpm: u8) {
         self.synced_bpm.store(bpm, Ordering::Relaxed);
@@ -197,6 +225,12 @@ impl EngineHandle {
     pub fn set_midi_clock(&self, enabled: bool) {
         self.send(EngineCommand::SetMidiClock(enabled));
     }
+    pub fn set_metronome(&self, metronome: Metronome) {
+        self.send(EngineCommand::SetMetronome(metronome));
+    }
+    pub fn set_recording(&self, recording: bool) {
+        self.send(EngineCommand::SetRecording(recording));
+    }
     pub fn set_clock_source(&self, source: ClockSource) {
         self.send(EngineCommand::SetClockSource(source));
     }
@@ -207,11 +241,28 @@ impl EngineHandle {
     pub fn set_output_port(&self, port: Option<MidiOutputPort>) {
         self.send(EngineCommand::SetOutputPort(port));
     }
-    pub fn play_pattern(&self, id: PatternId, looping: bool) {
-        self.send(EngineCommand::PlayPattern(id, looping));
+    pub fn play_pattern(&self, id: PatternId) {
+        self.send(EngineCommand::PlayPattern(id));
     }
-    pub fn play_song(&self, sequence_index: usize, looping: bool) {
-        self.send(EngineCommand::PlaySong(sequence_index, looping));
+    pub fn play_song(&self, sequence_index: usize) {
+        self.send(EngineCommand::PlaySong(sequence_index));
+    }
+    pub fn skip_recorded_note(&self, pattern: PatternId, row: usize, track: usize) {
+        self.send(EngineCommand::SkipRecordedNote {
+            pattern,
+            row,
+            track,
+        });
+    }
+    pub fn end_block_loop(&self) {
+        self.send(EngineCommand::EndBlockLoop);
+    }
+    pub fn play_block(&self, pattern: PatternId, first_row: usize, last_row: usize) {
+        self.send(EngineCommand::PlayBlock {
+            pattern,
+            first_row,
+            last_row,
+        });
     }
     pub fn switch_pattern(&self, id: PatternId) {
         self.send(EngineCommand::SwitchPattern(id));

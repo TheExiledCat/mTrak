@@ -14,18 +14,21 @@
 
 use rmpv::Value;
 
-use crate::error::{MTrakError, Result};
+use crate::{
+    data::metronome::Metronome,
+    error::{MTrakError, Result},
+};
 
 pub type Migration = fn(Value) -> Result<Value>;
 
 /// Each file version before the current one, with the migration that turns its payload into
 /// the next version's.
-const MIGRATIONS: &[(u16, Migration)] = &[(3, v3_to_v4)];
+const MIGRATIONS: &[(u16, Migration)] = &[(3, v3_to_v4), (4, v4_to_v5)];
 
 /// The first file version written as MessagePack. Older files used bincode, which can't be
 /// migrated as it doesn't store field names.
 pub const FIRST_MESSAGEPACK_VERSION: u16 = 3;
-pub const PROJECT_VERSION: u16 = 4;
+pub const PROJECT_VERSION: u16 = 5;
 
 /// Passes a payload of `version` through every migration up to [`PROJECT_VERSION`].
 pub fn migrate(payload: Value, version: u16) -> Result<Value> {
@@ -47,6 +50,29 @@ fn v3_to_v4(mut payload: Value) -> Result<Value> {
         };
         fields.push((Value::from("effects"), Value::Array(Vec::new())));
     }
+    return Ok(payload);
+}
+
+/// Version 5 added the metronome.
+fn v4_to_v5(mut payload: Value) -> Result<Value> {
+    let Value::Map(fields) = &mut payload else {
+        return Err(MTrakError::InvalidProject("the project isn't a map".into()));
+    };
+    let metronome = Metronome::new();
+    let settings = [
+        ("mode", Value::from("Off")),
+        ("channels", Value::from(metronome.channels)),
+        ("accent_note", Value::from(metronome.accent_note)),
+        ("accent_velocity", Value::from(metronome.accent_velocity)),
+        ("beat_note", Value::from(metronome.beat_note)),
+        ("beat_velocity", Value::from(metronome.beat_velocity)),
+        ("beats_per_bar", Value::from(metronome.beats_per_bar)),
+    ];
+    let metronome = settings
+        .into_iter()
+        .map(|(name, value)| (Value::from(name), value))
+        .collect();
+    fields.push((Value::from("metronome"), Value::Map(metronome)));
     return Ok(payload);
 }
 
@@ -122,6 +148,17 @@ mod tests {
 
     const V: u16 = FIRST_MESSAGEPACK_VERSION;
     const TEST_MIGRATIONS: &[(u16, Migration)] = &[(V, rename_tempo_to_bpm), (V + 1, add_speed)];
+
+    #[test]
+    fn version_4_projects_get_a_metronome_that_is_off() {
+        let old = payload(vec![("bpm", Value::from(125))]);
+        let migrated = v4_to_v5(old).unwrap();
+        let mut bytes = vec![];
+        rmpv::encode::write_value(&mut bytes, field(&migrated, "metronome").unwrap()).unwrap();
+        let metronome: Metronome = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(metronome, Metronome::new());
+        assert_eq!(field(&migrated, "bpm"), Some(&Value::from(125)));
+    }
 
     #[test]
     fn version_3_instruments_get_an_empty_effect_chain() {

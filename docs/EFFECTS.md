@@ -1,7 +1,8 @@
 # Effects
 
 Each instrument has a chain of live MIDI effects that change its notes on the way out: an
-arpeggiator, chords, an EQ for velocities, an LFO, an envelope and an echo. They work on the notes the pattern plays
+arpeggiator, chords, an EQ for velocities, an LFO, an envelope, an echo, swing, a randomizer,
+a scale, note to CC and probability. They work on the notes the pattern plays
 and on notes you play live, and they're saved with the project.
 
 ## Adding effects
@@ -171,6 +172,7 @@ it fades out. Each repeat lasts as long as the note was held.
 | ------------ | --------- | ------- | ---- |
 | Rate (ticks) | `01`-`FF` | `0C`    | The time between repeats. `0C` is half a beat |
 | Feedback     | `00`-`FF` | `80`    | How loud each repeat is next to the one before: `80` is half, `FF` almost the same, `00` plays no repeats |
+| Dry/wet      | `00`-`FF` | `80`    | At `80` the note and its repeats play at full velocity. Lower fades the repeats out, down to none at `00`; higher fades the note itself out, down to only the repeats at `FF` |
 
 The higher the feedback, the more repeats: at `FF` a note repeats about as many times as its
 velocity, up to 127.
@@ -181,3 +183,68 @@ only if nothing has played over it.
 
 Put the Echo above an Arp or Chord to echo only the notes you play, or below to echo every note
 they make.
+
+## Swing
+
+Pushes every second line of a grid later, for a shuffled feel. Notes on the grid's other
+lines and notes off the grid stay where they are.
+
+| Setting | Values      | Default | Does |
+| ------- | ----------- | ------- | ---- |
+| Grid    | `1/4`-`1/32` | `1/16` | Which lines swing: with `1/16`, the second, fourth, sixth... 16th of each beat |
+| Swing   | `80`-`FC`   | `AA`    | How far the swung line moves, as a share of two grid steps: `80` (50%) is straight, `AA` (67%) a triplet shuffle, higher pushes it towards the next line |
+| Accent  | `00`-`FF`   | `80`    | Below `80`, the swung notes get quieter; above it, the notes on the beat do |
+
+A swung note keeps its length: its note off moves just as much. Swing only works while the song
+plays, as it needs the ticks; notes you play while stopped pass through.
+
+## Randomizer
+
+Moves each note by a random amount. It changes one thing; put two Randomizers on an
+instrument to change two.
+
+| Setting       | Values    | Default    | Does |
+| ------------- | --------- | ---------- | ---- |
+| Randomize     | Velocity, Pitch, Octave | Velocity | What it changes |
+| Down by up to | `00`-`7F` | `10`       | The furthest down a note moves: in velocity steps, semitones or octaves |
+| Up by up to   | `00`-`7F` | `10`       | The furthest up |
+| Chance        | `00`-`FF` | `FF`       | How often a note is moved at all; `FF` is every time |
+
+A note moved to another pitch ends on that pitch, so nothing hangs.
+
+## Scale
+
+Keeps notes in a scale: a note outside it moves to the closest note in it.
+
+| Setting     | Values    | Default | Does |
+| ----------- | --------- | ------- | ---- |
+| Root        | C-B       | C       | The scale's first note |
+| Scale       | Major, Minor, Harmonic minor, Melodic minor, Dorian, Phrygian, Lydian, Mixolydian, Locrian, Major pentatonic, Minor pentatonic, Blues, Whole tone | Major | |
+| Between two | Down, Up, Random, Filter | Down | Where a note goes when it's as close to the scale note below as to the one above. Filter drops every note outside the scale instead |
+| Transpose   | `-0C`-`0C` | `00`   | Semitones added before the scale is applied |
+
+## Note to CC
+
+Sends a message for each note, made from its pitch or velocity, e.g. to open a filter more for
+harder hits.
+
+| Setting    | Values    | Default | Does |
+| ---------- | --------- | ------- | ---- |
+| Value from | Pitch, Velocity | Pitch | What the value is |
+| Send as    | CC, Pitch bend, Aftertouch, Program change | CC | What it sends. Pitch bend uses the whole range, so pitch `40` is the centre |
+| CC         | `00`-`7F` | `4A`    | The CC it sends, for `Send as` CC |
+| Play notes | Off, On   | On      | Off sends only the message, without the note |
+
+The message goes out just before the note, so the synth has it when the note starts.
+
+## Probability
+
+Lets each note through with a chance, like a `Y` command on every note of the instrument.
+
+| Setting     | Values    | Default | Does |
+| ----------- | --------- | ------- | ---- |
+| Chance      | `00`-`FF` | `C0`    | How often a note plays: `FF` always, `80` half the time, `00` never |
+| Chance from | Chance, Velocity | Chance | Velocity uses each note's own velocity as its chance instead, so soft notes are rare and notes at `7F` always play |
+| Roll for    | Each note, Each chord | Each note | Each chord rolls once for the notes that start together, so a chord plays or drops as a whole |
+
+A dropped note's note off is dropped too.

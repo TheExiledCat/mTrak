@@ -15,12 +15,17 @@ pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 10] = [
     ('P', PitchBend),
     ('I', Interval),
 ];
-pub const PLAYBACK_COMMAND_LOOKUP: [(char, PlaybackCommand); 5] = [
+pub const PLAYBACK_COMMAND_LOOKUP: [(char, PlaybackCommand); 10] = [
     ('F', PlaybackCommand::SetTempo),
     ('Y', PlaybackCommand::Probability),
     ('E', PlaybackCommand::Extended),
     ('R', PlaybackCommand::Retrig),
     ('L', PlaybackCommand::Legato),
+    ('B', PlaybackCommand::PositionJump),
+    ('D', PlaybackCommand::PatternBreak),
+    ('G', PlaybackCommand::SetGlobalVelocity),
+    ('H', PlaybackCommand::GlobalVelocitySlide),
+    ('C', PlaybackCommand::SetTrackVelocity),
 ];
 /// A way to write a command's value, e.g. `xy`, and what it does.
 pub type CommandForm = (&'static str, &'static str);
@@ -167,6 +172,11 @@ pub enum PlaybackCommand {
     Extended, // FT2's E commands: 8x early delay, 9x retrig, Cx note cut, Dx note delay
     Retrig,   // Replays the note every y ticks, changing its velocity by x each time
     Legato, // Glides into this note: 0x starts it x ticks early, 1x keeps the previous note x ticks longer
+    PositionJump, // FT2's B
+    PatternBreak, // FT2's D
+    SetGlobalVelocity, // FT2's G
+    GlobalVelocitySlide, // FT2's H
+    SetTrackVelocity, // scales every note on the track from here on
 }
 /// Values from 20 up set the BPM; lower values set the speed.
 const TEMPO_MIN_BPM: u8 = 0x20;
@@ -197,6 +207,17 @@ pub enum PlaybackAction {
     Cut(u8),
     /// Replays the note every this many ticks within its row.
     RetrigNote(u8),
+    PositionJump(u8),
+    PatternBreak(u8),
+    /// The row is held this many rows longer, but its notes don't play again.
+    PatternDelay(u8),
+    StopSong,
+    SetGlobalVelocity(u8),
+    GlobalVelocitySlide {
+        up: u8,
+        down: u8,
+    },
+    SetTrackVelocity(u8),
     /// A value no subcommand uses yet.
     Unused,
 }
@@ -216,6 +237,8 @@ impl PlaybackCommand {
                 0x9 => PlaybackAction::RetrigNote(low),
                 0xC => PlaybackAction::Cut(low),
                 0xD => PlaybackAction::DelayLate(low),
+                0xE => PlaybackAction::PatternDelay(low),
+                0xF => PlaybackAction::StopSong,
                 _ => PlaybackAction::Unused,
             },
             PlaybackCommand::Retrig => PlaybackAction::Retrig {
@@ -227,6 +250,14 @@ impl PlaybackCommand {
                 0x1 => PlaybackAction::LegatoHold(low),
                 _ => PlaybackAction::Unused,
             },
+            PlaybackCommand::PositionJump => PlaybackAction::PositionJump(value),
+            PlaybackCommand::PatternBreak => PlaybackAction::PatternBreak(value),
+            PlaybackCommand::SetGlobalVelocity => PlaybackAction::SetGlobalVelocity(value),
+            PlaybackCommand::GlobalVelocitySlide => PlaybackAction::GlobalVelocitySlide {
+                up: high,
+                down: low,
+            },
+            PlaybackCommand::SetTrackVelocity => PlaybackAction::SetTrackVelocity(value),
         };
     }
 
@@ -249,6 +280,8 @@ impl PlaybackCommand {
                 ),
                 ("Cy", "Note cut: release the note on tick y"),
                 ("Dy", "Note delay: start the note y ticks into its row"),
+                ("Ey", "Pattern delay: hold the row y rows longer"),
+                ("F0", "Stop: stop playback after this row"),
             ],
             PlaybackCommand::Retrig => &[(
                 "xy",
@@ -264,6 +297,25 @@ impl PlaybackCommand {
                     "Legato: glide in, holding the previous note y more ticks",
                 ),
             ],
+            PlaybackCommand::PositionJump => {
+                &[("xx", "Position jump: play sequence position xx next")]
+            }
+            PlaybackCommand::PatternBreak => &[(
+                "xx",
+                "Pattern break: carry on at row xx of the next position",
+            )],
+            PlaybackCommand::SetGlobalVelocity => &[(
+                "xx",
+                "Global velocity: scale every note, 00 silent, FF full",
+            )],
+            PlaybackCommand::GlobalVelocitySlide => &[
+                ("x0", "Global velocity slide: up by x every tick"),
+                ("0y", "Global velocity slide: down by y every tick"),
+            ],
+            PlaybackCommand::SetTrackVelocity => &[(
+                "xx",
+                "Track velocity: scale the track's notes, 00 silent, FF full",
+            )],
         };
     }
 

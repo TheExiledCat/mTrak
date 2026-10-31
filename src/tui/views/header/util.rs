@@ -17,7 +17,7 @@ use crate::{
             config_dialog::open_config_dialog,
             dialogs::{
                 open_about_dialog, open_clear_dialog, open_global_dialog, open_info_dialog,
-                open_instrument_dialog, open_midi_dialog, open_remap_dialog,
+                open_instrument_dialog, open_metronome_dialog, open_midi_dialog, open_remap_dialog,
             },
         },
     },
@@ -27,6 +27,7 @@ use crate::{
 pub enum UtilListAction {
     Instruments,
     Global,
+    Metronome,
     Midi,
     Config,
     Clear,
@@ -48,6 +49,7 @@ impl UtilList {
         let keymap = Keymap::new("util")
             .bind(Key::ctrl('r'), Instruments, "Instrument")
             .bind(Key::ctrl('e'), Global, "Global")
+            .bind(Key::ctrl('g'), Metronome, "Metronome")
             .bind(Key::alt('z'), Clear, "Clear")
             .bind(Key::ctrl('k'), Remap, "Remap")
             .bind(Key::ctrl('o'), Midi, "Midi")
@@ -122,6 +124,7 @@ impl KeyActions for UtilList {
         match action {
             UtilListAction::Instruments => open_instrument_dialog(state),
             UtilListAction::Global => open_global_dialog(state),
+            UtilListAction::Metronome => open_metronome_dialog(state),
             UtilListAction::Midi => open_midi_dialog(state),
             UtilListAction::Config => open_config_dialog(state),
             UtilListAction::About => open_about_dialog(state),
@@ -137,6 +140,7 @@ impl KeyActions for UtilList {
         return match action {
             UtilListAction::Instruments => "Edit the current instrument",
             UtilListAction::Global => "Set the global velocity and transpose",
+            UtilListAction::Metronome => "Set when and how the metronome clicks",
             UtilListAction::Midi => "Set the MIDI ports and clock",
             UtilListAction::Config => "Edit the settings in config.toml",
             UtilListAction::About => "About mTrak",
