@@ -3,6 +3,9 @@ use strum::EnumIter;
 
 use crate::data::midi::MIDI_CHANNEL_MAX;
 
+/// Channel 10, the usual drum channel. The default notes are wood blocks there.
+const DRUM_CHANNEL: u8 = 9;
+
 /// Saved by name, so variants can be reordered.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, EnumIter)]
 pub enum MetronomeMode {
@@ -62,9 +65,6 @@ impl Default for Metronome {
         return Self::new();
     }
 }
-
-/// Channel 10, the usual drum channel. The default notes are wood blocks there.
-const DRUM_CHANNEL: u8 = 9;
 
 #[cfg(test)]
 mod tests {

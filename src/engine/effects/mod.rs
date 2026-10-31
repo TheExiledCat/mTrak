@@ -499,34 +499,49 @@ pub fn note_event(message: &Message) -> Option<NoteEvent> {
 /// Lets a note off follow its note to wherever an effect moved it.
 pub struct SentPitches {
     pitches: [[Option<u8>; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
+    /// Two held notes can land on the same pitch, which only ends when both have let go.
+    holders: [[u8; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
 }
 impl SentPitches {
     pub fn new() -> Self {
         return Self {
             pitches: [[None; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
+            holders: [[0; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
         };
     }
 
     pub fn note_on(&mut self, channel: Channel, played: u8, sent: u8) {
-        self.pitches[channel as usize][played as usize] = Some(sent);
+        let channel = channel as usize;
+        if let Some(previous) = self.pitches[channel][played as usize].replace(sent) {
+            let holders = &mut self.holders[channel][previous as usize];
+            *holders = holders.saturating_sub(1);
+        }
+        self.holders[channel][sent as usize] += 1;
     }
-    pub fn note_off(&mut self, channel: Channel, played: u8) -> u8 {
-        return self.pitches[channel as usize][played as usize]
-            .take()
-            .unwrap_or(played);
+    /// The pitch to send a note off to, or `None` while another note still holds it.
+    pub fn note_off(&mut self, channel: Channel, played: u8) -> Option<u8> {
+        let channel = channel as usize;
+        let Some(sent) = self.pitches[channel][played as usize].take() else {
+            return Some(played);
+        };
+        let holders = &mut self.holders[channel][sent as usize];
+        *holders = holders.saturating_sub(1);
+        return (*holders == 0).then_some(sent);
     }
     /// Only the moved notes need it: the rest still get their own note off from upstream.
     pub fn release_changed(&mut self, out: &mut Vec<Message>) {
         for (channel, pitches) in self.pitches.iter_mut().enumerate() {
+            let midi_channel = Channel::from_usize(channel).unwrap();
             for (played, sent) in pitches.iter_mut().enumerate() {
                 if let Some(sent) = sent.take()
                     && sent as usize != played
+                    && std::mem::take(&mut self.holders[channel][sent as usize]) > 0
                 {
-                    let channel = Channel::from_usize(channel).unwrap();
-                    out.push(Message::NoteOff(channel, sent, 0));
+                    out.push(Message::NoteOff(midi_channel, sent, 0));
                 }
             }
         }
+        self.holders = [[0; PITCH_COUNT]; MIDI_CHANNEL_COUNT];
     }
 }
 impl Default for SentPitches {

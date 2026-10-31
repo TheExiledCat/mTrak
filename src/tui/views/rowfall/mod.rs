@@ -193,6 +193,8 @@ impl RowfallView {
         let block = Block::bordered().border_style(state.theme.border);
         let inner = block.inner(area);
         block.render(area, buf);
+        let clearing = self.game.clearing();
+        let falling = !self.game.over && clearing.is_none();
         let piece = self.game.piece();
         let ghost = self.game.ghost();
         for y in 0..VISIBLE_HEIGHT {
@@ -200,16 +202,20 @@ impl RowfallView {
                 let row = y + HIDDEN_ROWS;
                 let (text, style) = match self.game.cell(x, row) {
                     Some(cell) => cell_look(state, cell.kind, cell.square.map(|s| s.0)),
-                    None if !self.game.over && covers(&piece, x, row) => {
-                        cell_look(state, piece.kind, None)
-                    }
-                    None if !self.game.over && covers(&ghost, x, row) => (
+                    None if falling && covers(&piece, x, row) => cell_look(state, piece.kind, None),
+                    None if falling && covers(&ghost, x, row) => (
                         glyphs::pick("\u{2591}\u{2591}", "::"),
                         state.theme.border_subtle,
                     ),
                     None => ("  ", Style::new()),
                 };
                 buf.set_string(inner.x + x as u16 * 2, inner.y + y as u16, text, style);
+            }
+        }
+        if let Some((rows, progress)) = clearing {
+            for &row in rows.iter().filter(|&&row| row >= HIDDEN_ROWS) {
+                let y = inner.y + (row - HIDDEN_ROWS) as u16;
+                render_wipe(state, inner.x, y, progress, buf);
             }
         }
         let message = match &self.phase {
@@ -300,6 +306,20 @@ impl RowfallView {
     }
 }
 
+/// Two carets that start in the middle of a full row and run to its ends, wiping the row as
+/// they go.
+fn render_wipe(state: &AppState, x: u16, y: u16, progress: f32, buf: &mut Buffer) {
+    let half = WIDTH as u16;
+    let reach = (progress * half as f32).round() as u16;
+    let wiped = Rect::new(x + half - reach, y, reach * 2, 1);
+    buf.set_string(wiped.x, y, " ".repeat(wiped.width as usize), Style::new());
+    let style = state.theme.heading;
+    if reach < half {
+        buf.set_string(x + half - reach - 1, y, "<", style);
+        buf.set_string(x + half + reach, y, ">", style);
+    }
+}
+
 fn covers(piece: &Piece, x: usize, y: usize) -> bool {
     return piece
         .blocks()
@@ -321,9 +341,15 @@ fn piece_style(state: &AppState, kind: Kind) -> Style {
 
 fn cell_look(state: &AppState, kind: Kind, square: Option<Square>) -> (&'static str, Style) {
     return match square {
-        Some(Square::Gold) => ("\u{2588}\u{2588}", piece_style(state, Kind::O)),
+        Some(Square::Gold) => (
+            glyphs::pick("\u{2588}\u{2588}", "##"),
+            piece_style(state, Kind::O),
+        ),
         Some(Square::Silver) => (glyphs::pick("\u{2593}\u{2593}", "%%"), state.theme.text),
-        None => ("\u{2588}\u{2588}", piece_style(state, kind)),
+        None => (
+            glyphs::pick("\u{2588}\u{2588}", "##"),
+            piece_style(state, kind),
+        ),
     };
 }
 
@@ -338,7 +364,7 @@ fn render_shape(state: &AppState, kind: Kind, area: Rect, buf: &mut Buffer) {
         let x = x0 + (x - left) as u16 * 2;
         let y = area.y + (y - top) as u16;
         if y < area.bottom() {
-            buf.set_string(x, y, "\u{2588}\u{2588}", style);
+            buf.set_string(x, y, glyphs::pick("\u{2588}\u{2588}", "##"), style);
         }
     }
 }
