@@ -159,8 +159,9 @@ Planned features, in no particular order:
     - [X] select, copy, paste 
     - [X] transpose across rows and tracks
     - [X] clearing blocks
-- [ ] **Swing/groove**, per pattern or global
 - [x] **Prebuilt binaries** for Linux, Windows and macOS on every release
+- [ ] Selectable track counts other than 8
+- [ ] Polyphonic note entering (arming multiple tracks so chords can be entered)
 - [ ] **More commands**
     - [X] Retrig (`R`, FT2's multi retrig) and retrig note (`E9`)
     - [x] BPM and SPD change (`F`)
@@ -194,11 +195,13 @@ Planned features, in no particular order:
     - [x] Midi EQ
     - [x] Chord mode / Harmonizer
     - [x] Delay (Echo)
+    - [ ] Swing
     - [ ] Randomizer
     - [ ] Scale mode
     - [ ] Note to CC
     - [ ] Global Probability
     - [x] CC LFO
+    - [ ] Potential custom plugin format scripting method (no VSTs though)
 - [ ] ...and more
 
 Have an idea? Feel free to open an issue.
