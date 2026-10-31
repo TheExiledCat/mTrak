@@ -94,9 +94,28 @@ release. Wait for approval and apply any edits they ask for.
   trailer. The author is the repo's configured git user.
 - `git tag vX.Y.Z`, then `git push origin main` and `git push origin vX.Y.Z`.
 
-## 6. Report
+## 6. Watch the release
 
-Say what was pushed (commit hash, tag) and link the run and the release:
-`https://github.com/TheExiledCat/mTrak/actions` and
-`https://github.com/TheExiledCat/mTrak/releases/tag/vX.Y.Z`. `gh` is not installed, so you
-can't watch the run; tell the user to check it.
+`gh` is installed and logged in, so follow the run instead of leaving it to the user.
+
+- Find the run for the tag: `gh run list --workflow release.yml --limit 3`, the one whose
+  branch is `vX.Y.Z`. Watch it with `gh run watch <id> --exit-status` in the background; a
+  run takes a few minutes.
+- If it fails, read the failed job's log:
+  `gh run view --job <job id> --log | grep -E '##\[error\]|error(\[|:)'`.
+  - **GitHub's side** (the build step passed but an artifact upload or download timed out, a
+    runner or network error, a cache service error): re-run only the failed jobs with
+    `gh run rerun <id> --failed` and watch again. The publish job runs once the builds pass.
+    Try this at most twice before stopping to ask.
+  - **Our side** (the build or a test failed, a stale `Cargo.lock`): stop and report the error.
+    Don't move or delete the tag, and don't push a fix without asking; the user decides
+    whether to fix forward with a new version.
+- Once it passes, check the release with
+  `gh release view vX.Y.Z --json url,assets,body`: there's a zip for every target in the
+  workflow's matrix, and the notes start with the changelog entry.
+
+## 7. Report
+
+Say what was pushed (commit hash, tag), how the run went (including any re-run and why), and
+link the release: `https://github.com/TheExiledCat/mTrak/releases/tag/vX.Y.Z`. If it isn't
+published, say so plainly and why, and link the run.
