@@ -24,6 +24,7 @@ use crate::{
         commands::CommandKind,
         config::{Config, TITLE},
         effect::EffectKind,
+        metronome::Metronome,
         midi::{
             CC_MAX, MAX_SPEED, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX,
             bytes_to_message, non_note_on_channel,
@@ -48,7 +49,7 @@ use crate::{
         framework::{
             core_extensions::Boxed,
             dialog::{Dialog, InfoLevel},
-            keymap::HelpSection,
+            keymap::{HelpSection, Keymap},
             widget::MtrakWidget,
             widgets::container::Container,
         },
@@ -58,7 +59,7 @@ use crate::{
         views::{
             file_browser::{FileBrowser, Submit},
             keybindings,
-            main_view::MainView,
+            main_view::{MainAction, MainView, global_keymap},
         },
     },
 };
@@ -84,6 +85,7 @@ pub struct App {
     pub dialogs: Vec<Dialog>,
     pub file_browser: FileBrowser,
 
+    global_keys: Keymap<MainAction>,
     held_keys: HashSet<KeyCode>,
     reports_releases: bool,
 }
@@ -102,6 +104,7 @@ impl App {
             root: Container::new(MainView::new().boxed(), Padding::ZERO),
             dialogs: Vec::new(),
             file_browser: FileBrowser::new(),
+            global_keys: global_keymap(),
             held_keys: HashSet::new(),
             reports_releases: false,
             state,
@@ -119,6 +122,10 @@ impl App {
                 if key.kind == KeyEventKind::Release {
                     continue;
                 }
+            }
+            if self.plays_pattern_over_dialog(&event) {
+                self.state.play_pattern(self.state.active_pattern);
+                continue;
             }
             match self.dialogs.last_mut() {
                 Some(dialog) => dialog.handle_event(&mut self.state, &event),
@@ -205,6 +212,14 @@ impl App {
             .saturating_sub(4)
             .min(u8::MAX as u16) as u8;
     }
+    fn plays_pattern_over_dialog(&self, event: &Event) -> bool {
+        let (Event::Key(key), Some(dialog)) = (event, self.dialogs.last()) else {
+            return false;
+        };
+        return !dialog.takes_all_keys()
+            && self.global_keys.lookup(key) == Some(MainAction::PlayPattern);
+    }
+
     /// Marks presses of keys that are still held as repeats.
     fn mark_repeat(&mut self, key: &mut KeyEvent) {
         match key.kind {
@@ -464,6 +479,8 @@ pub struct AppState {
     pub channel_hits: [Option<ChannelHit>; MIDI_CHANNEL_MAX as usize + 1],
     pub current_octave: u8,
     pub recording: bool,
+    /// The pattern and first and last row of the block loop playing, or last played.
+    pub loop_block: Option<(PatternId, usize, usize)>,
     pub header_collapsed: bool,
     /// Where the project was last loaded from or saved to, so saving again skips the browser.
     pub project_path: Option<PathBuf>,
@@ -539,6 +556,7 @@ impl AppState {
             active_pattern: PatternId(0),
             current_octave: 4,
             recording: false,
+            loop_block: None,
             header_collapsed: false,
             project_path: None,
             line_add: 1,
@@ -569,6 +587,7 @@ impl AppState {
             .engine
             .set_global_velocity(state.project.global_velocity);
         state.engine.set_midi_clock(state.project.send_midi_clock);
+        state.engine.set_metronome(state.project.metronome);
         state.restore_midi_output();
         state.restore_midi_input();
         state.restore_clock_input();
@@ -1023,10 +1042,7 @@ impl AppState {
             return;
         }
         self.show_sequence(index);
-        if matches!(
-            self.engine.status().play_mode(),
-            PlayMode::SongLoop | PlayMode::Song
-        ) {
+        if matches!(self.engine.status().play_mode(), PlayMode::Song) {
             self.send_changes_to_engine();
             self.engine.jump_to_sequence(index);
         }
@@ -1063,13 +1079,21 @@ impl AppState {
 
     pub fn play_song(&mut self, sequence_index: usize) {
         self.send_all_to_engine();
-        self.engine.play_song(sequence_index, !self.recording);
+        self.engine.play_song(sequence_index);
         self.playback_start_time = Some(Instant::now());
     }
 
     pub fn play_pattern(&mut self, id: PatternId) {
         self.send_all_to_engine();
-        self.engine.play_pattern(id, !self.recording);
+        self.engine.play_pattern(id);
+        self.playback_start_time = Some(Instant::now());
+    }
+
+    pub fn play_block(&mut self, first_row: usize, last_row: usize) {
+        self.send_all_to_engine();
+        self.engine
+            .play_block(self.active_pattern, first_row, last_row);
+        self.loop_block = Some((self.active_pattern, first_row, last_row));
         self.playback_start_time = Some(Instant::now());
     }
     pub fn set_octave(&mut self, octave: u8) {
@@ -1095,6 +1119,20 @@ impl AppState {
             note.velocity = vel.or(note.velocity);
         });
     }
+    pub fn is_live_recording(&self) -> bool {
+        return self.recording && self.engine.status().play_mode() != PlayMode::Paused;
+    }
+    pub fn record_note(&mut self, track: usize, pitch: NotePitch, vel: Option<u8>) {
+        let (pattern, row) = self.engine.status().record_position();
+        let pattern = PatternId(pattern as u8);
+        let instrument = self.active_instrument;
+        self.edit_event_in(pattern, row, track, |note| {
+            note.kind = NoteKind::On(pitch);
+            note.instrument_id = Some(instrument);
+            note.velocity = vel.or(note.velocity);
+        });
+        self.engine.skip_recorded_note(pattern, row, track);
+    }
     pub fn play_key(&self, track: usize, key: KeyEvent) -> Option<NotePitch> {
         if !key.modifiers.is_empty() {
             return None;
@@ -1115,7 +1153,22 @@ impl AppState {
 
     /// Applies `edit` to the event at `row` in `track` of the active pattern.
     pub fn edit_event(&mut self, row: usize, track: usize, edit: impl FnOnce(&mut Note)) {
-        let Some(&previous_cell) = self.active_pattern().get_event(row, track) else {
+        self.edit_event_in(self.active_pattern, row, track, edit);
+    }
+
+    pub fn edit_event_in(
+        &mut self,
+        pattern: PatternId,
+        row: usize,
+        track: usize,
+        edit: impl FnOnce(&mut Note),
+    ) {
+        let Some(&previous_cell) = self
+            .project
+            .patterns
+            .get_pattern_by_id(pattern)
+            .and_then(|p| p.get_event(row, track))
+        else {
             return;
         };
         let mut new_cell = previous_cell;
@@ -1124,7 +1177,7 @@ impl AppState {
             return;
         }
         self.track_and_do(AppStateAction::EditCell {
-            pattern: self.active_pattern,
+            pattern,
             row,
             track,
             previous_cell,
@@ -1169,6 +1222,16 @@ impl AppState {
 
     pub fn decrease_bpm(&mut self) {
         self.set_bpm(self.project.bpm.saturating_sub(1).max(1));
+    }
+
+    pub fn set_metronome(&mut self, metronome: Metronome) {
+        self.project_mut().metronome = metronome;
+        self.engine.set_metronome(metronome);
+    }
+
+    pub fn toggle_recording(&mut self) {
+        self.recording = !self.recording;
+        self.engine.set_recording(self.recording);
     }
 
     pub fn set_global_velocity(&mut self, velocity: u8) {
@@ -1504,10 +1567,7 @@ impl AppState {
 
     /// While a pattern plays, carries playback on in the active pattern, as in FT2.
     fn switch_playing_pattern(&mut self) {
-        if matches!(
-            self.engine.status().play_mode(),
-            PlayMode::PatternLoop | PlayMode::Pattern
-        ) {
+        if matches!(self.engine.status().play_mode(), PlayMode::Pattern) {
             self.send_changes_to_engine();
             self.engine.switch_pattern(self.active_pattern);
         }

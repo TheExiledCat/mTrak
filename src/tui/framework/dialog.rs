@@ -6,7 +6,10 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Padding, Paragraph, Widget},
+    widgets::{
+        Block, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        StatefulWidget, Widget,
+    },
 };
 
 use crate::{
@@ -36,6 +39,7 @@ pub enum DialogValue {
     Text(String),
     Bool(bool),
     Choice(usize),
+    Checks(Vec<bool>),
     Number(i32),
     Color(Color),
     /// The last button pressed in a row of buttons, and how many presses there have been.
@@ -90,6 +94,13 @@ impl DialogResult {
     }
 
     /// The button of a row of buttons that was pressed last, if any was.
+    pub fn checks(&self, id: &str) -> Option<Vec<bool>> {
+        return match self.get(id)? {
+            DialogValue::Checks(checks) => Some(checks.clone()),
+            _ => None,
+        };
+    }
+
     pub fn pressed(&self, id: &str) -> Option<usize> {
         return match self.values.get(id) {
             Some(DialogValue::Press { button, count }) if *count > 0 => Some(*button),
@@ -376,6 +387,8 @@ impl Dialog {
             dialog
                 .help_section("Dialogs")
                 .entries(select.keys.help_entries(Select::describe))
+                .entries(open_list_keys(Keymap::new("dialog")).help_entries(Select::describe))
+                .entries(toggle_option_key(Keymap::new("dialog")).help_entries(Select::describe))
                 .entries(checkbox.keys.help_entries(Checkbox::describe))
                 .entries(buttons.keys.help_entries(Buttons::describe))
                 .entries(number.keys.help_entries(NumberBox::describe))
@@ -386,6 +399,13 @@ impl Dialog {
                 )
                 .entry("Bksp", "Delete the last character of a text field"),
         );
+    }
+
+    /// Whether the focused field wants every key, like one waiting for a key to bind.
+    pub fn takes_all_keys(&self) -> bool {
+        return self
+            .focus
+            .is_some_and(|index| self.components[index].takes_all_keys());
     }
 
     pub fn is_closed(&self) -> bool {
@@ -962,7 +982,13 @@ impl NumberBox {
             focused: false,
             keys: Keymap::new("dialog")
                 .bind(Key::plain(KeyCode::Up), NumberBoxAction::Increment, "+/-")
-                .bind(Key::plain(KeyCode::Down), NumberBoxAction::Decrement, "+/-"),
+                .bind(Key::plain(KeyCode::Down), NumberBoxAction::Decrement, "+/-")
+                .bind(Key::plain(KeyCode::PageUp), NumberBoxAction::StepUp, "Step")
+                .bind(
+                    Key::plain(KeyCode::PageDown),
+                    NumberBoxAction::StepDown,
+                    "Step",
+                ),
         };
         number.set(0);
         return number;
@@ -994,7 +1020,7 @@ impl NumberBox {
         return self;
     }
 
-    /// Lets Left and Right move the value in bigger steps.
+    /// Lets Left and Right move the value in bigger steps too, like PgUp and PgDn.
     pub fn steps(mut self) -> Self {
         self.keys = self
             .keys
@@ -1409,7 +1435,7 @@ impl DialogComponent for Checkbox {
     }
 }
 
-/// A dropdown that lists its options on top of everything else when focused.
+/// A dropdown. Up and Down change it in place; Space opens the whole list on top of the dialog.
 pub struct Select {
     id: &'static str,
     label: Option<String>,
@@ -1417,18 +1443,30 @@ pub struct Select {
     selected: usize,
     offset: usize,
     max_visible: u8,
+    /// Defaults to the list's height.
+    page_step: Option<usize>,
     focused: bool,
+    checks: Option<Vec<bool>>,
+    /// What was picked and ticked when the list opened, which Esc goes back to.
+    open: Option<(usize, Option<Vec<bool>>)>,
     area: Rect,
     /// The digits typed so far, to pick options past the first digit.
     typed: String,
     typed_from: usize,
     keys: Keymap<SelectAction>,
+    open_keys: Keymap<SelectAction>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SelectAction {
     Up,
     Down,
+    PageUp,
+    PageDown,
+    OpenList,
+    PickOption,
+    CloseList,
+    ToggleOption,
 }
 
 impl Action for SelectAction {}
@@ -1442,13 +1480,15 @@ impl Select {
             selected: 0,
             offset: 0,
             max_visible: 8,
+            page_step: None,
             focused: false,
+            checks: None,
+            open: None,
             area: Rect::default(),
             typed: String::new(),
             typed_from: 0,
-            keys: Keymap::new("dialog")
-                .bind(Key::plain(KeyCode::Up), SelectAction::Up, "Choose")
-                .bind(Key::plain(KeyCode::Down), SelectAction::Down, "Choose"),
+            keys: closed_list_keys(),
+            open_keys: open_list_keys(select_keys()),
         };
     }
 
@@ -1465,6 +1505,59 @@ impl Select {
     pub fn max_visible(mut self, rows: u8) -> Self {
         self.max_visible = rows.max(1);
         return self;
+    }
+
+    pub fn page_step(mut self, options: usize) -> Self {
+        self.page_step = Some(options.max(1));
+        return self;
+    }
+
+    pub fn checkboxes(mut self, checks: Vec<bool>) -> Self {
+        let mut checks = checks;
+        checks.resize(self.options.len(), false);
+        self.checks = Some(checks);
+        self.keys = toggle_option_key(closed_list_keys());
+        self.open_keys = toggle_option_key(open_list_keys(select_keys()));
+        return self;
+    }
+
+    fn is_open(&self) -> bool {
+        return self.open.is_some();
+    }
+
+    fn option_text(&self, index: usize) -> String {
+        let option = &self.options[index];
+        return match &self.checks {
+            Some(checks) if checks[index] => format!("[x] {option}"),
+            Some(_) => format!("[ ] {option}"),
+            None => option.clone(),
+        };
+    }
+
+    /// The first word of every ticked option, e.g. `9, A`.
+    fn ticked_summary(&self) -> Option<String> {
+        let checks = self.checks.as_ref()?;
+        let ticked: Vec<&str> = self
+            .options
+            .iter()
+            .zip(checks)
+            .filter(|(_, checked)| **checked)
+            .map(|(option, _)| option.split_whitespace().next().unwrap_or(option))
+            .collect();
+        return Some(match ticked.is_empty() {
+            true => "none on".to_owned(),
+            false => format!("on: {}", ticked.join(", ")),
+        });
+    }
+
+    fn arrows(&self) -> &'static str {
+        let last = self.options.len().saturating_sub(1);
+        return match (self.selected > 0, self.selected < last) {
+            (true, true) => glyphs::pick("\u{2195}", "^v"),
+            (false, true) => glyphs::pick("\u{25BC}", " v"),
+            (true, false) => glyphs::pick("\u{25B2}", "^ "),
+            (false, false) => glyphs::pick(" ", "  "),
+        };
     }
 
     /// Typing a number picks the option this many places further down, for lists that start
@@ -1526,20 +1619,66 @@ impl Select {
     }
 }
 
+fn closed_list_keys() -> Keymap<SelectAction> {
+    return select_keys().bind(Key::char(' '), SelectAction::OpenList, "Open");
+}
+
+fn toggle_option_key(keys: Keymap<SelectAction>) -> Keymap<SelectAction> {
+    return keys.bind(Key::char('x'), SelectAction::ToggleOption, "Toggle");
+}
+
+fn open_list_keys(keys: Keymap<SelectAction>) -> Keymap<SelectAction> {
+    return keys
+        .bind(Key::char(' '), SelectAction::PickOption, "Pick")
+        .bind(Key::plain(KeyCode::Enter), SelectAction::PickOption, "Pick")
+        .bind(Key::plain(KeyCode::Esc), SelectAction::CloseList, "Back");
+}
+
+fn select_keys() -> Keymap<SelectAction> {
+    return Keymap::new("dialog")
+        .bind(Key::plain(KeyCode::Up), SelectAction::Up, "Choose")
+        .bind(Key::plain(KeyCode::Down), SelectAction::Down, "Choose")
+        .bind(Key::plain(KeyCode::PageUp), SelectAction::PageUp, "Page")
+        .bind(
+            Key::plain(KeyCode::PageDown),
+            SelectAction::PageDown,
+            "Page",
+        );
+}
+
 impl KeyActions for Select {
     type Action = SelectAction;
 
     fn keymap(&self) -> &Keymap<SelectAction> {
+        if self.is_open() {
+            return &self.open_keys;
+        }
         return &self.keys;
     }
 
     fn perform(&mut self, action: SelectAction, _state: &mut AppState) -> Result<()> {
         self.typed.clear();
         let last = self.options.len().saturating_sub(1);
-        self.selected = match action {
-            SelectAction::Up => self.selected.saturating_sub(1),
-            SelectAction::Down => (self.selected + 1).min(last),
-        };
+        let page = self.page_step.unwrap_or(self.max_visible as usize);
+        match action {
+            SelectAction::Up => self.selected = self.selected.saturating_sub(1),
+            SelectAction::Down => self.selected = (self.selected + 1).min(last),
+            SelectAction::PageUp => self.selected = self.selected.saturating_sub(page),
+            SelectAction::PageDown => self.selected = (self.selected + page).min(last),
+            SelectAction::OpenList => self.open = Some((self.selected, self.checks.clone())),
+            SelectAction::PickOption => self.open = None,
+            SelectAction::CloseList => {
+                if let Some((selected, checks)) = self.open.take() {
+                    self.selected = selected;
+                    self.checks = checks;
+                }
+            }
+            SelectAction::ToggleOption => {
+                if let Some(checked) = self.checks.as_mut().and_then(|c| c.get_mut(self.selected)) {
+                    *checked = !*checked;
+                }
+            }
+        }
         return Ok(());
     }
 
@@ -1547,6 +1686,12 @@ impl KeyActions for Select {
         return match action {
             SelectAction::Up => "Previous option",
             SelectAction::Down => "Next option",
+            SelectAction::PageUp => "Move up a page of options, or an octave of notes",
+            SelectAction::PageDown => "Move down a page of options, or an octave of notes",
+            SelectAction::OpenList => "Open a dropdown's list",
+            SelectAction::PickOption => "Pick the highlighted option and close the list",
+            SelectAction::CloseList => "Close the list without changing the option",
+            SelectAction::ToggleOption => "Tick or untick the option in a dropdown with checkboxes",
         };
     }
 }
@@ -1597,22 +1742,27 @@ impl MtrakWidget for Select {
         } else {
             state.theme.highlight
         };
-        let text = self
-            .options
-            .get(self.selected)
-            .map_or("(none)", |s| s.as_str());
-        let [text_area, arrow_area] =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(2)]).areas(area);
+        let text = match self.selected < self.options.len() {
+            true => self.option_text(self.selected),
+            false => "(none)".to_owned(),
+        };
+        let summary = self.ticked_summary().unwrap_or_default();
+        let [text_area, summary_area, arrow_area] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(summary.chars().count() as u16 + 1),
+            Constraint::Length(3),
+        ])
+        .areas(area);
         buf.set_style(area, style);
         Line::from(format!(" {text}")).render(text_area, buf);
-        let arrow = if self.focused { "▴" } else { "▾" };
-        Line::from(arrow).render(arrow_area, buf);
+        Line::from(summary).render(summary_area, buf);
+        Line::from(self.arrows()).render(arrow_area, buf);
     }
 }
 
 impl DialogComponent for Select {
     fn render_overlay(&mut self, state: &AppState, bounds: Rect, buf: &mut Buffer) {
-        if !self.focused || self.options.is_empty() {
+        if !self.focused || !self.is_open() || self.options.is_empty() {
             return;
         }
         let popup = self.list_area(bounds);
@@ -1628,6 +1778,8 @@ impl DialogComponent for Select {
 
         // scroll just enough to keep the selection in view
         let visible = list_area.height as usize;
+        let overflows = self.options.len() > visible;
+        let text_width = list_area.width - overflows as u16;
         if self.selected < self.offset {
             self.offset = self.selected;
         } else if self.selected >= self.offset + visible {
@@ -1641,40 +1793,49 @@ impl DialogComponent for Select {
             };
             let line_area = Rect {
                 y: list_area.y + row as u16,
+                width: text_width,
                 height: 1,
                 ..list_area
             };
             buf.set_style(line_area, style);
-            Line::from(format!(" {}", self.options[index])).render(line_area, buf);
+            Line::from(format!(" {}", self.option_text(index))).render(line_area, buf);
         }
-        if self.offset > 0 {
-            buf.set_string(popup.right() - 2, popup.y, "▴", state.theme.border);
+        if overflows {
+            let last_offset = self.options.len() - visible;
+            let mut scroll = ScrollbarState::new(last_offset + 1).position(self.offset);
+            Scrollbar::new(ScrollbarOrientation::VerticalRight).render(list_area, buf, &mut scroll);
         }
-        if self.offset + visible < self.options.len() {
-            buf.set_string(
-                popup.right() - 2,
-                popup.bottom() - 1,
-                "▾",
-                state.theme.border,
-            );
-        }
+    }
+    fn takes_keys_first(&self) -> bool {
+        return self.is_open();
     }
     fn focusable(&self) -> bool {
         return !self.options.is_empty();
     }
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        self.open = None;
         self.typed.clear();
     }
     fn value(&self) -> Option<(&'static str, DialogValue)> {
         if self.options.is_empty() {
             return None;
         }
+        if let Some(checks) = &self.checks {
+            return Some((self.id, DialogValue::Checks(checks.clone())));
+        }
         return Some((self.id, DialogValue::Choice(self.selected)));
     }
     fn set_value(&mut self, value: DialogValue) {
-        if let DialogValue::Choice(index) = value {
-            self.selected = index.min(self.options.len().saturating_sub(1));
+        match value {
+            DialogValue::Choice(index) => {
+                self.selected = index.min(self.options.len().saturating_sub(1));
+            }
+            DialogValue::Checks(mut checks) if self.checks.is_some() => {
+                checks.resize(self.options.len(), false);
+                self.checks = Some(checks);
+            }
+            _ => {}
         }
     }
 }
@@ -2119,5 +2280,75 @@ mod tests {
                 .range(self.min, self.max)
                 .value(value);
         }
+    }
+
+    fn dropdown_dialog(select: Select) -> (AppState, Dialog) {
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let dialog = Dialog::new("", vec![select.boxed()]).focus_first();
+        return (state, dialog);
+    }
+
+    fn press(dialog: &mut Dialog, state: &mut AppState, code: KeyCode) {
+        use ratatui::crossterm::event::KeyEvent;
+
+        dialog.handle_event(state, &Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    fn choice(dialog: &Dialog) -> Option<usize> {
+        return dialog.result().choice("s");
+    }
+
+    #[test]
+    fn up_and_down_change_a_dropdown_without_opening_it() {
+        let (mut state, mut dialog) = dropdown_dialog(Select::new("s", vec!["a", "b", "c"]));
+        press(&mut dialog, &mut state, KeyCode::Down);
+        press(&mut dialog, &mut state, KeyCode::Down);
+        assert_eq!(choice(&dialog), Some(2));
+        press(&mut dialog, &mut state, KeyCode::Enter);
+        assert!(dialog.is_closed());
+    }
+
+    #[test]
+    fn space_opens_the_list_and_esc_puts_the_option_back() {
+        let (mut state, mut dialog) = dropdown_dialog(Select::new("s", vec!["a", "b", "c"]));
+        press(&mut dialog, &mut state, KeyCode::Char(' '));
+        press(&mut dialog, &mut state, KeyCode::Down);
+        press(&mut dialog, &mut state, KeyCode::Esc);
+        assert!(!dialog.is_closed());
+        assert_eq!(choice(&dialog), Some(0));
+        press(&mut dialog, &mut state, KeyCode::Char(' '));
+        press(&mut dialog, &mut state, KeyCode::Down);
+        press(&mut dialog, &mut state, KeyCode::Enter);
+        assert!(!dialog.is_closed());
+        assert_eq!(choice(&dialog), Some(1));
+    }
+
+    #[test]
+    fn page_keys_move_by_the_page_step() {
+        let notes: Vec<String> = (0..40).map(|i| i.to_string()).collect();
+        let (mut state, mut dialog) = dropdown_dialog(Select::new("s", notes).page_step(12));
+        press(&mut dialog, &mut state, KeyCode::PageDown);
+        press(&mut dialog, &mut state, KeyCode::PageDown);
+        assert_eq!(choice(&dialog), Some(24));
+        press(&mut dialog, &mut state, KeyCode::PageUp);
+        assert_eq!(choice(&dialog), Some(12));
+    }
+
+    #[test]
+    fn x_ticks_options_and_esc_in_the_list_undoes_it() {
+        let select = Select::new("s", vec!["a", "b", "c"]).checkboxes(vec![false, true, false]);
+        let (mut state, mut dialog) = dropdown_dialog(select);
+        let checks = |dialog: &Dialog| dialog.result().checks("s").unwrap();
+        press(&mut dialog, &mut state, KeyCode::Char('x'));
+        assert_eq!(checks(&dialog), vec![true, true, false]);
+        press(&mut dialog, &mut state, KeyCode::Char(' '));
+        press(&mut dialog, &mut state, KeyCode::Down);
+        press(&mut dialog, &mut state, KeyCode::Char('x'));
+        assert_eq!(checks(&dialog), vec![true, false, false]);
+        press(&mut dialog, &mut state, KeyCode::Esc);
+        assert_eq!(checks(&dialog), vec![true, true, false]);
+        assert!(!dialog.is_closed());
     }
 }

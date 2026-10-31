@@ -6,6 +6,7 @@ use crate::{
     data::{
         commands::{CommandKind, PlaybackAction},
         instrument::Instrument,
+        metronome::Metronome,
         midi::{DEFAULT_BPM, DEFAULT_SPEED, MIDI_CHANNEL_MAX, PULSES_PER_QUARTER},
         migration::{self, FIRST_MESSAGEPACK_VERSION, PROJECT_VERSION},
         note::{Note, NoteKind},
@@ -59,6 +60,7 @@ pub struct Project {
     pub record_input_velocity: bool,
     pub midi_output: Option<String>,
     pub send_midi_clock: bool,
+    pub metronome: Metronome,
     pub sequence: Vec<SequenceRow>,
     pub instruments: [Instrument; MIDI_CHANNEL_MAX as usize + 1],
     pub patterns: PatternStore,
@@ -103,6 +105,7 @@ impl Project {
             record_input_velocity: false,
             midi_output: None,
             send_midi_clock: false,
+            metronome: Metronome::new(),
         };
     }
     pub fn load(project_file_path: PathBuf) -> Result<Self> {
@@ -217,31 +220,66 @@ impl Project {
 
     /// The rows the song plays and how long it takes, following its tempo commands like the
     /// engine does: a command changes the tempo from its own row on, the last track's winning,
-    /// and the change carries over into the patterns after it.
+    /// and the change carries over into the patterns after it. A stop or a jump back counts as
+    /// the end, since from there the song just loops.
     fn play_time(&self) -> (u32, Duration) {
         let (mut bpm, mut speed) = (self.bpm, self.speed);
         let (mut rows, mut seconds) = (0, 0.0);
-        for position in &self.sequence {
+        let (mut index, mut repeat, mut first_row) = (0, 0, 0);
+        while let Some(position) = self.sequence.get(index) {
             let Some(pattern) = self.patterns.get_pattern_by_id(position.pattern_id) else {
+                (index, repeat, first_row) = (index + 1, 0, 0);
                 continue;
             };
-            for _ in 0..position.repeats {
-                for row in &pattern.rows {
-                    for note in &row.tracks {
-                        let CommandKind::Playback(command) = note.command.kind else {
-                            continue;
-                        };
-                        match command.decode(note.command.value) {
-                            PlaybackAction::ResetTempo => (bpm, speed) = (self.bpm, self.speed),
-                            PlaybackAction::SetSpeed(new) => speed = new,
-                            PlaybackAction::SetBpm(new) => bpm = new,
-                            _ => {}
-                        }
+            let mut next = None;
+            for row in pattern.rows.iter().skip(first_row) {
+                let (mut jump, mut break_row, mut delay, mut stop) = (None, None, 0, false);
+                for note in &row.tracks {
+                    let CommandKind::Playback(command) = note.command.kind else {
+                        continue;
+                    };
+                    match command.decode(note.command.value) {
+                        PlaybackAction::ResetTempo => (bpm, speed) = (self.bpm, self.speed),
+                        PlaybackAction::SetSpeed(new) => speed = new,
+                        PlaybackAction::SetBpm(new) => bpm = new,
+                        PlaybackAction::PositionJump(target) => jump = Some(target as usize),
+                        PlaybackAction::PatternBreak(target) => break_row = Some(target as usize),
+                        PlaybackAction::PatternDelay(rows) => delay = delay.max(rows),
+                        PlaybackAction::StopSong => stop = true,
+                        _ => {}
                     }
-                    rows += 1;
-                    let beats = speed.max(1) as f64 / PULSES_PER_QUARTER as f64;
-                    seconds += beats * 60.0 / bpm.max(1) as f64;
                 }
+                rows += 1;
+                let beats = speed.max(1) as f64 / PULSES_PER_QUARTER as f64;
+                seconds += beats * 60.0 / bpm.max(1) as f64 * (1 + delay) as f64;
+                if stop {
+                    return (rows, Duration::from_secs_f64(seconds));
+                }
+                if jump.is_some() || break_row.is_some() {
+                    next = Some((jump, break_row.unwrap_or(0)));
+                    break;
+                }
+            }
+            (index, repeat, first_row) = match next {
+                Some((Some(target), _)) if target <= index || target >= self.sequence.len() => {
+                    break;
+                }
+                Some((Some(target), row)) => (target, 0, row),
+                Some((None, row)) if repeat + 1 < position.repeats => (index, repeat + 1, row),
+                Some((None, row)) => (index + 1, 0, row),
+                None if repeat + 1 < position.repeats => (index, repeat + 1, 0),
+                None => (index + 1, 0, 0),
+            };
+            if self
+                .patterns
+                .get_pattern_by_id(
+                    self.sequence
+                        .get(index)
+                        .map_or(PatternId(0), |p| p.pattern_id),
+                )
+                .is_some_and(|pattern| first_row >= pattern.rows.len())
+            {
+                first_row = 0;
             }
         }
         return (rows, Duration::from_secs_f64(seconds));
@@ -266,6 +304,7 @@ mod tests {
     use super::*;
     use crate::data::{
         effect::{EffectKind, EffectSettings},
+        metronome::MetronomeMode,
         note::{Note, NoteKind, NotePitch},
     };
 
@@ -305,6 +344,15 @@ mod tests {
         project.record_input_velocity = true;
         project.midi_output = Some("Test Synth".into());
         project.send_midi_clock = true;
+        project.metronome = Metronome {
+            mode: MetronomeMode::Recording,
+            channels: 0b1000_0000_0000_0011,
+            accent_note: 37,
+            accent_velocity: 0x70,
+            beat_note: 42,
+            beat_velocity: 0x40,
+            beats_per_bar: 3,
+        };
         project.sequence[0].repeats = 2;
         project.insert_sequence(1, PatternId(1));
 
@@ -419,6 +467,47 @@ mod tests {
             stats.outside_song, 1,
             "pattern 3; patterns 1 and 2 are empty"
         );
+    }
+
+    fn two_pattern_song(cells: &[(u8, usize, &str)]) -> Project {
+        let mut project = Project::empty();
+        project.bpm = 120;
+        project.speed = 6;
+        project.insert_sequence(1, PatternId(1));
+        project
+            .patterns
+            .create_pattern_id_if_not_exists(PatternId(1));
+        for id in 0..2 {
+            let pattern = project
+                .patterns
+                .get_pattern_by_id_mut(PatternId(id))
+                .unwrap();
+            pattern.set_length(4);
+        }
+        for (id, row, command) in cells {
+            let note = Note::new(NoteKind::Empty, None, None, command.parse().unwrap());
+            let pattern = project
+                .patterns
+                .get_pattern_by_id_mut(PatternId(*id))
+                .unwrap();
+            pattern.set_event(*row, 0, note);
+        }
+        return project;
+    }
+
+    #[test]
+    fn song_length_follows_breaks_and_delays() {
+        let project = two_pattern_song(&[(0, 1, "D02"), (1, 2, "EE1")]);
+        let stats = project.stats();
+        assert_eq!(stats.song_rows, 4);
+        assert!((stats.song_length.as_secs_f64() - 5.0 * 0.125).abs() < 1e-6);
+    }
+
+    #[test]
+    fn song_length_ends_on_a_stop_or_a_jump_back() {
+        assert_eq!(two_pattern_song(&[(1, 1, "EF0")]).stats().song_rows, 6);
+        assert_eq!(two_pattern_song(&[(1, 2, "B00")]).stats().song_rows, 7);
+        assert_eq!(two_pattern_song(&[(0, 0, "B01")]).stats().song_rows, 5);
     }
 
     #[test]

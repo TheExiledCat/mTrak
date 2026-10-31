@@ -4,7 +4,13 @@ pub mod envelope;
 pub mod eq;
 pub mod harmonizer;
 pub mod lfo;
+pub mod note_to_cc;
+pub mod probability;
+pub mod randomizer;
+pub mod scale;
+pub mod swing;
 use midi::{Channel, Message, U7};
+use num::FromPrimitive;
 
 use crate::{
     data::{
@@ -12,9 +18,14 @@ use crate::{
         midi::{CC_MAX, PITCH_MAX, PULSES_PER_QUARTER},
         note::{NotePitch, SEMITONES_PER_OCTAVE},
     },
-    engine::effects::{
-        arp::ArpeggiatorEffect, echo::EchoEffect, envelope::EnvelopeEffect, eq::EqEffect,
-        harmonizer::Harmonizer, lfo::LfoEffect,
+    engine::{
+        effects::{
+            arp::ArpeggiatorEffect, echo::EchoEffect, envelope::EnvelopeEffect, eq::EqEffect,
+            harmonizer::Harmonizer, lfo::LfoEffect, note_to_cc::NoteToCcEffect,
+            probability::ProbabilityEffect, randomizer::RandomizerEffect, scale::ScaleEffect,
+            swing::SwingEffect,
+        },
+        notes::{MIDI_CHANNEL_COUNT, PITCH_COUNT},
     },
     tui::framework::core_extensions::Boxed,
 };
@@ -29,6 +40,11 @@ pub fn create_effect(settings: &EffectSettings) -> Box<dyn MidiEffect> {
         EffectKind::Lfo => LfoEffect::new().boxed(),
         EffectKind::Echo => EchoEffect::new().boxed(),
         EffectKind::Envelope => EnvelopeEffect::new().boxed(),
+        EffectKind::Swing => SwingEffect::new().boxed(),
+        EffectKind::Randomize => RandomizerEffect::new().boxed(),
+        EffectKind::Scale => ScaleEffect::new().boxed(),
+        EffectKind::NoteToCc => NoteToCcEffect::new().boxed(),
+        EffectKind::Probability => ProbabilityEffect::new().boxed(),
     };
     for (index, (param, value)) in effect.params().iter().zip(&settings.values).enumerate() {
         effect.set_param(index, param.kind.clamp(*value));
@@ -478,6 +494,45 @@ pub fn note_event(message: &Message) -> Option<NoteEvent> {
         },
         _ => return None,
     });
+}
+
+/// Lets a note off follow its note to wherever an effect moved it.
+pub struct SentPitches {
+    pitches: [[Option<u8>; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
+}
+impl SentPitches {
+    pub fn new() -> Self {
+        return Self {
+            pitches: [[None; PITCH_COUNT]; MIDI_CHANNEL_COUNT],
+        };
+    }
+
+    pub fn note_on(&mut self, channel: Channel, played: u8, sent: u8) {
+        self.pitches[channel as usize][played as usize] = Some(sent);
+    }
+    pub fn note_off(&mut self, channel: Channel, played: u8) -> u8 {
+        return self.pitches[channel as usize][played as usize]
+            .take()
+            .unwrap_or(played);
+    }
+    /// Only the moved notes need it: the rest still get their own note off from upstream.
+    pub fn release_changed(&mut self, out: &mut Vec<Message>) {
+        for (channel, pitches) in self.pitches.iter_mut().enumerate() {
+            for (played, sent) in pitches.iter_mut().enumerate() {
+                if let Some(sent) = sent.take()
+                    && sent as usize != played
+                {
+                    let channel = Channel::from_usize(channel).unwrap();
+                    out.push(Message::NoteOff(channel, sent, 0));
+                }
+            }
+        }
+    }
+}
+impl Default for SentPitches {
+    fn default() -> Self {
+        return Self::new();
+    }
 }
 
 fn percent(value: i32, full: i32) -> String {

@@ -2,7 +2,7 @@ use std::iter::repeat_n;
 
 use ratatui::{
     buffer::Buffer,
-    crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers},
+    crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     layout::{Constraint, Layout, Rect},
     style::Style,
     symbols::line,
@@ -127,6 +127,7 @@ pub enum TimelineAction {
     },
 
     RowLock,
+    LoopBlock,
 }
 
 impl Action for TimelineAction {
@@ -278,6 +279,7 @@ fn normal_keymap() -> Keymap<TimelineAction> {
         Keymap::new("pattern")
             .bind(Key::char(' '), ToggleEdit, "Edit")
             .bind(Key::ctrl('l'), RowLock, "Lock")
+            .bind(Key::ctrl('b'), LoopBlock, "Loop")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
             .bind(Key::char(NOTE_OFF_KEY), NoteOff, "Off"),
     )));
@@ -289,6 +291,7 @@ fn edit_keymap() -> Keymap<TimelineAction> {
         Keymap::new("pattern")
             .bind(Key::char(' '), ToggleEdit, "Edit")
             .bind(Key::ctrl('l'), RowLock, "Lock")
+            .bind(Key::ctrl('b'), LoopBlock, "Loop")
             .bind(Key::plain(KeyCode::Esc), ToggleRecord, "Rec")
             .bind(Key::char(NOTE_OFF_KEY), NoteOff, "Off")
             .bind(Key::plain(KeyCode::Delete), DeleteAtCursor, "Del")
@@ -541,7 +544,9 @@ impl TimeLineView {
                         NotePitch::new(note),
                         vel.unwrap_or(VELOCITY_MAX),
                     );
-                    if self.is_editing {
+                    if state.is_live_recording() {
+                        state.record_note(self.track_index as usize, NotePitch::new(note), vel);
+                    } else if self.is_editing {
                         state.enter_note(
                             state.active_instrument,
                             self.track_index as usize,
@@ -616,10 +621,10 @@ impl KeyActions for TimeLineView {
                 }
             }
             TimelineAction::ToggleRecord => {
-                if state.engine.status().play_mode() == PlayMode::Paused {
-                    state.recording = !state.recording;
-                } else if self.row_lock {
+                if self.row_lock && state.engine.status().play_mode() != PlayMode::Paused {
                     state.engine.stop();
+                } else {
+                    state.toggle_recording();
                 }
             }
             TimelineAction::Jump16Down => {
@@ -781,6 +786,18 @@ impl KeyActions for TimeLineView {
                 all_instruments,
                 delta,
             } => self.transpose(state, area, all_instruments, delta),
+            TimelineAction::LoopBlock => {
+                if state.engine.status().play_mode() == PlayMode::Block {
+                    state.engine.end_block_loop();
+                    return Ok(());
+                }
+                let Some(block) = self.marked_block(state) else {
+                    state.notify("NO BLCK");
+                    return Ok(());
+                };
+                let first_row = block.row as usize;
+                state.play_block(first_row, first_row + block.height as usize - 1);
+            }
             TimelineAction::RowLock => {
                 self.row_lock = !self.row_lock;
                 if self.row_lock {
@@ -802,6 +819,7 @@ impl KeyActions for TimeLineView {
             NextColumn => "Move right a column",
             ToggleEdit => "Toggle edit mode, or stop playback outside of row lock",
             ToggleRecord => "Toggle record mode, or stop playback during row lock",
+            LoopBlock => "Loop the rows of the marked block, or play on past them while looping",
             Jump16Down => "Jump 16 rows down",
             Jump16Up => "Jump 16 rows up",
             JumpToFirstRow => "Jump to the first row",
@@ -1036,6 +1054,39 @@ impl TimeLineView {
         return (offset < rows_height as usize).then(|| rows_top + offset as u16);
     }
 
+    /// Brackets the rows of a playing block loop next to the line numbers.
+    fn render_loop_bracket(
+        &self,
+        state: &AppState,
+        x: u16,
+        (single, top, side, bottom): (&str, &str, &str, &str),
+        rows_top: u16,
+        rows_height: u16,
+        buf: &mut Buffer,
+    ) {
+        let Some((pattern, first, last)) = state.loop_block else {
+            return;
+        };
+        if state.engine.status().play_mode() != PlayMode::Block || pattern != state.active_pattern {
+            return;
+        }
+        let middle = middle_line(rows_height) as i32;
+        for row in first..=last {
+            let offset = middle + row as i32 - self.row_index as i32;
+            if !(0..rows_height as i32).contains(&offset) {
+                continue;
+            }
+            let edge = match row {
+                row if row == first && row == last => single,
+                row if row == first => top,
+                row if row == last => bottom,
+                _ => side,
+            };
+            let y = rows_top + offset as u16;
+            buf.set_string(x, y, edge, state.theme.highlight_secondary);
+        }
+    }
+
     /// Draws a horizontal line across the line numbers and tracks at `y`, joining the
     /// track borders, to mark where the pattern begins or ends.
     fn render_pattern_boundary_line(&self, state: &AppState, width: u16, y: u16, buf: &mut Buffer) {
@@ -1048,24 +1099,18 @@ impl TimeLineView {
     fn render_mode_indicator(&self, state: &AppState, area: Rect, buf: &mut Buffer) {
         let recording = state.theme.danger;
         let mut spans = match state.engine.status().play_mode() {
-            PlayMode::Song => vec![Span::styled("-- REC SONG --", recording)],
-            PlayMode::SongLoop => vec![Span::raw("-- LOOP SONG --")],
-            PlayMode::Pattern => vec![Span::styled("-- REC PTN --", recording)],
-            PlayMode::PatternLoop => vec![Span::raw("-- LOOP PTN --")],
-            PlayMode::Paused => {
-                let mut spans = Vec::new();
-                if self.is_editing {
-                    spans.push(Span::raw("-- EDIT MODE --"));
-                }
-                if self.is_editing && state.recording {
-                    spans.push(Span::raw(" "));
-                }
-                if state.recording {
-                    spans.push(Span::styled("-- REC MODE --", recording));
-                }
-                spans
-            }
+            PlayMode::Song => vec![Span::raw("-- PLAY SONG --")],
+            PlayMode::Pattern => vec![Span::raw("-- PLAY PTN --")],
+            PlayMode::Block => vec![Span::raw("-- LOOP BLCK --")],
+            PlayMode::Paused if self.is_editing => vec![Span::raw("-- EDIT MODE --")],
+            PlayMode::Paused => vec![],
         };
+        if state.recording {
+            if !spans.is_empty() {
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled("-- REC MODE --", recording));
+        }
         if self.row_lock {
             spans.push(Span::styled("-- LOCK --", recording));
         }
@@ -1253,7 +1298,7 @@ impl MtrakWidget for TimeLineView {
         let (sequence_index, pattern, row) =
             (status.sequence_index(), status.pattern(), status.row());
         state.active_pattern = PatternId(pattern as u8);
-        if !matches!(mode, PlayMode::PatternLoop | PlayMode::Pattern) {
+        if mode == PlayMode::Song {
             state.active_sequence_index = sequence_index;
         }
         self.row_index = row as u8;
@@ -1275,6 +1320,16 @@ impl MtrakWidget for TimeLineView {
             f = f.clamp(0, 8);
             state.set_octave(f - 1);
         };
+        if state.is_live_recording() && (!self.is_editing || self.column_index == 0) {
+            let track = self.track_index as usize;
+            let Some(pitch) = state.play_key(track, *key) else {
+                return false;
+            };
+            if key.kind != KeyEventKind::Repeat {
+                state.record_note(track, pitch, None);
+            }
+            return true;
+        }
         if !self.is_editing {
             return state.play_key(self.track_index as usize, *key).is_some();
         }
@@ -1399,6 +1454,14 @@ impl MtrakWidget for TimeLineView {
         }
         if let Some(y) = self.pattern_start_y(rows_top, rows_height) {
             self.render_pattern_boundary_line(state, area.width, y, buf);
+        }
+        if layout[0].width > 0 {
+            let edges = ("[", line::TOP_LEFT, line::VERTICAL, line::BOTTOM_LEFT);
+            self.render_loop_bracket(state, layout[1].x - 1, edges, rows_top, rows_height, buf);
+        }
+        if layout[4].width > 0 {
+            let edges = ("]", line::TOP_RIGHT, line::VERTICAL, line::BOTTOM_RIGHT);
+            self.render_loop_bracket(state, layout[3].right(), edges, rows_top, rows_height, buf);
         }
         if let Some(y) = self.pattern_end_y(pattern.row_count(), rows_top, rows_height) {
             self.render_pattern_boundary_line(state, area.width, y, buf);

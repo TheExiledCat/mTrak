@@ -2,6 +2,7 @@ pub mod commands;
 pub mod config;
 pub mod effect;
 pub mod instrument;
+pub mod metronome;
 pub mod midi;
 pub mod migration;
 pub mod note;
