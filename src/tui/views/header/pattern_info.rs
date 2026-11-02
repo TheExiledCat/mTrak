@@ -69,30 +69,47 @@ impl PatternInfo {
 
     /// The pattern lines plus their left padding.
     pub fn collapsed_width(&self, state: &AppState) -> u16 {
-        let width = self.pattern_lines(state).iter().map(Line::width).max();
+        let width = self.collapsed_lines(state).iter().map(Line::width).max();
         return width.unwrap_or(0) as u16 + 1;
     }
 
-    fn pattern_lines(&self, state: &AppState) -> Vec<Line<'static>> {
+    fn keys(&self, down: PatternInfoAction, up: PatternInfoAction) -> (String, String) {
+        return (self.keymap.key_text(down), self.keymap.key_text(up));
+    }
+
+    fn pattern_rows(&self, state: &AppState) -> Vec<InfoRow> {
         use PatternInfoAction::*;
-        let bindings = &self.keymap;
-        return [
-            format!(
-                "PTN: {:02X} {}/{} DN/UP",
-                state.active_pattern.0,
-                bindings.key_text(PatternDown),
-                bindings.key_text(PatternUp),
-            ),
-            format!(
-                "LEN: {:02X} {}/{} DN/UP",
-                state.active_pattern().row_count(),
-                bindings.key_text(PatternLengthDown),
-                bindings.key_text(PatternLengthUp)
-            ),
-        ]
-        .into_iter()
-        .map(Line::raw)
-        .collect();
+        return vec![
+            InfoRow {
+                label: "PTN",
+                value: format!("{:02X}", state.active_pattern.0),
+                keys: self.keys(PatternDown, PatternUp),
+            },
+            InfoRow {
+                label: "LEN",
+                value: format!("{:02X}", state.active_pattern().row_count()),
+                keys: self.keys(PatternLengthDown, PatternLengthUp),
+            },
+        ];
+    }
+
+    fn line_add_row(&self, state: &AppState) -> InfoRow {
+        use PatternInfoAction::*;
+        return InfoRow {
+            label: "ADD",
+            value: state.line_add.to_string(),
+            keys: self.keys(LineAddDown, LineAddUp),
+        };
+    }
+
+    fn pattern_lines(&self, state: &AppState) -> Vec<Line<'static>> {
+        return aligned(&self.pattern_rows(state));
+    }
+
+    fn collapsed_lines(&self, state: &AppState) -> Vec<Line<'static>> {
+        let mut rows = self.pattern_rows(state);
+        rows.push(self.line_add_row(state));
+        return aligned(&rows);
     }
 
     fn shrink_pattern(&self, state: &mut AppState) {
@@ -139,32 +156,25 @@ impl Collapsible for PatternInfo {
         };
         let mut width: u16 = 0;
         let bindings = &self.keymap;
+        let tempo_rows = [
+            InfoRow {
+                label: tempo_label,
+                value: format!("{:03}", tempo),
+                keys: self.keys(BpmDown, BpmUp),
+            },
+            InfoRow {
+                label: "SPD",
+                value: state.project().speed.to_string(),
+                keys: self.keys(SpeedDown, SpeedUp),
+            },
+            self.line_add_row(state),
+        ];
         let left_content = Paragraph::new(
-            [
-                format!(
-                    "{} {:03} {}/{}: DN/UP",
-                    tempo_label,
-                    tempo,
-                    bindings.key_text(BpmDown),
-                    bindings.key_text(BpmUp)
-                ),
-                format!(
-                    "SPD {:>3} {}/{}: DN/UP",
-                    state.project().speed,
-                    bindings.key_text(SpeedDown),
-                    bindings.key_text(SpeedUp)
-                ),
-                format!(
-                    "ADD {:>3} {}/{}: DN/UP",
-                    state.line_add,
-                    bindings.key_text(LineAddDown),
-                    bindings.key_text(LineAddUp)
-                ),
-            ]
+            aligned(&tempo_rows)
             .into_iter()
-            .map(|s| {
-                width = width.max(s.len() as u16) + 1; //border
-                Line::raw(s)
+            .map(|line| {
+                width = width.max(line.width() as u16) + 1; //border
+                line
             })
             .collect::<Vec<Line>>(),
         )
@@ -202,10 +212,35 @@ impl Collapsible for PatternInfo {
         area: Rect,
         buf: &mut ratatui::prelude::Buffer,
     ) {
-        Paragraph::new(self.pattern_lines(state))
+        Paragraph::new(self.collapsed_lines(state))
             .block(Block::new().padding(Padding::left(1)))
             .render(area, buf);
     }
+}
+
+struct InfoRow {
+    label: &'static str,
+    value: String,
+    keys: (String, String),
+}
+
+/// `LABEL: value down/up DN/UP`, padded so the values and the key slashes line up.
+fn aligned(rows: &[InfoRow]) -> Vec<Line<'static>> {
+    let width = |f: fn(&InfoRow) -> &str| {
+        rows.iter().map(|r| f(r).chars().count()).max().unwrap_or(0)
+    };
+    let value_width = width(|r| &r.value);
+    let down_width = width(|r| &r.keys.0);
+    let up_width = width(|r| &r.keys.1);
+    return rows
+        .iter()
+        .map(|r| {
+            Line::raw(format!(
+                "{}: {:>value_width$} {:>down_width$}/{:<up_width$} DN/UP",
+                r.label, r.value, r.keys.0, r.keys.1
+            ))
+        })
+        .collect();
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
