@@ -200,6 +200,7 @@ Planned features, in no particular order:
     - [X] FT2-style per-tick slides: pitch up/down (`1`/`2`) and their fine versions
     - [X] Tone portamento (`3`), gliding the pitch to the next note
     - [X] Vibrato (`4`), arpeggio (`0`), panning (`8`) and pattern loop (`E6`)
+    - [X] Chords (`Q`), and a table of 16 chords with strumming (`X`)
     - [X] Song modification
         - [X] Pattern break (`D`)
         - [X] Jump song position (`B`)
