@@ -282,7 +282,7 @@ mod tests {
             &[0x81, 128],
             &[0x82, 16],
             &[0x84, 0x81],
-            &[0x88, b'Z'],
+            &[0x88, b'Q'],
         ];
         for bytes in invalid {
             assert!(

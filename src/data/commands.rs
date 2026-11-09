@@ -3,10 +3,15 @@ use std::{fmt::Display, str::FromStr};
 use MidiCommand::*;
 
 use crate::error::MTrakError;
-pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 10] = [
+
+const MOD_WHEEL_CC: u8 = 1;
+/// Sound controller 5, the cutoff on most synths.
+const FILTER_CUTOFF_CC: u8 = 74;
+pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 16] = [
     ('S', SetCC),
     ('M', ChangeCC),
     ('W', ModWheel),
+    ('Z', FilterCutoff),
     ('V', CCSlide),
     ('J', CCVelocitySlide),
     ('U', VelocitySlide),
@@ -14,6 +19,11 @@ pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 10] = [
     ('T', AfterTouch),
     ('P', PitchBend),
     ('I', Interval),
+    ('8', Panning),
+    ('1', PortaUp),
+    ('2', PortaDown),
+    ('3', TonePorta),
+    ('4', Vibrato),
 ];
 pub const PLAYBACK_COMMAND_LOOKUP: [(char, PlaybackCommand); 10] = [
     ('F', PlaybackCommand::SetTempo),
@@ -76,6 +86,7 @@ pub enum MidiCommand {
     SetCC,           // Sets the CC to change with the ChangeCC command
     ChangeCC,        // Changes the CC set by SetCC
     ModWheel,        // Selects CC 1 like SetCC 01 and sends it like ChangeCC
+    FilterCutoff,    // Like ModWheel, but CC 74
     CCSlide, // Slides the CC set by SetCC from this value to the track's next CC or slide command
     CCVelocitySlide, // CCSlide that also sets the velocity of notes played during it
     VelocitySlide, // Slides the velocity of notes played during it, without sending anything itself
@@ -83,15 +94,33 @@ pub enum MidiCommand {
     AfterTouch, // Sets Channel AfterTouch
     PitchBend, // Sets Pitchbend with low resolution as a single byte
     Interval, // Bends by whole semitones, scaled to the instrument's bend range
+    Panning,  // FT2's 8, as CC 10
+    PortaUp,  // FT2's 1
+    PortaDown, // FT2's 2
+    TonePorta, // FT2's 3
+    Vibrato,  // FT2's 4
 }
 impl MidiCommand {
     /// Whether this command starts a slide towards the track's next CC or slide command.
     pub fn is_slide(&self) -> bool {
         return matches!(self, CCSlide | CCVelocitySlide | VelocitySlide);
     }
+    /// The CC that `W` and `Z` select and send.
+    pub fn shorthand_cc(&self) -> Option<u8> {
+        return match self {
+            ModWheel => Some(MOD_WHEEL_CC),
+            FilterCutoff => Some(FILTER_CUTOFF_CC),
+            _ => None,
+        };
+    }
     /// Whether this command ends a slide that reaches it.
     pub fn is_slide_target(&self) -> bool {
-        return self.is_slide() || matches!(self, ChangeCC | ModWheel | EndSlide);
+        return self.is_slide()
+            || self.shorthand_cc().is_some()
+            || matches!(self, ChangeCC | EndSlide);
+    }
+    pub fn is_ft2_slide(&self) -> bool {
+        return matches!(self, PortaUp | PortaDown | TonePorta | Vibrato);
     }
     /// Whether the slide this command starts sends the selected CC.
     pub fn slides_cc(&self) -> bool {
@@ -109,6 +138,10 @@ impl MidiCommand {
             ModWheel => &[(
                 "xx",
                 "Mod wheel: select CC 1 like S01 and send it with this value",
+            )],
+            FilterCutoff => &[(
+                "xx",
+                "Filter cutoff: select CC 74 like S4A and send it with this value",
             )],
             CCSlide => &[(
                 "xx",
@@ -138,6 +171,14 @@ impl MidiCommand {
                 "xx",
                 "Interval: bend by semitones from 80 (83 up 3, 7D down 3) in the bend range",
             )],
+            Panning => &[("xx", "Panning: send CC 10, 00 left, 80 centre, FF right")],
+            PortaUp => &[("xx", "Portamento up: bend up xx/16 semitone every tick")],
+            PortaDown => &[("xx", "Portamento down: bend down xx/16 semitone every tick")],
+            TonePorta => &[(
+                "xx",
+                "Tone portamento: bend towards the note by xx/16 semitone a tick",
+            )],
+            Vibrato => &[("xy", "Vibrato: wobble the pitch at speed x, depth y")],
         };
     }
 
@@ -218,6 +259,9 @@ pub enum PlaybackAction {
         down: u8,
     },
     SetTrackVelocity(u8),
+    /// E60 marks the start, E6y loops back y times.
+    PatternLoop(u8),
+    Pitch(PitchAction),
     /// A value no subcommand uses yet.
     Unused,
 }
@@ -233,6 +277,11 @@ impl PlaybackCommand {
             },
             PlaybackCommand::Probability => PlaybackAction::Probability(value),
             PlaybackCommand::Extended => match high {
+                0x1 => PlaybackAction::Pitch(PitchAction::FinePortaUp(low)),
+                0x2 => PlaybackAction::Pitch(PitchAction::FinePortaDown(low)),
+                0x3 => PlaybackAction::Pitch(PitchAction::Glissando(low != 0)),
+                0x4 => PlaybackAction::Pitch(PitchAction::VibratoWaveform(low)),
+                0x6 => PlaybackAction::PatternLoop(low),
                 0x8 => PlaybackAction::DelayEarly(low),
                 0x9 => PlaybackAction::RetrigNote(low),
                 0xC => PlaybackAction::Cut(low),
@@ -273,6 +322,18 @@ impl PlaybackCommand {
                 "Probability: chance the note plays, 00 never, FF always",
             )],
             PlaybackCommand::Extended => &[
+                ("1y", "Fine portamento up: bend up y/16 semitone once"),
+                ("2y", "Fine portamento down: bend down y/16 semitone once"),
+                (
+                    "3y",
+                    "Glissando: 1 makes tone portamento move in semitones, 0 smoothly",
+                ),
+                (
+                    "4y",
+                    "Vibrato waveform: 0 sine, 1 ramp, 2 square, +4 keeps it going",
+                ),
+                ("60", "Pattern loop: mark this row as the start of a loop"),
+                ("6y", "Pattern loop: go back to the loop start y times"),
                 ("8y", "Early delay: start the note y ticks before its row"),
                 (
                     "9y",
@@ -319,6 +380,10 @@ impl PlaybackCommand {
         };
     }
 
+    pub fn is_ft2_slide(&self) -> bool {
+        return matches!(self, PlaybackCommand::GlobalVelocitySlide);
+    }
+
     fn from_char(char: char) -> Result<Self, MTrakError> {
         return PLAYBACK_COMMAND_LOOKUP
             .iter()
@@ -330,6 +395,27 @@ impl PlaybackCommand {
         return CommandKind::Playback(*self);
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PitchAction {
+    Arpeggio {
+        x: u8,
+        y: u8,
+    },
+    /// In 1/16 semitones.
+    PortaUp(u8),
+    PortaDown(u8),
+    TonePorta(u8),
+    /// `depth` is in 1/8 semitones.
+    Vibrato {
+        speed: u8,
+        depth: u8,
+    },
+    FinePortaUp(u8),
+    FinePortaDown(u8),
+    Glissando(bool),
+    VibratoWaveform(u8),
+}
+
 #[derive(Debug, Clone, PartialEq, Copy)]
 
 pub struct Command {
@@ -340,6 +426,28 @@ pub struct Command {
 impl Command {
     pub fn new(kind: CommandKind, value: u8) -> Self {
         return Self { kind, value };
+    }
+
+    /// A `0` with a value is FT2's arpeggio.
+    pub fn pitch_action(&self) -> Option<PitchAction> {
+        let (high, low) = (self.value >> 4, self.value & 0x0F);
+        return match self.kind {
+            CommandKind::None if self.value != 0 => Some(PitchAction::Arpeggio { x: high, y: low }),
+            CommandKind::Midi(PortaUp) => Some(PitchAction::PortaUp(self.value)),
+            CommandKind::Midi(PortaDown) => Some(PitchAction::PortaDown(self.value)),
+            CommandKind::Midi(TonePorta) => Some(PitchAction::TonePorta(self.value)),
+            CommandKind::Midi(Vibrato) => Some(PitchAction::Vibrato {
+                speed: high,
+                depth: low,
+            }),
+            CommandKind::Playback(PlaybackCommand::Extended) => {
+                match PlaybackCommand::Extended.decode(self.value) {
+                    PlaybackAction::Pitch(action) => Some(action),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
     }
 }
 
@@ -464,8 +572,30 @@ mod tests {
         );
         assert_eq!(
             PlaybackCommand::Extended.decode(0x13),
+            PlaybackAction::Pitch(PitchAction::FinePortaUp(3))
+        );
+        assert_eq!(
+            PlaybackCommand::Extended.decode(0x62),
+            PlaybackAction::PatternLoop(2)
+        );
+        assert_eq!(
+            PlaybackCommand::Extended.decode(0x53),
             PlaybackAction::Unused
         );
+    }
+
+    #[test]
+    fn pitch_commands_decode_with_ft2_letters() {
+        let action = |text: &str| Command::from_str(text).unwrap().pitch_action();
+        assert_eq!(action("037"), Some(PitchAction::Arpeggio { x: 3, y: 7 }));
+        assert_eq!(action("000"), None);
+        assert_eq!(action("120"), Some(PitchAction::PortaUp(0x20)));
+        assert_eq!(
+            action("448"),
+            Some(PitchAction::Vibrato { speed: 4, depth: 8 })
+        );
+        assert_eq!(action("E31"), Some(PitchAction::Glissando(true)));
+        assert_eq!(action("M40"), None);
     }
 
     #[test]
@@ -497,7 +627,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_commands() {
-        for text in ["", "00", "0000", "X00", "0G0", "s00"] {
+        for text in ["", "00", "0000", "X00", "0G0", "s00", "K00"] {
             assert!(
                 Command::from_str(text).is_err(),
                 "{:?} should not parse",

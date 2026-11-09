@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::{
-    data::commands::{CommandForm, MIDI_COMMAND_LOOKUP, PLAYBACK_COMMAND_LOOKUP},
+    data::commands::{CommandForm, MIDI_COMMAND_LOOKUP, MidiCommand, PLAYBACK_COMMAND_LOOKUP},
     error::Result,
     tui::{
         app::AppState,
@@ -347,20 +347,55 @@ pub fn keybindings_dialog(sections: Vec<HelpSection>, height: u8) -> Dialog {
 }
 
 pub fn commands_dialog(height: u8) -> Dialog {
-    let midi = commands_section(
+    let midi = MIDI_COMMAND_LOOKUP
+        .iter()
+        .map(|(c, command)| (*c, *command));
+    let playback = PLAYBACK_COMMAND_LOOKUP
+        .iter()
+        .map(|(c, command)| (*c, *command));
+    let target_slide =
+        |command: &MidiCommand| command.is_slide() || *command == MidiCommand::EndSlide;
+    let midi_section = commands_section(
         "MIDI commands",
-        MIDI_COMMAND_LOOKUP
-            .iter()
-            .map(|(c, command)| (*c, command.forms())),
+        midi.clone()
+            .filter(|(_, command)| !target_slide(command) && !command.is_ft2_slide())
+            .map(|(c, command)| (c, command.forms())),
     );
-    let playback = commands_section(
+    let target_slides = commands_section(
+        "Slides to a target",
+        midi.clone()
+            .filter(|(_, command)| target_slide(command))
+            .map(|(c, command)| (c, command.forms())),
+    );
+    let mut ft2_slides = commands_section(
+        "FT2 slides, a step every tick",
+        midi.filter(|(_, command)| command.is_ft2_slide())
+            .map(|(c, command)| (c, command.forms()))
+            .chain(
+                playback
+                    .clone()
+                    .filter(|(_, command)| command.is_ft2_slide())
+                    .map(|(c, command)| (c, command.forms())),
+            ),
+    );
+    ft2_slides = ft2_slides.entry(
+        "0xy",
+        "Arpeggio: the note, then x and y semitones up, a tick each",
+    );
+    let playback_section = commands_section(
         "Playback commands",
-        PLAYBACK_COMMAND_LOOKUP
-            .iter()
-            .map(|(c, command)| (*c, command.forms())),
+        playback
+            .filter(|(_, command)| !command.is_ft2_slide())
+            .map(|(c, command)| (c, command.forms())),
     );
     let general = HelpSection::new("Values").entry("000", "No command");
-    let sections = vec![general, midi, playback];
+    let sections = vec![
+        general,
+        midi_section,
+        target_slides,
+        ft2_slides,
+        playback_section,
+    ];
     return table_dialog("Commands", KeyTable::new(sections, height.max(1), false));
 }
 

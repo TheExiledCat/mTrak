@@ -3,4 +3,5 @@ pub mod effects;
 pub mod engine;
 pub mod handle;
 pub mod notes;
+pub mod pitch;
 pub mod voices;

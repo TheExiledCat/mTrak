@@ -10,8 +10,9 @@ C-4|1|7F|S4A
  └────────── note
 ```
 
-A command is one letter followed by a two digit hex value, e.g. `S4A` is command `S` with value `4A`.
-`000` means no command.
+A command is one letter or digit followed by a two digit hex value, e.g. `S4A` is command `S`
+with value `4A`. `000` means no command; a `0` with any other value is an
+[arpeggio](#0-arpeggio).
 
 Commands send on the MIDI channel of the cell's instrument column. When you enter a command,
 the cell's instrument is set to the active instrument.
@@ -26,7 +27,7 @@ synth just before the note does.
 
 Command values go from `00` to `FF`, but MIDI controller values, velocities and aftertouch
 only go from 0 to 127, so command values are halved when used (pitch bends are the exception,
-see `P` and `I`):
+see `P`, `I` and the [pitch commands](#pitch-commands)):
 
 | Value | Sent as |
 |-------|---------|
@@ -75,6 +76,21 @@ too, so a `W` followed by a `V` glides it.
 ```
 
 - A running slide can land on a `W`, like on an `M`.
+
+### `Z` Filter cutoff
+
+Like `W`, but for filter cutoff: sends CC 74 with the given value and selects it, like an
+`S4A` followed by an `M` on the same row. CC 74 is the cutoff on most synths, but check your
+synth's manual.
+
+```
+---|1|--|Z20   cutoff = 16, and selected
+---|1|--|V20   open the filter from 16 ...
+---|1|--|000
+---|1|--|MC0   ... to 96 here
+```
+
+- A running slide can land on a `Z`, like on an `M`.
 
 ### `V` CC slide
 
@@ -175,6 +191,91 @@ C-4|1|--|I7B   5 semitones lower (G-3)
   `I8C`. With a range of `00`, `I` sends no bend.
 - Like `P`, the bend affects every note on the channel and stays until the next `P` or `I`.
 
+### `8` Panning
+
+Like FT2's `8xx`: sends the pan controller (CC 10), halved like a CC: `00` is full left, `80`
+the centre (64) and `FF` full right.
+
+```
+C-4|1|--|800   note panned hard left
+```
+
+## Pitch commands
+
+FastTracker 2's portamento, vibrato and arpeggio. A synth can't change the pitch of a note
+that's already playing except by bending, so these bend the channel of the track's note,
+starting from wherever `P` or `I` left it:
+
+- How far they can bend is the instrument's bend range (`Ctrl+R`, `Bend range`, `0C` by
+  default). Set it to the same range as your synth, or the pitches come out wrong. A bend
+  stops at the edge of the range, and with a range of `00` they don't bend at all.
+- Pitch is measured as in FT2, in 1/16 semitones: `1xx`, `2xx` and `3xx` move `xx` of them a
+  tick, so `110` is a semitone a tick.
+- A new note on the track starts unbent: its channel goes back to the `P` or `I` bend just
+  before the note starts.
+- Tracks playing the same instrument share its channel, so their bends add up.
+- Like FT2, a value of `00` carries on with the command's last value on the track (`E1`
+  and `E2` remember theirs too). For vibrato, speed and depth are remembered separately.
+- The bend affects every note on the channel, so play pitch commands on a monophonic part.
+
+### `0` Arpeggio
+
+Like FT2's `0xy`: plays the note, then `x` semitones higher, then `y` higher, a tick each,
+round and round until the row ends. On the next row without an arpeggio, the note goes back
+to its own pitch.
+
+```
+C-4|1|--|037   C, D#, G, C, D#, G: a minor chord at speed 6
+---|1|--|047   C, E, G: major
+```
+
+- Needs a bend range of at least the bigger of `x` and `y`.
+
+### `1` Portamento up
+
+Like FT2's `1xx`: bends the note up `xx`/16 semitones on every tick of the row but its first.
+The bend stays until the track's next note.
+
+```
+C-4|1|--|108   at speed 6, 5 ticks of half a semitone: 2.5 semitones up
+---|1|--|108   another 2.5
+```
+
+### `2` Portamento down
+
+Like `1`, but down.
+
+### `3` Tone portamento
+
+Like FT2's `3xx`: instead of playing the cell's note, bends the track's note towards it by
+`xx`/16 semitones a tick, and stops there.
+
+```
+C-4|1|--|000
+E-4|1|--|320   E-4 doesn't play: C-4 bends up 2 semitones a tick until it sounds like an E-4
+---|1|--|300   carries on, if it isn't there yet
+```
+
+- Without a note playing on the track, the cell's note just plays.
+- The note it bends to has to be within the bend range; one further away is bent to the edge
+  of the range.
+- The cell's volume doesn't change the note that's playing.
+- With glissando on (`E31`), the bend moves in whole semitones.
+
+### `4` Vibrato
+
+Like FT2's `4xy`: wobbles the pitch of the note, first down, then up. `x` is the speed, one
+round every 64/`x` ticks, and `y` the depth, up to `y`/8 semitones each way.
+
+```
+C-4|1|--|448   at speed 6, a round every 16 ticks, a semitone each way
+---|1|--|400   the same again
+---|1|--|000   back to the note's own pitch
+```
+
+- It only wobbles on the rows that have it, and not on their first tick, like FT2.
+- `E4y` picks the shape (see [`E` Extended](#e-extended)).
+
 ## Playback commands
 
 Playback commands change playback, or how the cell's note plays, instead of sending MIDI. They
@@ -229,6 +330,11 @@ FastTracker 2's `E` commands: the first digit picks the command, the second is i
 
 | Value     | Does                                                                  |
 |-----------|-----------------------------------------------------------------------|
+| `10`-`1F` | Fine portamento up: bends the note up that many 1/16 semitones once   |
+| `20`-`2F` | Fine portamento down: bends the note down that many 1/16 semitones once |
+| `30`-`3F` | Glissando: `31` makes tone portamento move in semitones, `30` smoothly |
+| `40`-`4F` | Vibrato shape: `0` sine, `1` ramp, `2` square; plus `4` to carry on   |
+| `60`-`6F` | Pattern loop: `60` marks the loop start, `6y` goes back there `y` times |
 | `80`-`8F` | Early delay: starts the note that many ticks before its row           |
 | `90`-`9F` | Retrig note: replays the note every that many ticks in its row        |
 | `C0`-`CF` | Note cut: releases the track's note on that tick of the row           |
@@ -244,6 +350,20 @@ C-4|1|--|E92   at speed 6, hits on ticks 0, 2 and 4
 ---|1|--|EE3   the row lasts 4 rows
 ---|1|--|EF0   playback stops at the end of this row
 ```
+
+**Fine portamento (`E1`, `E2`), glissando (`E3`) and vibrato shape (`E4`):**
+
+- Like FT2's: see the [pitch commands](#pitch-commands).
+- Fine portamento bends on the row's first tick only.
+- The vibrato starts its round again with each new note, unless the shape has `4` added
+  (`E44` to `E46`).
+
+**Pattern loop (`E6`):**
+
+- Like FT2's `E6y`: `E60` marks a row, and an `E6y` further down goes back there `y` times
+  before playback carries on past it, so `E62` plays the rows three times.
+- Each track keeps its own loop, and a new pattern starts with its loop at its top row.
+- A block loop ignores it.
 
 **Note delay (`ED`) and early delay (`E8`):**
 
@@ -424,11 +544,17 @@ Scales the velocity of every note on the track from this row on, from `00` (sile
 
 ## Slides
 
+mTrak has two kinds of slides: slides to a target (`V`, `J` and `U`, landed with `N`), and
+FT2's slides, which move by a step every tick (`1`, `2`, `3`, `4` and `H`, and the fine ones
+that step once: `E1` and `E2`).
+
+### Slides to a target
+
 A slide moves from its own value to a target, updating once per tick. With a speed (`SPD`, or
 an `F` below `20`) of 6 that is 6 updates per row. Since ticks always last the same time at a
 given BPM, a slide over the same amount of time is equally smooth at any speed.
 
-- **Target:** the track's next `M`, `W`, `N`, or command that starts a slide. The slide reaches
+- **Target:** the track's next `M`, `W`, `Z`, `N`, or command that starts a slide. The slide reaches
   that value on that row.
 - **Chaining:** a command that starts a slide also counts as the target of a running one, so
   the running slide lands there and the new one carries straight on. That lets you draw a
@@ -440,8 +566,38 @@ given BPM, a slide over the same amount of time is equally smooth at any speed.
 - **`S` during a slide:** an `S` before the target stops slides that change a CC, since they'd
   be changing a different one. Velocity-only slides carry on.
 
-`H` is the exception: it moves by the same step on every tick of its own row, the
-FastTracker 2 way, instead of towards a target.
+### Slides a step every tick
+
+These work like FastTracker 2's:
+
+- They move by the same step on every tick of their row but the first, so a faster speed
+  slides further in a row.
+- They only run on rows that have them: put one on every row the slide should last. A value
+  of `00` carries on with the last one.
+- What they slid stays when they stop: a portamento's bend until the track's next note, the
+  global velocity until something else changes it. Vibrato and arpeggio are the exception and go
+  back to the note's pitch.
+
+### FT2 commands mTrak doesn't have
+
+Some of FastTracker 2's commands change a note while it plays in ways a synth can't follow
+over MIDI, or do what another command already does, so mTrak leaves them out:
+
+- `A`, `5`, `6`, `EA` and `EB` slide the volume of the playing note, and `7` and `E7` wobble
+  it. MIDI can't change the velocity of a note once it has started; slide a CC instead, e.g.
+  CC 7 or 11 with `V`.
+- `X` (extra fine portamento) bends by 1/64 semitones, too little to hear in one go; use `E1`
+  and `E2`.
+- `K` (key off) is the same as `EC` over MIDI, which only has note off.
+- `9` (sample offset) and `E5` (finetune) have no meaning for a synth.
+- `L` is [legato](#l-legato), `P` [pitch bend](#p-pitch-bend), `T` [aftertouch](#t-aftertouch)
+  and `C` [track velocity](#c-track-velocity); FT2's envelope position, panning slide, tremor
+  and set volume aren't there.
+- Command letters mTrak doesn't have can't be entered, and `E` values it doesn't use do
+  nothing.
+- `L` is [legato](#l-legato), `P` [pitch bend](#p-pitch-bend), `T` [aftertouch](#t-aftertouch)
+  and `C` [track velocity](#c-track-velocity); FT2's envelope position, panning slide, tremor
+  and set volume aren't there.
 
 ## Muting
 
@@ -458,7 +614,8 @@ start during the pattern before. Muting also cuts notes still sounding from an `
 ## Playback
 
 Starting or stopping playback resets all command state: selected CCs go back to each
-instrument's default CC, running slides end, delayed notes, retrigs and cuts that haven't
+instrument's default CC, running slides end, pitch commands forget their bends and memory,
+pattern loops are forgotten, delayed notes, retrigs and cuts that haven't
 happened yet are dropped, notes still sounding from an `L1y` are cut, the tempo goes back
 to the song's BPM and speed, and the global and track velocities go back to the song's. Channels that were sent a pitch bend or aftertouch get them
 reset to no bend and no pressure, even when muted, so your synth is never left out of tune.

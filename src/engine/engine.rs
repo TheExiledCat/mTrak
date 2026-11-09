@@ -169,6 +169,8 @@ pub struct MtrakEngine {
     retrig_memory: [(u8, u8); TRACK_COUNT as usize],
     /// Cells of the next row whose note was just recorded live, and already heard.
     recorded_ahead: Vec<(PatternId, usize, usize)>,
+    /// Ticks since the row started, counting on through a delayed row's repeats.
+    row_tick: u32,
 
     midi_command_handler: MidiCommandHandler,
     playback_command_handler: PlaybackCommandHandler,
@@ -226,6 +228,7 @@ impl MtrakEngine {
             retrig_counters: [0; TRACK_COUNT as usize],
             retrig_memory: [(0, 0); TRACK_COUNT as usize],
             recorded_ahead: Vec::new(),
+            row_tick: 0,
 
             midi_command_handler: MidiCommandHandler::new(),
             playback_command_handler: PlaybackCommandHandler::new(),
@@ -1040,6 +1043,7 @@ impl MtrakEngine {
         self.retrig_memory = [(0, 0); TRACK_COUNT as usize];
         self.recorded_ahead.clear();
         self.row_delay = 0;
+        self.row_tick = 0;
         self.stop_after_row = false;
         let mut events = vec![];
         self.midi_command_handler.reset(&mut events);
@@ -1054,7 +1058,7 @@ impl MtrakEngine {
     /// Advances running commands by one tick and returns their messages.
     fn tick_commands(&mut self) -> Vec<MidiEvent> {
         let mut events = vec![];
-        self.midi_command_handler.tick(&mut events);
+        self.midi_command_handler.tick(&mut events, self.row_tick);
         return events;
     }
 
@@ -1097,6 +1101,7 @@ impl MtrakEngine {
     /// the note's velocity. They run on muted channels too so their effects stay in step;
     /// only their output is dropped.
     fn play_row(&mut self) {
+        self.row_tick = 0;
         let row_tick = self.tick_commands();
         let mutes = self.current_mutes();
         let Some(pattern) = self.patterns.get(self.position.pattern.0 as usize) else {
@@ -1106,7 +1111,8 @@ impl MtrakEngine {
             return;
         };
         let tracks = row.tracks.clone();
-        self.playback_command_handler.start_row();
+        self.playback_command_handler
+            .start_row(self.position.pattern.0 as usize, self.position.row);
         let mut out = vec![];
         self.voices.release_channels(&mutes, &mut out);
         self.voices.tick(&mut out);
@@ -1122,6 +1128,14 @@ impl MtrakEngine {
             .map(|(_, _, track)| track)
             .collect();
         for (track, note) in tracks.iter().enumerate() {
+            let mut bends_to_note = false;
+            if let Some(pitch) = note.command.pitch_action() {
+                let mut events = vec![];
+                bends_to_note =
+                    self.midi_command_handler
+                        .pitch_command(&mut events, track, pitch, note);
+                out.extend(audible(events, &mutes));
+            }
             let action = match note.command.kind {
                 CommandKind::None => NoteAction::Play,
                 CommandKind::Midi(command) => {
@@ -1142,6 +1156,7 @@ impl MtrakEngine {
                     .apply(track, command.decode(note.command.value)),
             };
             match action {
+                _ if bends_to_note => {}
                 // the row before already started this note
                 _ if started_early[track] == Some(*note) => {}
                 _ if recorded_ahead.contains(&track) => {}
@@ -1242,7 +1257,8 @@ impl MtrakEngine {
         }
     }
 
-    /// FT2's B and D. Playing a single pattern, a break stays inside it; a block loop ignores both.
+    /// FT2's E6y, B and D, in that order. Playing a single pattern, a break stays inside it; a
+    /// block loop ignores all three.
     fn flow_target(&self, flow: RowFlow) -> Option<Position> {
         let row_count = |id: PatternId| {
             self.patterns
@@ -1260,6 +1276,14 @@ impl MtrakEngine {
                 };
             }
         };
+        if let Some(row) = flow.loop_row
+            && self.mode != PlayMode::Block
+        {
+            return Some(Position {
+                row,
+                ..self.position
+            });
+        }
         return match self.mode {
             PlayMode::Pattern => {
                 flow.break_row?;
@@ -1326,6 +1350,10 @@ impl MtrakEngine {
                 let velocity = velocity(note.velocity, self.midi_command_handler.velocity(track))
                     .map(|velocity| scale_velocity(velocity, track_velocity, u8::MAX))
                     .filter(|&velocity| velocity > 0);
+                let mut events = vec![];
+                self.midi_command_handler
+                    .note_started(&mut events, track, channel, pitch.0);
+                out.extend(audible(events, mutes));
                 match velocity {
                     Some(velocity) if !mutes[channel as usize] => match legato {
                         Some(overlap) => self
@@ -1488,6 +1516,7 @@ impl MtrakEngine {
 
     /// Runs commands for the ticks between rows.
     fn command_tick(&mut self) {
+        self.row_tick += 1;
         self.playback_command_handler.tick(self.global_velocity);
         self.sync_global_velocity();
         let events = self.tick_commands();
@@ -1666,6 +1695,7 @@ mod tests {
         data::{
             commands::{Command, MidiCommand, PlaybackCommand},
             effect::EffectKind,
+            midi::BEND_CENTER,
             note::NotePitch,
         },
         engine::effects::{
@@ -4808,5 +4838,102 @@ mod tests {
         assert!(note_on_ticks(&mut harness).is_empty());
         harness.engine.pulse();
         assert_eq!(note_on_ticks(&mut harness), vec![4]);
+    }
+
+    fn bends(messages: &[Message]) -> Vec<u16> {
+        return messages
+            .iter()
+            .filter_map(|m| match m {
+                Message::PitchBend(_, bend) => Some(*bend),
+                _ => None,
+            })
+            .collect();
+    }
+
+    #[test]
+    fn portamento_bends_every_tick_and_the_next_note_starts_unbent() {
+        let porta = MidiCommand::PortaUp;
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[
+                (0, 0, with_command(note("C-4 1 --"), porta, 0x10)),
+                (1, 0, note("D-4 1 --")),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        assert!(bends(&harness.messages()).is_empty());
+        harness.command_tick();
+        harness.command_tick();
+        // a semitone a tick, out of the default 12 semitone range
+        assert_eq!(bends(&harness.messages()), vec![8874, 9557]);
+        harness.next_row();
+        let messages = harness.messages();
+        assert_eq!(bends(&messages).last(), Some(&BEND_CENTER));
+        let bend = messages
+            .iter()
+            .position(|m| matches!(m, Message::PitchBend(..)));
+        let note_on = messages
+            .iter()
+            .position(|m| matches!(m, Message::NoteOn(..)));
+        assert!(bend < note_on, "{messages:?}");
+    }
+
+    #[test]
+    fn a_zero_command_with_a_value_plays_an_arpeggio() {
+        let mut cell = note("C-4 1 --");
+        cell.command = Command::new(CommandKind::None, 0x47);
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, cell)])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        for _ in 0..3 {
+            harness.command_tick();
+        }
+        // up 4 and 7 semitones, then back to the note
+        assert_eq!(bends(&harness.messages()), vec![10922, 12970, BEND_CENTER]);
+        harness.next_row();
+        assert_eq!(bends(&harness.messages()).last(), Some(&BEND_CENTER));
+    }
+
+    #[test]
+    fn tone_portamento_bends_to_the_note_without_playing_it() {
+        let porta = MidiCommand::TonePorta;
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[
+                (0, 0, note("C-4 1 --")),
+                (1, 0, with_command(note("D-4 1 --"), porta, 0x20)),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        harness.next_row();
+        harness.messages();
+        for _ in 0..3 {
+            harness.command_tick();
+        }
+        let messages = harness.messages();
+        assert!(note_velocities(&messages).is_empty(), "{messages:?}");
+        assert_eq!(bends(&messages), vec![9557]);
+    }
+
+    #[test]
+    fn pattern_loop_plays_its_rows_again() {
+        let loop_at = |value| playback(Note::empty(), PlaybackCommand::Extended, value);
+        let mut harness = Harness::new(vec![pattern(
+            4,
+            &[(1, 0, loop_at(0x60)), (2, 0, loop_at(0x62))],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        let rows: Vec<usize> = rows_played(&mut harness, 7)
+            .into_iter()
+            .map(|(_, row)| row)
+            .collect();
+        assert_eq!(rows, vec![1, 2, 1, 2, 1, 2, 3]);
     }
 }
