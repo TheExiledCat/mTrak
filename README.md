@@ -81,6 +81,12 @@ mtrak song.mtrak       # open a project
 Pick a MIDI output port with `Ctrl+O`. mTrak makes no sound on its own, so connect it to a physical (or virtual) midi device to make music.
 You can also open projects from the built-in file browser with `Alt+O`.
 
+`Alt+M` exports the song as a MIDI file (`.mid`), to take it into a DAW. It's the song as it
+plays from its first sequence position, with every command, effect, transpose and volume
+applied, and ends where the song length in the Info dialog (`Ctrl+F`) does. The file has a
+track per instrument that plays something, starting with its bank and program, and the
+song's tempo changes.
+
 ### Keybindings
 
 Press `?` to see every key in mTrak, grouped by section. The footer only shows the most
@@ -171,6 +177,8 @@ Planned features, in no particular order:
 - [x] **File browser and global saving**
 - [X] **Undo system**
 - [ ] **MIDI file import/export**
+    - [X] export the song as a MIDI file
+    - [ ] import a MIDI file
 - [ ] **MIDI input**:
     - [X] play notes into the pattern using a connected midi controller
     - [X] trigger mtrak to start and stop playback, sync to midi controller
