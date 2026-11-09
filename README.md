@@ -106,6 +106,14 @@ you played them.
 `Ctrl+G` sets up the metronome: when it plays, the channels it clicks on, and the notes and
 velocities of the accent and the other beats.
 
+### Instruments
+
+`Ctrl+R` opens the active instrument's dialog: its name, volume, bend range, default CC and
+transpose, and the sound it picks on the synth. `Program`, `Bank MSB` and `Bank LSB` are sent
+as a program change and bank select (CC 0 and 32) when they change, when the MIDI output
+connects and every time playback starts, so a project always plays on the right patches.
+Leave one at `Off` to not send it.
+
 ### Effects
 
 Each instrument can have a chain of live MIDI effects. Press `Ctrl+R` for the active
@@ -171,7 +179,7 @@ Planned features, in no particular order:
     - [ ] Change sequence/pattern using Program Select In
 - [X] **MIDI clock out**: send clock and start/stop to sync external sequencers, drum machines and arpeggiators
 - [ ] **Multiple output ports**: map instruments to different MIDI devices, not just channels on one port
-- [ ] **Program change and bank select per instrument**, so loading a project restores the right patches
+- [X] **Program change and bank select per instrument**, so loading a project restores the right patches
 - [X] **Panic button** (`~`): all notes off and reset controllers, for stuck notes
 - [X] **Live record**:
     - [X] play notes in while the song is playing, for beatmaking

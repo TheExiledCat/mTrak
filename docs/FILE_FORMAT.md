@@ -1,7 +1,7 @@
 # Project file format
 
 This page describes how mTrak saves a project (`.mtrak`), so other programs can read and write
-it. It describes file version 5, written by mTrak v0.8.0 and later.
+it. It describes file version 6, written by mTrak v0.9.0 and later.
 
 A project file is a short header followed by a [MessagePack](https://msgpack.org) payload.
 Everything in the payload is a map with named fields, except the notes in a pattern, which are
@@ -75,6 +75,18 @@ The first instrument plays on MIDI channel 1, the last on channel 16.
 | `default_cc`        | int           | The CC that CC commands change on a track without an `S`                  |
 | `transpose`         | int           | Semitones added to the instrument's notes, can be negative                |
 | `effects`           | array of maps | The instrument's live MIDI effects, see below                             |
+| `patch`             | map           | The bank and program the synth is set to, see below                       |
+
+#### Patch
+
+Sent to the synth when playback starts, when the MIDI output connects and when it's changed:
+the bank select CCs first, then the program change. A field that's nil isn't sent.
+
+| Field      | Type       | Contents                           |
+| ---------- | ---------- | ---------------------------------- |
+| `bank_msb` | int or nil | Bank select MSB (CC 0), `0`-`127`  |
+| `bank_lsb` | int or nil | Bank select LSB (CC 32), `0`-`127` |
+| `program`  | int or nil | The program change, `0`-`127`      |
 
 #### Effects
 
@@ -266,5 +278,6 @@ Some cells and their bytes:
 
 ## Older versions
 
+- [File version 5](archive/FILE_FORMAT_v5.md), written by mTrak v0.8.0.
 - [File version 4](archive/FILE_FORMAT_v4.md), written by mTrak v0.7.0 to v0.7.1.
 - [File version 3](archive/FILE_FORMAT_v3.md), written by mTrak v0.6.0.

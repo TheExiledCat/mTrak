@@ -6,6 +6,7 @@ use crate::{
     data::{
         config::TITLE,
         effect::EffectKind,
+        instrument::Patch,
         metronome::MetronomeMode,
         midi::{CC_MAX, PITCH_MAX, VELOCITY_MAX, cc_name},
         note::{NotePitch, SEMITONES_PER_OCTAVE},
@@ -238,6 +239,9 @@ pub fn open_instrument_dialog(state: &mut AppState) {
                 .value(settings.transpose as i32),
             ValueLabel::Semitones,
         )),
+        program: dialog.add_field(optional_value("Program", settings.patch.program, state)),
+        bank_msb: dialog.add_field(optional_value("Bank MSB", settings.patch.bank_msb, state)),
+        bank_lsb: dialog.add_field(optional_value("Bank LSB", settings.patch.bank_lsb, state)),
     };
     let effects = dialog.add_field(Buttons::new(vec!["Effects"]));
     let dialog = dialog
@@ -485,6 +489,9 @@ struct InstrumentFields {
     bend_range: Field<i32>,
     default_cc: Field<usize>,
     transpose: Field<i32>,
+    program: Field<usize>,
+    bank_msb: Field<usize>,
+    bank_lsb: Field<usize>,
 }
 
 impl InstrumentFields {
@@ -494,7 +501,27 @@ impl InstrumentFields {
         state.set_bend_range(instrument, *result.get(self.bend_range) as u8);
         state.set_default_cc(instrument, *result.get(self.default_cc) as u8);
         state.set_instrument_transpose(instrument, *result.get(self.transpose) as i8);
+        let value = |field: Field<usize>| result.get(field).checked_sub(1).map(|v| v as u8);
+        let patch = Patch {
+            bank_msb: value(self.bank_msb),
+            bank_lsb: value(self.bank_lsb),
+            program: value(self.program),
+        };
+        state.set_patch(instrument, patch);
     }
+}
+
+/// `Off`, then every 7 bit value in hex or decimal as the config says.
+fn optional_value(label: &str, value: Option<u8>, state: &AppState) -> Select {
+    let values = (0..=CC_MAX).map(|value| match state.config.hex_values {
+        true => format!("{value:02X}"),
+        false => value.to_string(),
+    });
+    let options: Vec<String> = std::iter::once("Off".to_owned()).chain(values).collect();
+    return Select::new(options)
+        .label(label)
+        .selected(value.map_or(0, |value| value as usize + 1))
+        .typed_from(1);
 }
 
 /// The active instrument's effects, in the order notes go through them. Changes are made

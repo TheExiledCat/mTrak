@@ -16,6 +16,7 @@ use crate::{
     data::{
         commands::{CommandKind, MidiCommand, PlaybackAction},
         config::TITLE,
+        instrument::Patch,
         metronome::{Metronome, MetronomeMode},
         midi::{
             DEFAULT_BPM, DEFAULT_SPEED, MIDI_CHANNEL_MAX, MidiEvent, PULSES_PER_QUARTER,
@@ -179,6 +180,8 @@ pub struct MtrakEngine {
     /// Each instrument's live effects. The UI sends a whole chain when a project loads, and
     /// changes it in place after that.
     effect_chains: [MidiEffectChain; MIDI_CHANNEL_COUNT],
+    /// Sent when one changes, when the output connects and when playback starts.
+    patches: [Patch; MIDI_CHANNEL_COUNT],
 }
 
 impl MtrakEngine {
@@ -234,6 +237,7 @@ impl MtrakEngine {
             playback_command_handler: PlaybackCommandHandler::new(),
             pattern_pulse: 0,
             effect_chains: std::array::from_fn(|_| MidiEffectChain::new()),
+            patches: [Patch::default(); MIDI_CHANNEL_COUNT],
         };
     }
 
@@ -330,6 +334,7 @@ impl MtrakEngine {
             EngineCommand::SetBendRange { channel, range } => self
                 .midi_command_handler
                 .set_bend_range(channel as usize, range),
+            EngineCommand::SetPatch { channel, patch } => self.set_patch(channel, patch),
             EngineCommand::SetEffectChain { channel, chain } => {
                 self.set_effect_chain(channel as usize, chain)
             }
@@ -705,6 +710,7 @@ impl MtrakEngine {
         out.extend(self.reset_commands());
         self.dispatch_messages(out);
         self.reset_effects();
+        self.send_patches();
         self.pattern_pulse = self.position.row as u32 * self.ticks_per_line() as u32 + tick;
         let now = Instant::now();
         self.clock = Some(Clock {
@@ -1549,6 +1555,28 @@ impl MtrakEngine {
         });
         self.status
             .set_output_connected(self.output_connection.is_some());
+        self.send_patches();
+    }
+
+    fn set_patch(&mut self, channel: u8, patch: Patch) {
+        let Some(current) = self.patches.get_mut(channel as usize) else {
+            return;
+        };
+        if *current == patch {
+            return;
+        }
+        *current = patch;
+        self.output_messages(patch.messages(Channel::from_u8(channel).unwrap()));
+    }
+
+    /// Muted channels get theirs too, so unmuting one doesn't play the wrong sound.
+    fn send_patches(&mut self) {
+        let messages = (0..=MIDI_CHANNEL_MAX)
+            .flat_map(|channel| {
+                self.patches[channel as usize].messages(Channel::from_u8(channel).unwrap())
+            })
+            .collect();
+        self.output_messages(messages);
     }
     /// Swaps in an instrument's effect chain, releasing the notes the old one still holds.
     fn set_effect_chain(&mut self, channel: usize, chain: MidiEffectChain) {
@@ -4978,5 +5006,33 @@ mod tests {
             .filter(|m| matches!(m, Message::NoteOff(..)))
             .count();
         assert_eq!(offs, 3);
+    }
+
+    #[test]
+    fn patches_go_out_when_they_change_and_when_playback_starts() {
+        let mut harness = Harness::new(vec![pattern(1, &[])]);
+        let patch = Patch {
+            bank_msb: Some(2),
+            bank_lsb: None,
+            program: Some(5),
+        };
+        let sent = vec![
+            Message::ControlChange(Channel::Ch3, 0, 2),
+            Message::ProgramChange(Channel::Ch3, 5),
+        ];
+        harness
+            .engine
+            .apply(EngineCommand::SetPatch { channel: 2, patch });
+        assert_eq!(harness.messages(), sent);
+        harness
+            .engine
+            .apply(EngineCommand::SetPatch { channel: 2, patch });
+        assert!(harness.messages().is_empty());
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        let messages = harness.messages();
+        let start = messages.iter().position(|m| *m == sent[0]).unwrap();
+        assert_eq!(messages[start..start + 2], sent);
     }
 }

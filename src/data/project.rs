@@ -325,6 +325,7 @@ mod tests {
     use super::*;
     use crate::data::{
         effect::{EffectKind, EffectSettings},
+        instrument::Patch,
         metronome::MetronomeMode,
         note::{Note, NoteKind, NotePitch},
     };
@@ -389,6 +390,7 @@ mod tests {
         )];
         bass.effects[0].enabled = false;
         bass.effects[0].param_ccs = vec![None, Some(0x4A)];
+        bass.patch = test_patch();
 
         let first = project
             .patterns
@@ -416,6 +418,14 @@ mod tests {
         second.set_length(32);
         second.set_event(31, 7, full_note());
         return project;
+    }
+
+    fn test_patch() -> Patch {
+        return Patch {
+            bank_msb: Some(1),
+            bank_lsb: None,
+            program: Some(0x21),
+        };
     }
 
     /// Checks a loaded test project holds what [`test_project`] put in it. Every file version
@@ -641,9 +651,16 @@ mod tests {
                     path.display()
                 );
             };
-            match Project::decode(&bytes) {
-                Ok(project) => assert_test_project(&project),
+            let project = match Project::decode(&bytes) {
+                Ok(project) => project,
                 Err(e) => panic!("the version {version} test project doesn't load: {e}"),
+            };
+            assert_test_project(&project);
+            // version 6 added the patch, which older projects don't send
+            let patch = project.instruments[3].patch;
+            match version {
+                ..6 => assert_eq!(patch, Patch::default()),
+                _ => assert_eq!(patch, test_patch()),
             }
         }
     }
@@ -663,6 +680,7 @@ mod tests {
         let saved = test_project().encode().unwrap();
         let loaded = Project::decode(&saved).unwrap();
         assert_test_project(&loaded);
+        assert_eq!(loaded.instruments[3].patch, test_patch());
         assert!(loaded.encode().unwrap() == saved);
     }
 

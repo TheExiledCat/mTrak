@@ -23,12 +23,12 @@ pub type Migration = fn(Value) -> Result<Value>;
 
 /// Each file version before the current one, with the migration that turns its payload into
 /// the next version's.
-const MIGRATIONS: &[(u16, Migration)] = &[(3, v3_to_v4), (4, v4_to_v5)];
+const MIGRATIONS: &[(u16, Migration)] = &[(3, v3_to_v4), (4, v4_to_v5), (5, v5_to_v6)];
 
 /// The first file version written as MessagePack. Older files used bincode, which can't be
 /// migrated as it doesn't store field names.
 pub const FIRST_MESSAGEPACK_VERSION: u16 = 3;
-pub const PROJECT_VERSION: u16 = 5;
+pub const PROJECT_VERSION: u16 = 6;
 
 /// Passes a payload of `version` through every migration up to [`PROJECT_VERSION`].
 pub fn migrate(payload: Value, version: u16) -> Result<Value> {
@@ -36,7 +36,20 @@ pub fn migrate(payload: Value, version: u16) -> Result<Value> {
 }
 
 /// Version 4 gave instruments a chain of effects, which is empty for older projects.
-fn v3_to_v4(mut payload: Value) -> Result<Value> {
+fn v3_to_v4(payload: Value) -> Result<Value> {
+    return add_instrument_field(payload, "effects", Value::Array(Vec::new()));
+}
+
+/// Version 6 gave instruments a bank and program to send, which older projects don't send.
+fn v5_to_v6(payload: Value) -> Result<Value> {
+    let patch = ["bank_msb", "bank_lsb", "program"]
+        .into_iter()
+        .map(|name| (Value::from(name), Value::Nil))
+        .collect();
+    return add_instrument_field(payload, "patch", Value::Map(patch));
+}
+
+fn add_instrument_field(mut payload: Value, name: &str, value: Value) -> Result<Value> {
     let Some(Value::Array(instruments)) = map_field(&mut payload, "instruments") else {
         return Err(MTrakError::InvalidProject(
             "the project has no instruments".into(),
@@ -48,7 +61,7 @@ fn v3_to_v4(mut payload: Value) -> Result<Value> {
                 "an instrument isn't a map".into(),
             ));
         };
-        fields.push((Value::from("effects"), Value::Array(Vec::new())));
+        fields.push((Value::from(name), value.clone()));
     }
     return Ok(payload);
 }
