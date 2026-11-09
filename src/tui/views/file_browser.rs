@@ -27,6 +27,7 @@ use crate::{
     },
 };
 pub const MTRAK_FILE_EXTENSION: &str = ".mtrak";
+pub const MIDI_FILE_EXTENSION: &str = ".mid";
 const ALL_EXTENSIONS_FILTER: &str = "*";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

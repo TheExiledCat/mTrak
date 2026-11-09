@@ -4,6 +4,7 @@ pub mod effect;
 pub mod instrument;
 pub mod metronome;
 pub mod midi;
+pub mod midi_file;
 pub mod migration;
 pub mod note;
 pub mod pattern;
