@@ -78,9 +78,9 @@ impl CommandKind {
 
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum MidiCommand {
-    SetCC,                  // Sets the CC to change with the ChangeCC command
-    ChangeCC,               // Changes the CC set by SetCC
-    ModWheel,               // Selects CC 1 like SetCC 01 and sends it like ChangeCC
+    SetCC,           // Sets the CC to change with the ChangeCC command
+    ChangeCC,        // Changes the CC set by SetCC
+    ModWheel,        // Selects CC 1 like SetCC 01 and sends it like ChangeCC
     CCSlide, // Slides the CC set by SetCC from this value to the track's next CC or slide command
     CCVelocitySlide, // CCSlide that also sets the velocity of notes played during it
     VelocitySlide, // Slides the velocity of notes played during it, without sending anything itself
@@ -106,13 +106,7 @@ impl MidiCommand {
     /// Whether this is one of FT2's slides, which move by a step every tick instead of
     /// towards a target.
     pub fn is_ft2_slide(&self) -> bool {
-        return matches!(
-            self,
-            PortaUp
-                | PortaDown
-                | TonePorta
-                | Vibrato
-        );
+        return matches!(self, PortaUp | PortaDown | TonePorta | Vibrato);
     }
     /// Whether the slide this command starts sends the selected CC.
     pub fn slides_cc(&self) -> bool {
@@ -371,10 +365,7 @@ impl PlaybackCommand {
 
     /// Whether this is one of FT2's slides, which move by a step every tick.
     pub fn is_ft2_slide(&self) -> bool {
-        return matches!(
-            self,
-            PlaybackCommand::GlobalVelocitySlide
-        );
+        return matches!(self, PlaybackCommand::GlobalVelocitySlide);
     }
 
     fn from_char(char: char) -> Result<Self, MTrakError> {

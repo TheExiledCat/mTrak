@@ -282,10 +282,7 @@ mod tests {
             row(&mut track, PitchAction::FinePortaUp(3), None, 3),
             [12, 12, 12]
         );
-        assert_eq!(
-            row(&mut track, PitchAction::FinePortaDown(1), None, 1),
-            [8]
-        );
+        assert_eq!(row(&mut track, PitchAction::FinePortaDown(1), None, 1), [8]);
         track.note_started(0, 64);
         assert_eq!(track.offset(), 0);
     }
