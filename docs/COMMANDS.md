@@ -230,6 +230,7 @@ C-4|1|--|037   C, D#, G, C, D#, G: a minor chord at speed 6
 ```
 
 - Needs a bend range of at least the bigger of `x` and `y`.
+- It bends whatever the track is playing, so entering one doesn't set the cell's instrument.
 
 ### `1` Portamento up
 
