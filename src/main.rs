@@ -50,14 +50,15 @@ fn main() -> ExitCode {
     glyphs::set_ascii_mode(config.ascii_mode);
     updater::remove_old_exe();
 
-    if !args.no_update_check && config.update_check {
-        if let UpdateOutcome::Updated(version) = updater::check_for_update() {
-            println!(
-                "mTrak was updated to v{}. Start it again to use the new version.",
-                version
-            );
-            return ExitCode::SUCCESS;
-        }
+    if !args.no_update_check
+        && config.update_check
+        && let UpdateOutcome::Updated(version) = updater::check_for_update()
+    {
+        println!(
+            "mTrak was updated to v{}. Start it again to use the new version.",
+            version
+        );
+        return ExitCode::SUCCESS;
     }
     let terminal = ratatui::init();
     let result = run(terminal, args, config, initialized, startup_errors);

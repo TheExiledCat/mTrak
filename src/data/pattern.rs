@@ -136,10 +136,10 @@ impl Pattern {
     }
 
     pub fn set_event(&mut self, row: usize, track: usize, event: Note) {
-        if let Some(row_data) = self.rows.get_mut(row) {
-            if track < row_data.tracks.len() {
-                row_data.tracks[track] = event;
-            }
+        if let Some(row_data) = self.rows.get_mut(row)
+            && track < row_data.tracks.len()
+        {
+            row_data.tracks[track] = event;
         }
     }
 

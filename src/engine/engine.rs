@@ -889,7 +889,7 @@ impl MtrakEngine {
             MetronomeMode::Recording => self.recording,
             MetronomeMode::Always => true,
         };
-        if clicks && self.pattern_pulse % PULSES_PER_QUARTER == 0 {
+        if clicks && self.pattern_pulse.is_multiple_of(PULSES_PER_QUARTER) {
             out.extend(self.click_release.take().map_or(vec![], |(_, offs)| offs));
             let beat = self.pattern_pulse / PULSES_PER_QUARTER;
             let metronome = self.metronome;
