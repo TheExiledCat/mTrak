@@ -927,8 +927,7 @@ impl AppState {
             extensions,
         ));
     }
-    /// Writes the song as it plays from its first position to a MIDI file, with a track for
-    /// each channel that sends something.
+    /// Channels that send nothing get no track.
     pub fn export_midi_file(&self, path: &Path) -> Result<()> {
         let song = render_song(&self.project);
         let channels: Vec<ChannelTrack> = song

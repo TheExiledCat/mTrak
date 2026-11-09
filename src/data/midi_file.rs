@@ -1,19 +1,15 @@
-//! Standard MIDI files, format 1: a track with the song's name and tempo, then a track per
-//! channel.
-
 use midi::{Message, ToRawMessages};
 
 use crate::data::midi::{PULSES_PER_QUARTER, raw_message_to_bytes};
 
 const MICROSECONDS_PER_MINUTE: u32 = 60_000_000;
 
-/// A channel's messages, in pulses from the start, and the name its track gets.
 pub struct ChannelTrack {
     pub name: String,
     pub messages: Vec<(u32, Message)>,
 }
 
-/// Pulses are MIDI clock pulses, so the file counts `PULSES_PER_QUARTER` ticks to a beat.
+/// A tick in the file is a MIDI clock pulse, so a beat is `PULSES_PER_QUARTER` ticks.
 pub fn write(name: &str, tempos: &[(u32, u8)], channels: &[ChannelTrack]) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"MThd");
