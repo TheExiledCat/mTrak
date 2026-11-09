@@ -90,7 +90,7 @@ fn bend_value(value: u8) -> u16 {
     return (BEND_CENTER as i32 + scaled) as u16;
 }
 
-/// Pitch steps as a bend away from the center over `range` semitones, clamped to a full bend.
+/// Clamped to a full bend.
 fn steps_bend(steps: i32, range: u8) -> i32 {
     if range == 0 {
         return 0;
@@ -210,12 +210,9 @@ pub struct MidiCommandHandler {
     default_controls: [u8; MIDI_CHANNEL_COUNT],
     /// Each instrument's bend range in semitones, by channel.
     bend_ranges: [u8; MIDI_CHANNEL_COUNT],
-    /// Each track's note and how far FT2's pitch commands bent it.
     pitches: [TrackPitch; TRACK_COUNT as usize],
-    /// The bend a `P` or `I` set, away from the center, by channel. Pitch commands bend from
-    /// there.
+    /// What `P` or `I` set, from the center. Pitch commands bend on top of it.
     base_bends: [i32; MIDI_CHANNEL_COUNT],
-    /// The last bend sent on each channel.
     sent_bends: [u16; MIDI_CHANNEL_COUNT],
 }
 impl Default for MidiCommandHandler {
@@ -238,8 +235,7 @@ impl MidiCommandHandler {
         };
     }
 
-    /// The channel's bend: the `P` or `I` one, plus what pitch commands bent each of the
-    /// channel's tracks.
+    // tracks sharing a channel add their bends up
     fn channel_bend(&self, channel: usize) -> u16 {
         let range = self.bend_ranges[channel];
         let bent: i32 = self
@@ -260,7 +256,6 @@ impl MidiCommandHandler {
         events.push(MidiEvent::Message(PitchBend(channel, bend)));
     }
 
-    /// Sends the bend of every channel whose bend changed.
     fn send_changed_bends(&mut self, events: &mut Vec<MidiEvent>) {
         for channel in 0..MIDI_CHANNEL_COUNT {
             if self.channel_bend(channel) != self.sent_bends[channel] {
@@ -269,7 +264,6 @@ impl MidiCommandHandler {
         }
     }
 
-    /// How far the track's channel can bend, in pitch steps.
     fn bend_limit(&self, track: usize) -> i32 {
         let range = self.pitches[track]
             .channel()
@@ -277,8 +271,7 @@ impl MidiCommandHandler {
         return range as i32 * STEPS_PER_SEMITONE;
     }
 
-    /// A new note on the track starts unbent, so its channel's bend goes back to where `P`
-    /// and `I` left it, before the note starts.
+    /// Unbends the track for its new note; the bend goes out before the note does.
     pub fn note_started(
         &mut self,
         events: &mut Vec<MidiEvent>,
@@ -293,8 +286,7 @@ impl MidiCommandHandler {
         self.send_changed_bends(events);
     }
 
-    /// Runs one of FT2's pitch commands on the first tick of its row. Returns whether the
-    /// cell's note shouldn't play, for tone portamento, which bends to it instead.
+    /// True when the cell's note shouldn't play, see `TrackPitch::apply`.
     pub fn pitch_command(
         &mut self,
         events: &mut Vec<MidiEvent>,
@@ -430,7 +422,7 @@ impl MidiCommandHandler {
                 PANNING_CC,
                 cc_value(value),
             ))),
-            // see `pitch_command`
+            // handled in `pitch_command`
             MidiCommand::PortaUp
             | MidiCommand::PortaDown
             | MidiCommand::TonePorta
@@ -438,8 +430,7 @@ impl MidiCommandHandler {
         }
     }
 
-    /// Advances running slides and pitch commands by one tick; called at every row start and
-    /// tick between rows. `tick` counts from the row start.
+    /// Called at every row start and tick between rows; `tick` counts from the row start.
     pub fn tick(&mut self, events: &mut Vec<MidiEvent>, tick: u32) {
         for track in 0..self.pitches.len() {
             let limit = self.bend_limit(track);
@@ -502,7 +493,6 @@ impl MidiCommandHandler {
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct RowFlow {
-    /// The row of the current pattern an `E6y` loops back to.
     pub loop_row: Option<usize>,
     pub jump: Option<u8>,
     pub break_row: Option<u8>,
@@ -520,11 +510,9 @@ pub struct PlaybackCommandHandler {
     /// H00 repeats the last slide, like FT2's effect memory.
     global_slide_memory: i16,
     track_velocities: [u8; TRACK_COUNT as usize],
-    /// The pattern and row playing, for pattern loops.
     pattern: Option<usize>,
     row: usize,
-    /// Each track's `E60` row and how many more times its `E6y` goes back there, like FT2's
-    /// pattern loop, which every channel keeps for itself.
+    /// Loop start and loops left, per track like FT2's per channel.
     loops: [(usize, u8); TRACK_COUNT as usize],
     flow: RowFlow,
 }
@@ -566,7 +554,6 @@ impl PlaybackCommandHandler {
         return self.track_velocities.get(track).copied().unwrap_or(u8::MAX);
     }
 
-    /// A new pattern starts its loops from its top.
     pub fn start_row(&mut self, pattern: usize, row: usize) {
         if self.pattern != Some(pattern) {
             self.loops = [(0, 0); TRACK_COUNT as usize];
@@ -666,7 +653,6 @@ impl PlaybackCommandHandler {
                 }
                 NoteAction::Play
             }
-            // the MIDI command handler runs these
             PlaybackAction::Pitch(_) => NoteAction::Play,
             PlaybackAction::SetTrackVelocity(velocity) => {
                 if let Some(slot) = self.track_velocities.get_mut(track) {
@@ -683,8 +669,7 @@ impl PlaybackCommandHandler {
     }
 }
 
-/// A global velocity slide's step per tick, from FT2's `Hxy`: up by `x`, else down by `y`,
-/// else the last step again.
+// same as FT2's Hxy: x wins, and 00 repeats the last step
 fn slide_step(up: u8, down: u8, memory: &mut i16) -> i16 {
     *memory = match (up, down) {
         (0, 0) => *memory,

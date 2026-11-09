@@ -5,7 +5,7 @@ use MidiCommand::*;
 use crate::error::MTrakError;
 
 const MOD_WHEEL_CC: u8 = 1;
-/// The usual filter cutoff controller, sound controller 5.
+/// Sound controller 5, the cutoff on most synths.
 const FILTER_CUTOFF_CC: u8 = 74;
 pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 16] = [
     ('S', SetCC),
@@ -86,7 +86,7 @@ pub enum MidiCommand {
     SetCC,           // Sets the CC to change with the ChangeCC command
     ChangeCC,        // Changes the CC set by SetCC
     ModWheel,        // Selects CC 1 like SetCC 01 and sends it like ChangeCC
-    FilterCutoff,    // Selects CC 74 like SetCC 4A and sends it like ChangeCC
+    FilterCutoff,    // Like ModWheel, but CC 74
     CCSlide, // Slides the CC set by SetCC from this value to the track's next CC or slide command
     CCVelocitySlide, // CCSlide that also sets the velocity of notes played during it
     VelocitySlide, // Slides the velocity of notes played during it, without sending anything itself
@@ -94,10 +94,10 @@ pub enum MidiCommand {
     AfterTouch, // Sets Channel AfterTouch
     PitchBend, // Sets Pitchbend with low resolution as a single byte
     Interval, // Bends by whole semitones, scaled to the instrument's bend range
-    Panning,  // FT2's 8: sends CC 10
-    PortaUp,  // FT2's 1: bends up a little every tick
+    Panning,  // FT2's 8, as CC 10
+    PortaUp,  // FT2's 1
     PortaDown, // FT2's 2
-    TonePorta, // FT2's 3: bends towards the cell's note instead of playing it
+    TonePorta, // FT2's 3
     Vibrato,  // FT2's 4
 }
 impl MidiCommand {
@@ -105,7 +105,7 @@ impl MidiCommand {
     pub fn is_slide(&self) -> bool {
         return matches!(self, CCSlide | CCVelocitySlide | VelocitySlide);
     }
-    /// The CC a shorthand command selects and sends, like an `S` and an `M` in one.
+    /// The CC that `W` and `Z` select and send.
     pub fn shorthand_cc(&self) -> Option<u8> {
         return match self {
             ModWheel => Some(MOD_WHEEL_CC),
@@ -119,8 +119,6 @@ impl MidiCommand {
             || self.shorthand_cc().is_some()
             || matches!(self, ChangeCC | EndSlide);
     }
-    /// Whether this is one of FT2's slides, which move by a step every tick instead of
-    /// towards a target.
     pub fn is_ft2_slide(&self) -> bool {
         return matches!(self, PortaUp | PortaDown | TonePorta | Vibrato);
     }
@@ -261,9 +259,8 @@ pub enum PlaybackAction {
         down: u8,
     },
     SetTrackVelocity(u8),
-    /// 0 marks the row the loop starts from; otherwise jumps back there this many times.
+    /// E60 marks the start, E6y loops back y times.
     PatternLoop(u8),
-    /// A pitch command, run by the MIDI command handler.
     Pitch(PitchAction),
     /// A value no subcommand uses yet.
     Unused,
@@ -383,7 +380,6 @@ impl PlaybackCommand {
         };
     }
 
-    /// Whether this is one of FT2's slides, which move by a step every tick.
     pub fn is_ft2_slide(&self) -> bool {
         return matches!(self, PlaybackCommand::GlobalVelocitySlide);
     }
@@ -399,24 +395,21 @@ impl PlaybackCommand {
         return CommandKind::Playback(*self);
     }
 }
-/// What one of FT2's pitch commands does, decoded from its letter and value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PitchAction {
-    /// FT2's 0xy: the note, then `x` semitones up, then `y` up, a tick each.
     Arpeggio {
         x: u8,
         y: u8,
     },
-    /// In 1/16 semitones per tick, after the first.
+    /// In 1/16 semitones.
     PortaUp(u8),
     PortaDown(u8),
     TonePorta(u8),
-    /// `speed` in 64ths of a cycle per tick, `depth` in 1/8 semitones.
+    /// `depth` is in 1/8 semitones.
     Vibrato {
         speed: u8,
         depth: u8,
     },
-    /// In 1/16 semitones, once on the row's first tick.
     FinePortaUp(u8),
     FinePortaDown(u8),
     Glissando(bool),
@@ -435,8 +428,7 @@ impl Command {
         return Self { kind, value };
     }
 
-    /// What the command does to the pitch of the track's note, if it's a pitch command. An
-    /// empty command letter with a value is FT2's arpeggio.
+    /// A `0` with a value is FT2's arpeggio.
     pub fn pitch_action(&self) -> Option<PitchAction> {
         let (high, low) = (self.value >> 4, self.value & 0x0F);
         return match self.kind {

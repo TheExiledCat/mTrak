@@ -1,21 +1,19 @@
 use crate::data::commands::PitchAction;
 
-/// FT2's linear pitch steps: 64 to a semitone.
+/// FT2's linear frequency table has 64 steps to a semitone.
 pub const STEPS_PER_SEMITONE: i32 = 64;
-/// FT2's portamento moves in 1/16 semitones.
+/// FT2's portamento speeds are in 1/16 semitones.
 const PORTA_STEP: i32 = 4;
-/// Vibrato's position goes round once every 256.
 const VIBRATO_POSITION_STEP: u8 = 4;
-/// FT2's vibrato table, the first half of a sine.
+/// Half a sine, straight from FT2.
 const VIBRATO_SINE: [u8; 32] = [
     0, 24, 49, 74, 97, 120, 141, 161, 180, 197, 212, 224, 235, 244, 250, 253, 255, 253, 250, 244,
     235, 224, 212, 197, 180, 161, 141, 120, 97, 74, 49, 24,
 ];
-/// The waveform bit that keeps the vibrato's position when a new note starts.
+/// E44 to E47: don't restart the vibrato on a new note.
 const KEEP_POSITION: u8 = 4;
 
-/// The last value each pitch command was given, which a 00 carries on with, like FT2's effect
-/// memory.
+/// FT2's effect memory: a 00 carries on with the last value.
 #[derive(Clone, Copy, Default)]
 struct Memory {
     porta_up: u8,
@@ -27,18 +25,17 @@ struct Memory {
     vibrato_depth: u8,
 }
 
-/// One track's note, and how far FT2's pitch commands have bent it, in `STEPS_PER_SEMITONE`.
+/// How far FT2's pitch commands have bent a track's note, in `STEPS_PER_SEMITONE`.
 #[derive(Clone, Copy, Default)]
 pub struct TrackPitch {
-    /// The channel and pitch of the track's last note.
+    /// Channel and pitch.
     note: Option<(u8, u8)>,
-    /// From portamento; it stays until the next note.
+    /// Stays until the next note.
     porta: i32,
-    /// Where tone portamento is heading.
     tone_target: i32,
-    /// From vibrato and arpeggio, only while their rows play.
+    /// Vibrato and arpeggio, gone again on the next row without them.
     wobble: i32,
-    /// The current row's command, with its memory filled in.
+    /// This row's command, with the memory filled in.
     action: Option<PitchAction>,
     memory: Memory,
     vibrato_position: u8,
@@ -47,13 +44,10 @@ pub struct TrackPitch {
 }
 
 impl TrackPitch {
-    /// The channel the track's note plays on.
     pub fn channel(&self) -> Option<u8> {
         return self.note.map(|(channel, _)| channel);
     }
 
-    /// How far the note is bent now. With glissando on, tone portamento moves in whole
-    /// semitones.
     pub fn offset(&self) -> i32 {
         let porta = match self.action {
             Some(PitchAction::TonePorta(_)) if self.glissando => {
@@ -65,7 +59,6 @@ impl TrackPitch {
         return porta + self.wobble;
     }
 
-    /// Like FT2, a new note starts at its own pitch.
     pub fn note_started(&mut self, channel: u8, pitch: u8) {
         self.note = Some((channel, pitch));
         self.porta = 0;
@@ -75,15 +68,13 @@ impl TrackPitch {
         }
     }
 
-    /// Vibrato and arpeggio only bend the rows they're on.
     pub fn start_row(&mut self) {
         self.action = None;
         self.wobble = 0;
     }
 
-    /// Runs the row's pitch command on its first tick. `note` is the cell's note, and `limit`
-    /// how far the track's channel can bend. Returns whether the note shouldn't play, as tone
-    /// portamento bends to it instead.
+    /// Tick 0 of the row. True when the cell's note shouldn't play, because tone portamento
+    /// bends to it instead.
     pub fn apply(&mut self, action: PitchAction, note: Option<u8>, limit: i32) -> bool {
         let memory = &mut self.memory;
         let remember = |slot: &mut u8, value: u8| {
@@ -121,7 +112,7 @@ impl TrackPitch {
             PitchAction::Glissando(on) => self.glissando = on,
             PitchAction::VibratoWaveform(waveform) => self.waveform = waveform,
             PitchAction::TonePorta(_) => {
-                // with nothing to bend from, the note just plays
+                // nothing playing to bend, so the note just plays
                 let (Some((_, from)), Some(to)) = (self.note, note) else {
                     return false;
                 };
@@ -134,7 +125,6 @@ impl TrackPitch {
         return false;
     }
 
-    /// Runs the row's pitch command on one of its ticks after the first.
     pub fn tick(&mut self, tick: u32, limit: i32) {
         match self.action {
             Some(PitchAction::PortaUp(speed)) => self.bend_by(speed as i32 * PORTA_STEP, limit),
@@ -168,7 +158,7 @@ impl TrackPitch {
         self.porta = (self.porta + steps).clamp(-limit, limit);
     }
 
-    /// FT2's vibrato at the current position: down for the first half of a cycle, then up.
+    // same as FT2: pitch goes down for the first half of the cycle
     fn vibrato(&self, depth: u8) -> i32 {
         let index = (self.vibrato_position / 4) & 0x1F;
         let rising = self.vibrato_position >= 128;
@@ -285,5 +275,34 @@ mod tests {
         assert_eq!(row(&mut track, PitchAction::FinePortaDown(1), None, 1), [8]);
         track.note_started(0, 64);
         assert_eq!(track.offset(), 0);
+    }
+
+    #[test]
+    fn square_vibrato_jumps_between_its_depths() {
+        let mut track = playing(60);
+        track.apply(PitchAction::VibratoWaveform(2), None, LIMIT);
+        let offsets = row(
+            &mut track,
+            PitchAction::Vibrato {
+                speed: 0x10,
+                depth: 4,
+            },
+            None,
+            6,
+        );
+        assert_eq!(offsets, [0, -31, -31, 31, 31, -31]);
+    }
+
+    #[test]
+    fn a_new_note_restarts_the_vibrato_unless_the_waveform_keeps_it() {
+        let vibrato = PitchAction::Vibrato { speed: 8, depth: 8 };
+        let mut track = playing(60);
+        row(&mut track, vibrato, None, 3);
+        track.note_started(0, 62);
+        assert_eq!(row(&mut track, vibrato, None, 2), [0, 0]);
+        track.apply(PitchAction::VibratoWaveform(4), None, LIMIT);
+        row(&mut track, vibrato, None, 3);
+        track.note_started(0, 64);
+        assert_ne!(row(&mut track, vibrato, None, 2), [0, 0]);
     }
 }

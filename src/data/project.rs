@@ -233,7 +233,7 @@ impl Project {
                 continue;
             };
             let mut next = None;
-            // each track's E60 row and how many more times its E6y goes back, as in the engine
+            // loop start and loops left per track, like the engine
             let mut loops = [(0, 0u8); TRACK_COUNT as usize];
             let mut row_index = first_row;
             while let Some(row) = pattern.rows.get(row_index) {

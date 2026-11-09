@@ -1257,7 +1257,8 @@ impl MtrakEngine {
         }
     }
 
-    /// FT2's E6y, B and D, in that order. Playing a single pattern, a break stays inside it; a block loop ignores both.
+    /// FT2's E6y, B and D, in that order. Playing a single pattern, a break stays inside it; a
+    /// block loop ignores all three.
     fn flow_target(&self, flow: RowFlow) -> Option<Position> {
         let row_count = |id: PatternId| {
             self.patterns
@@ -4877,6 +4878,23 @@ mod tests {
             .iter()
             .position(|m| matches!(m, Message::NoteOn(..)));
         assert!(bend < note_on, "{messages:?}");
+    }
+
+    #[test]
+    fn a_zero_command_with_a_value_plays_an_arpeggio() {
+        let mut cell = note("C-4 1 --");
+        cell.command = Command::new(CommandKind::None, 0x47);
+        let mut harness = Harness::new(vec![pattern(2, &[(0, 0, cell)])]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        for _ in 0..3 {
+            harness.command_tick();
+        }
+        // up 4 and 7 semitones, then back to the note
+        assert_eq!(bends(&harness.messages()), vec![10922, 12970, BEND_CENTER]);
+        harness.next_row();
+        assert_eq!(bends(&harness.messages()).last(), Some(&BEND_CENTER));
     }
 
     #[test]
