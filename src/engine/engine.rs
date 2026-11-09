@@ -5186,4 +5186,22 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn rendering_counts_a_delayed_last_row_in_full() {
+        let mut project = Project::empty();
+        let delay = playback(note("C-4 1 --"), PlaybackCommand::Extended, 0xE1);
+        let first = project
+            .patterns
+            .get_pattern_by_id_mut(PatternId(0))
+            .unwrap();
+        first.set_length(2);
+        first.set_event(1, 0, delay);
+        let song = render_song(&project);
+        // row 1 lasts two rows, so the song is 3 rows of 6 pulses
+        assert_eq!(
+            song.messages[1].last(),
+            Some(&(18, Message::NoteOff(Channel::Ch2, 60, 0)))
+        );
+    }
 }
