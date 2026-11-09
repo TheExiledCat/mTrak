@@ -1361,13 +1361,13 @@ impl MtrakEngine {
                             .legato_on(track, channel, pitch.0, velocity, overlap, out),
                         None => {
                             self.voices.note_on(track, channel, pitch.0, velocity, out);
-                            let chord: Vec<u8> = note
-                                .command
-                                .chord()
+                            let (intervals, strum) = note.command.chord();
+                            let chord: Vec<u8> = intervals
                                 .into_iter()
                                 .map(|interval| pitch.0.saturating_add(interval))
                                 .collect();
-                            self.voices.chord_on(track, channel, &chord, velocity, out);
+                            self.voices
+                                .chord_on(track, channel, &chord, velocity, strum, out);
                         }
                     },
                     _ => self.voices.release(track, out),

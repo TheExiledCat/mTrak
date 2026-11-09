@@ -23,12 +23,22 @@ struct Lingering {
     voice: Voice,
 }
 
+/// A strummed chord note waiting for its tick.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Strummed {
+    track: usize,
+    channel: u8,
+    pitch: u8,
+    velocity: u8,
+}
+
 /// Tracks which note each track is playing, so note offs reach the right channel and pitch.
 pub struct Voices {
     tracks: [Option<Voice>; TRACK_COUNT as usize],
     /// Notes a chord added to the track's note, which go with it.
     chords: [Vec<Voice>; TRACK_COUNT as usize],
     lingering: Countdown<Lingering>,
+    strummed: Countdown<Strummed>,
     held: HeldNotes,
     channel_volumes: [u8; MIDI_CHANNEL_COUNT],
     velocity: u8,
@@ -48,6 +58,7 @@ impl Voices {
             tracks: [None; TRACK_COUNT as usize],
             chords: std::array::from_fn(|_| Vec::new()),
             lingering: Countdown::new(),
+            strummed: Countdown::new(),
             held: HeldNotes::new(),
             channel_volumes: [0xFF; MIDI_CHANNEL_COUNT],
             velocity: 0xFF,
@@ -72,20 +83,30 @@ impl Voices {
         self.tracks[track] = self.start(channel, pitch, velocity, out);
     }
 
-    /// Adds notes to the track's note, released along with it.
+    /// Adds notes to the track's note, released along with it. With `strum`, they start one
+    /// after another, that many ticks apart.
     pub fn chord_on(
         &mut self,
         track: usize,
         channel: u8,
         pitches: &[u8],
         velocity: u8,
+        strum: u8,
         out: &mut Vec<Message>,
     ) {
         if self.tracks.get(track).copied().flatten().is_none() {
             return;
         }
-        for &pitch in pitches {
-            if let Some(voice) = self.start(channel, pitch, velocity, out) {
+        for (index, &pitch) in pitches.iter().enumerate() {
+            if strum > 0 {
+                let note = Strummed {
+                    track,
+                    channel,
+                    pitch,
+                    velocity,
+                };
+                self.strummed.push(note, strum as u32 * (index as u32 + 1));
+            } else if let Some(voice) = self.start(channel, pitch, velocity, out) {
                 self.chords[track].push(voice);
             }
         }
@@ -107,6 +128,7 @@ impl Voices {
         }
         let previous = self.tracks[track].take();
         let chord = std::mem::take(&mut self.chords[track]);
+        self.strummed.remove(|note| note.track == track);
         self.tracks[track] = self.start(channel, pitch, velocity, out);
         for voice in chord {
             self.note_off(voice, out);
@@ -136,6 +158,7 @@ impl Voices {
         for voice in std::mem::take(&mut self.chords[track]) {
             self.note_off(voice, out);
         }
+        self.strummed.remove(|note| note.track == track);
     }
 
     /// Stops the track's note and any note still ringing after a legato note, straight away.
@@ -153,6 +176,11 @@ impl Voices {
     pub fn tick(&mut self, out: &mut Vec<Message>) {
         for lingering in self.lingering.tick() {
             self.note_off(lingering.voice, out);
+        }
+        for note in self.strummed.tick() {
+            if let Some(voice) = self.start(note.channel, note.pitch, note.velocity, out) {
+                self.chords[note.track].push(voice);
+            }
         }
     }
 
@@ -481,7 +509,7 @@ mod tests {
         let mut voices = Voices::new();
         let mut out = vec![];
         voices.note_on(0, 0, 60, 100, &mut out);
-        voices.chord_on(0, 0, &[64, 67], 100, &mut out);
+        voices.chord_on(0, 0, &[64, 67], 100, 0, &mut out);
         assert_eq!(out.len(), 3);
         out.clear();
         voices.note_on(0, 0, 62, 100, &mut out);
@@ -495,7 +523,7 @@ mod tests {
     fn a_chord_needs_a_note_to_go_with() {
         let mut voices = Voices::new();
         let mut out = vec![];
-        voices.chord_on(0, 0, &[64, 67], 100, &mut out);
+        voices.chord_on(0, 0, &[64, 67], 100, 0, &mut out);
         assert!(out.is_empty());
     }
 
@@ -504,14 +532,39 @@ mod tests {
         let mut voices = Voices::new();
         let mut out = vec![];
         voices.note_on(0, 0, 60, 100, &mut out);
-        voices.chord_on(0, 0, &[64, 67], 100, &mut out);
+        voices.chord_on(0, 0, &[64, 67], 100, 0, &mut out);
         out.clear();
         voices.release_channels(&[true], &mut out);
         assert_eq!(note_offs(&out), 3);
         voices.note_on(1, 0, 60, 100, &mut out);
-        voices.chord_on(1, 0, &[63], 100, &mut out);
+        voices.chord_on(1, 0, &[63], 100, 0, &mut out);
         out.clear();
         voices.cut(1, &mut out);
         assert_eq!(note_offs(&out), 2);
+    }
+
+    #[test]
+    fn a_strummed_chord_starts_low_to_high_and_stops_with_its_note() {
+        let mut voices = Voices::new();
+        let mut out = vec![];
+        voices.note_on(0, 0, 60, 100, &mut out);
+        voices.chord_on(0, 0, &[64, 67], 100, 2, &mut out);
+        assert_eq!(out.len(), 1);
+        let mut started = vec![];
+        for _ in 0..4 {
+            out.clear();
+            voices.tick(&mut out);
+            started.push(out.clone());
+        }
+        let on = |pitch| vec![Message::NoteOn(Channel::Ch1, pitch, 100)];
+        assert_eq!(started, vec![vec![], on(64), vec![], on(67)]);
+        voices.chord_on(0, 0, &[72], 100, 3, &mut out);
+        out.clear();
+        voices.release(0, &mut out);
+        assert_eq!(note_offs(&out), 3);
+        for _ in 0..4 {
+            voices.tick(&mut out);
+        }
+        assert!(!out.iter().any(|m| matches!(m, Message::NoteOn(..))));
     }
 }

@@ -559,7 +559,34 @@ C-4|1|--|Q07   C and G, a power chord
 - The chord goes when the track's note does: on the next note, a note off, a cut or a mute.
 - Without a note on the cell, `Q` does nothing. `R` and `E9` on later rows repeat the whole
   chord.
-- The synth needs to be polyphonic. For other shapes, more notes or inversions, use the
+- The synth needs to be polyphonic.
+
+### `X` Xtra chord
+
+Plays chord `x` from the table below on the cell's note, with the notes strummed from low to
+high, `y` ticks apart. With `y` at `0` they all start together.
+
+```
+C-4|1|--|X90   C major 7: C, E, G and B together
+C-4|1|--|X92   the same chord strummed: E on tick 2, G on tick 4 and B on tick 6
+```
+
+| `x` | Chord          | Semitones up | `x` | Chord          | Semitones up |
+|-----|----------------|--------------|-----|----------------|--------------|
+| `0` | Major          | 4, 7         | `8` | Minor 6        | 3, 7, 9      |
+| `1` | Minor          | 3, 7         | `9` | Major 7        | 4, 7, 11     |
+| `2` | Diminished     | 3, 6         | `A` | 7              | 4, 7, 10     |
+| `3` | Augmented      | 4, 8         | `B` | Minor 7        | 3, 7, 10     |
+| `4` | Sus2           | 2, 7         | `C` | Minor 7 flat 5 | 3, 6, 10     |
+| `5` | Sus4           | 5, 7         | `D` | Diminished 7   | 3, 6, 9      |
+| `6` | Power + octave | 7, 12        | `E` | Add 9          | 4, 7, 14     |
+| `7` | 6              | 4, 7, 9      | `F` | Minor add 9    | 3, 7, 14     |
+
+- It works like `Q` otherwise: the chord goes with the track's note, and `R` and `E9` repeat
+  it.
+- A strum carries on into the next row, until the track's next note, note off or cut stops
+  it.
+- The table is on the Commands screen too. For other shapes, more notes or inversions, use the
   Chord instrument effect (see [EFFECTS.md](EFFECTS.md#chord)).
 
 ## Slides

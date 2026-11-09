@@ -25,7 +25,7 @@ pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 16] = [
     ('3', TonePorta),
     ('4', Vibrato),
 ];
-pub const PLAYBACK_COMMAND_LOOKUP: [(char, PlaybackCommand); 11] = [
+pub const PLAYBACK_COMMAND_LOOKUP: [(char, PlaybackCommand); 12] = [
     ('F', PlaybackCommand::SetTempo),
     ('Y', PlaybackCommand::Probability),
     ('E', PlaybackCommand::Extended),
@@ -37,7 +37,28 @@ pub const PLAYBACK_COMMAND_LOOKUP: [(char, PlaybackCommand); 11] = [
     ('H', PlaybackCommand::GlobalVelocitySlide),
     ('C', PlaybackCommand::SetTrackVelocity),
     ('Q', PlaybackCommand::Chord),
+    ('X', PlaybackCommand::ExtraChord),
 ];
+/// What `Xxy` picks from with its `x`: a name, and the semitones above the note.
+pub const CHORDS: [(&str, &[u8]); 16] = [
+    ("Major", &[4, 7]),
+    ("Minor", &[3, 7]),
+    ("Diminished", &[3, 6]),
+    ("Augmented", &[4, 8]),
+    ("Sus2", &[2, 7]),
+    ("Sus4", &[5, 7]),
+    ("Power, with the octave", &[7, 12]),
+    ("6", &[4, 7, 9]),
+    ("Minor 6", &[3, 7, 9]),
+    ("Major 7", &[4, 7, 11]),
+    ("7", &[4, 7, 10]),
+    ("Minor 7", &[3, 7, 10]),
+    ("Minor 7 flat 5", &[3, 6, 10]),
+    ("Diminished 7", &[3, 6, 9]),
+    ("Add 9", &[4, 7, 14]),
+    ("Minor add 9", &[3, 7, 14]),
+];
+
 /// A way to write a command's value, e.g. `xy`, and what it does.
 pub type CommandForm = (&'static str, &'static str);
 
@@ -220,6 +241,7 @@ pub enum PlaybackCommand {
     GlobalVelocitySlide, // FT2's H
     SetTrackVelocity, // scales every note on the track from here on
     Chord,  // plays the note with two more, x and y semitones up
+    ExtraChord, // plays chord x from `CHORDS`, strummed y ticks apart
 }
 /// Values from 20 up set the BPM; lower values set the speed.
 const TEMPO_MIN_BPM: u8 = 0x20;
@@ -265,6 +287,10 @@ pub enum PlaybackAction {
     Chord {
         x: u8,
         y: u8,
+    },
+    ExtraChord {
+        chord: u8,
+        strum: u8,
     },
     /// E60 marks the start, E6y loops back y times.
     PatternLoop(u8),
@@ -315,6 +341,10 @@ impl PlaybackCommand {
             },
             PlaybackCommand::SetTrackVelocity => PlaybackAction::SetTrackVelocity(value),
             PlaybackCommand::Chord => PlaybackAction::Chord { x: high, y: low },
+            PlaybackCommand::ExtraChord => PlaybackAction::ExtraChord {
+                chord: high,
+                strum: low,
+            },
         };
     }
 
@@ -388,6 +418,10 @@ impl PlaybackCommand {
             PlaybackCommand::Chord => {
                 &[("xy", "Chord: play the note with notes x and y semitones up")]
             }
+            PlaybackCommand::ExtraChord => &[
+                ("x0", "Xtra chord: play chord x from the chord table"),
+                ("xy", "Xtra chord: strum chord x low to high, y ticks apart"),
+            ],
         };
     }
 
@@ -439,14 +473,19 @@ impl Command {
         return Self { kind, value };
     }
 
-    /// The notes a `Q` adds, in semitones above the cell's note.
-    pub fn chord(&self) -> Vec<u8> {
+    /// The notes a `Q` or `X` adds, in semitones above the cell's note, and the ticks between
+    /// them.
+    pub fn chord(&self) -> (Vec<u8>, u8) {
+        let (high, low) = (self.value >> 4, self.value & 0x0F);
         return match self.kind {
-            CommandKind::Playback(PlaybackCommand::Chord) => [self.value >> 4, self.value & 0x0F]
-                .into_iter()
-                .filter(|&interval| interval > 0)
-                .collect(),
-            _ => Vec::new(),
+            CommandKind::Playback(PlaybackCommand::Chord) => {
+                let intervals = [high, low].into_iter().filter(|&i| i > 0).collect();
+                (intervals, 0)
+            }
+            CommandKind::Playback(PlaybackCommand::ExtraChord) => {
+                (CHORDS[high as usize].1.to_vec(), low)
+            }
+            _ => (Vec::new(), 0),
         };
     }
 
@@ -638,10 +677,11 @@ mod tests {
     #[test]
     fn a_chord_skips_zero_intervals() {
         let chord = |text: &str| Command::from_str(text).unwrap().chord();
-        assert_eq!(chord("Q37"), vec![3, 7]);
-        assert_eq!(chord("Q07"), vec![7]);
-        assert!(chord("Q00").is_empty());
-        assert!(chord("037").is_empty());
+        assert_eq!(chord("Q37"), (vec![3, 7], 0));
+        assert_eq!(chord("Q07"), (vec![7], 0));
+        assert!(chord("Q00").0.is_empty());
+        assert!(chord("037").0.is_empty());
+        assert_eq!(chord("X92"), (vec![4, 7, 11], 2));
     }
 
     #[test]
@@ -658,7 +698,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_commands() {
-        for text in ["", "00", "0000", "X00", "0G0", "s00", "K00"] {
+        for text in ["", "00", "0000", "O00", "0G0", "s00", "K00"] {
             assert!(
                 Command::from_str(text).is_err(),
                 "{:?} should not parse",

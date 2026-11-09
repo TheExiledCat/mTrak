@@ -653,7 +653,9 @@ impl PlaybackCommandHandler {
                 }
                 NoteAction::Play
             }
-            PlaybackAction::Pitch(_) | PlaybackAction::Chord { .. } => NoteAction::Play,
+            PlaybackAction::Pitch(_)
+            | PlaybackAction::Chord { .. }
+            | PlaybackAction::ExtraChord { .. } => NoteAction::Play,
             PlaybackAction::SetTrackVelocity(velocity) => {
                 if let Some(slot) = self.track_velocities.get_mut(track) {
                     *slot = velocity;
