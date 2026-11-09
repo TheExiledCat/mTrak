@@ -7,7 +7,7 @@ mapping and navigation keys. Instead of playing samples it sends MIDI, so it can
 any hardware or software synth.
 
 Join us on the TrackerCatz Discord server.
-[![Discord](https://img.shields.io/badge/TrackerCatz_Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/yourinvite)
+[![Discord](https://img.shields.io/badge/TrackerCatz_Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/cjAQR9xB5q)
 
 ![mTrak demo: typing a beat, bass and lead with retrig and CC commands, transposing a track, playing the song, giving the lead an arpeggiator while it plays, naming the song in the Info dialog, a tour of the example themes, collapsing the header and the commands list](docs/demo.gif)
 
