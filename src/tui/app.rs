@@ -1,7 +1,8 @@
 use std::{
     collections::{HashSet, VecDeque},
     fmt::Write,
-    path::PathBuf,
+    fs,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         mpsc::{self, Receiver, Sender},
@@ -30,6 +31,7 @@ use crate::{
             CC_MAX, MAX_SPEED, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX,
             bytes_to_message, non_note_on_channel,
         },
+        midi_file::{self, ChannelTrack},
         note::{Note, NoteKind, NotePitch},
         pattern::{
             self, Block, ClearOption, ClearTarget, Pattern, PatternId, PatternRow, Remap,
@@ -39,7 +41,7 @@ use crate::{
     },
     engine::{
         effects::{create_chain, default_settings, effect_params, set_saved_param},
-        engine::PlayMode,
+        engine::{PlayMode, render_song},
         handle::{ClockSource, EngineCommand, EngineHandle},
     },
     error::{MTrakError, Result},
@@ -925,6 +927,30 @@ impl AppState {
             extensions,
         ));
     }
+    /// Channels that send nothing get no track.
+    pub fn export_midi_file(&self, path: &Path) -> Result<()> {
+        let song = render_song(&self.project);
+        let channels: Vec<ChannelTrack> = song
+            .messages
+            .into_iter()
+            .enumerate()
+            .filter(|(_, messages)| !messages.is_empty())
+            .map(|(channel, messages)| {
+                let name = &self.project.instruments[channel].name;
+                ChannelTrack {
+                    name: match name.is_empty() {
+                        true => format!("Instrument {channel:X}"),
+                        false => format!("{channel:X} {name}"),
+                    },
+                    messages,
+                }
+            })
+            .collect();
+        let name = self.project.name.as_deref().unwrap_or(TITLE);
+        fs::write(path, midi_file::write(name, &song.tempos, &channels))?;
+        return Ok(());
+    }
+
     pub fn save_project(&mut self, path: PathBuf) -> Result<()> {
         self.project.save(path.clone())?;
         self.has_changes = false;

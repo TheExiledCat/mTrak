@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc,
-        mpsc::{Receiver, RecvTimeoutError, Sender},
+        mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
     time::{Duration, Instant},
 };
@@ -24,14 +24,14 @@ use crate::{
         },
         note::{Note, NoteKind},
         pattern::{Pattern, PatternId},
-        project::SequenceRow,
+        project::{Project, SequenceRow},
     },
     engine::{
         command_handler::{
             CommandContext, MidiCommandHandler, NoteAction, PlaybackCommandHandler, RowFlow,
             SlideTarget, retrig_velocity,
         },
-        effects::{MidiEffectChain, Timing},
+        effects::{MidiEffectChain, Timing, create_chain},
         handle::{ClockSource, EngineCommand, EngineStatus},
         notes::MIDI_CHANNEL_COUNT,
         voices::Voices,
@@ -1693,6 +1693,104 @@ impl MtrakEngine {
 
 /// A note's velocity: the volume column (00-80) wins, then a velocity slide's value, then full
 /// velocity. `None` means the note is silent.
+/// A song as the engine plays it, in pulses from its start.
+pub struct RenderedSong {
+    /// By channel.
+    pub messages: [Vec<(u32, Message)>; MIDI_CHANNEL_COUNT],
+    /// Every BPM change, starting with the BPM at pulse 0.
+    pub tempos: Vec<(u32, u8)>,
+}
+
+/// Plays the song once through, from its first position, on an engine of its own without
+/// waiting for the clock. It ends where the song length in the Info dialog does, or on an `EF`.
+pub fn render_song(project: &Project) -> RenderedSong {
+    let (_commands, receiver) = mpsc::channel();
+    let (sender, events) = mpsc::channel();
+    let mut engine = MtrakEngine::new(receiver, sender, Arc::new(EngineStatus::default()));
+    for (index, pattern) in project.patterns.get_patterns().iter().enumerate() {
+        engine.apply(EngineCommand::SetPattern(
+            PatternId(index as u8),
+            Arc::clone(pattern),
+        ));
+    }
+    engine.apply(EngineCommand::SetSequence(project.sequence.clone()));
+    for (index, instrument) in project.instruments.iter().enumerate() {
+        let channel = index as u8;
+        let settings = [
+            EngineCommand::SetGlobalVolume {
+                channel,
+                volume: instrument.volume,
+            },
+            EngineCommand::SetDefaultCC {
+                channel,
+                control: instrument.default_cc,
+            },
+            EngineCommand::SetBendRange {
+                channel,
+                range: instrument.pitch_wheel_range,
+            },
+            EngineCommand::SetChannelTranspose {
+                channel,
+                transpose: instrument.transpose,
+            },
+            EngineCommand::SetPatch {
+                channel,
+                patch: instrument.patch,
+            },
+            EngineCommand::SetEffectChain {
+                channel,
+                chain: create_chain(&instrument.effects),
+            },
+        ];
+        for command in settings {
+            engine.apply(command);
+        }
+    }
+    engine.apply(EngineCommand::SetTranspose(project.transpose));
+    engine.apply(EngineCommand::SetBpm(project.bpm));
+    engine.apply(EngineCommand::SetSpeed(project.speed));
+    engine.apply(EngineCommand::SetGlobalVelocity(project.global_velocity));
+    // the patches go out again when playback starts
+    events.try_iter().for_each(drop);
+
+    let rows = project.stats().song_rows;
+    let mut song = RenderedSong {
+        messages: std::array::from_fn(|_| Vec::new()),
+        tempos: Vec::new(),
+    };
+    let record = |song: &mut RenderedSong, engine: &MtrakEngine, pulse: u32| {
+        for message in events.try_iter().flat_map(MidiEvent::into_messages) {
+            // the all sound off on stop is for live playback; the note offs are enough
+            if matches!(message, Message::AllSoundOff(_)) {
+                continue;
+            }
+            if let Some(channel) = message_channel(&message) {
+                song.messages[channel as usize].push((pulse, message));
+            }
+        }
+        // stopping puts the song's own tempo back
+        let bpm = engine.bpm();
+        if engine.clock.is_some() && song.tempos.last().is_none_or(|&(_, last)| last != bpm) {
+            song.tempos.push((pulse, bpm));
+        }
+    };
+    engine.apply(EngineCommand::PlaySong(0));
+    record(&mut song, &engine, 0);
+    let (mut pulse, mut played) = (0, 1);
+    while let Some(clock) = &engine.clock {
+        pulse += 1;
+        let starts_row = clock.tick + 1 >= engine.ticks_per_line() as u32 && engine.row_delay == 0;
+        if starts_row && played >= rows {
+            engine.stop();
+        } else {
+            engine.pulse();
+            played += starts_row as u32;
+        }
+        record(&mut song, &engine, pulse);
+    }
+    return song;
+}
+
 pub fn velocity(volume: Option<u8>, glide: Option<u8>) -> Option<u8> {
     let velocity = match volume {
         Some(volume) => volume.min(VELOCITY_MAX),
@@ -5034,5 +5132,76 @@ mod tests {
         let messages = harness.messages();
         let start = messages.iter().position(|m| *m == sent[0]).unwrap();
         assert_eq!(messages[start..start + 2], sent);
+    }
+
+    #[test]
+    fn rendering_plays_the_song_once_with_its_tempo_changes() {
+        let mut project = Project::empty();
+        let bpm = playback(Note::empty(), PlaybackCommand::SetTempo, 0x8C);
+        let cells = [
+            (0, 1, note("C-4 2 40")),
+            (1, 0, bpm),
+            (2, 1, note("=== 2 --")),
+        ];
+        let first = project
+            .patterns
+            .get_pattern_by_id_mut(PatternId(0))
+            .unwrap();
+        first.set_length(4);
+        for (row, track, cell) in cells {
+            first.set_event(row, track, cell);
+        }
+        let song = render_song(&project);
+        assert_eq!(
+            song.messages[2],
+            vec![
+                (0, Message::NoteOn(Channel::Ch3, 60, 0x40)),
+                (12, Message::NoteOff(Channel::Ch3, 60, 0)),
+            ]
+        );
+        assert!(
+            song.messages
+                .iter()
+                .enumerate()
+                .all(|(channel, messages)| { channel == 2 || messages.is_empty() })
+        );
+        assert_eq!(song.tempos, vec![(0, DEFAULT_BPM), (6, 0x8C)]);
+    }
+
+    #[test]
+    fn rendering_ends_where_the_song_does_and_releases_its_notes() {
+        let mut project = Project::empty();
+        let first = project
+            .patterns
+            .get_pattern_by_id_mut(PatternId(0))
+            .unwrap();
+        first.set_length(2);
+        first.set_event(1, 0, note("D-4 1 --"));
+        let song = render_song(&project);
+        assert_eq!(
+            song.messages[1],
+            vec![
+                (6, Message::NoteOn(Channel::Ch2, 62, VELOCITY_MAX)),
+                (12, Message::NoteOff(Channel::Ch2, 62, 0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn rendering_counts_a_delayed_last_row_in_full() {
+        let mut project = Project::empty();
+        let delay = playback(note("C-4 1 --"), PlaybackCommand::Extended, 0xE1);
+        let first = project
+            .patterns
+            .get_pattern_by_id_mut(PatternId(0))
+            .unwrap();
+        first.set_length(2);
+        first.set_event(1, 0, delay);
+        let song = render_song(&project);
+        // row 1 lasts two rows, so the song is 3 rows of 6 pulses
+        assert_eq!(
+            song.messages[1].last(),
+            Some(&(18, Message::NoteOff(Channel::Ch2, 60, 0)))
+        );
     }
 }

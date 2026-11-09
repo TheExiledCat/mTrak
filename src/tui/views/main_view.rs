@@ -34,6 +34,7 @@ pub enum MainAction {
     Quit,
     Save,
     SaveAs,
+    ExportMidi,
     PlayPattern,
     PlaySong,
     Panic,
@@ -85,6 +86,7 @@ pub fn global_keymap() -> Keymap<MainAction> {
             MainAction::File,
             "File",
         )
+        .bind(Key::alt('m'), MainAction::ExportMidi, "Export")
         .bind(
             Key::new(constants::EXIT_KEY, KeyModifiers::CONTROL),
             MainAction::Quit,
@@ -109,6 +111,7 @@ impl KeyActions for MainView {
                 None => request_save_as(state),
             },
             MainAction::SaveAs => request_save_as(state),
+            MainAction::ExportMidi => request_midi_export(state),
             MainAction::PlayPattern => state.play_pattern(state.active_pattern),
             MainAction::PlaySong => state.play_song(state.active_sequence_index),
             MainAction::Panic => {
@@ -137,6 +140,7 @@ impl KeyActions for MainView {
             MainAction::Quit => "Quit",
             MainAction::Save => "Save project",
             MainAction::SaveAs => "Save project as",
+            MainAction::ExportMidi => "Export the song as a MIDI file",
             MainAction::PlayPattern => "Play the current pattern",
             MainAction::PlaySong => "Play the song from the current sequence position",
             MainAction::Panic => "Panic: stop and silence every channel, resetting controllers",
@@ -182,6 +186,21 @@ fn request_save_as(state: &mut AppState) {
         start_directory,
         "Save project",
         vec!["*".to_owned() + file_browser::MTRAK_FILE_EXTENSION],
+    );
+}
+fn request_midi_export(state: &mut AppState) {
+    let start_directory = project_browse_directory(state);
+    state.request_save_file(
+        |state, file_path| {
+            state.export_midi_file(&file_path)?;
+            let name = file_path.file_name().unwrap_or_default().to_string_lossy();
+            let message = format!("Exported {name}");
+            state.open_dialog(Dialog::popup(InfoLevel::Info, "Exported", message));
+            return Ok(());
+        },
+        start_directory,
+        "Export MIDI file",
+        vec!["*".to_owned() + file_browser::MIDI_FILE_EXTENSION],
     );
 }
 fn browse_to_open(state: &mut AppState) {
