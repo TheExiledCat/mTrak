@@ -1,0 +1,78 @@
+# Roadmap
+
+Planned features, in no particular order:
+
+- [x] **File browser and global saving**
+- [X] **Undo system**
+- [ ] **MIDI file import/export**
+    - [X] export the song as a MIDI file
+    - [ ] import a MIDI file
+- [ ] **MIDI input**:
+    - [X] play notes into the pattern using a connected midi controller
+    - [X] trigger mtrak to start and stop playback, sync to midi controller
+    - [X] follow an external MIDI clock, with start, stop, continue and song position
+    - [X] separate ports for notes and clock
+    - [ ] Change sequence/pattern using Program Select In
+- [X] **MIDI clock out**: send clock and start/stop to sync external sequencers, drum machines and arpeggiators
+- [ ] **Multiple output ports**: map instruments to different MIDI devices, not just channels on one port
+- [X] **Program change and bank select per instrument**, so loading a project restores the right patches
+- [X] **Panic button** (`~`): all notes off and reset controllers, for stuck notes
+- [X] **Live record**:
+    - [X] play notes in while the song is playing, for beatmaking
+    - [X] send metronome to channel
+- [X] **Live edit**:
+    - [X] row lock edit: option to stop the cursor following the playback row, so you can edit a pattern while it plays (handy for loops)
+    - [X] block loop: loop the currently marked block
+- [X] **Block operations**:
+    - [X] select, copy, paste 
+    - [X] transpose across rows and tracks
+    - [X] clearing blocks
+- [x] **Prebuilt binaries** for Linux, Windows and macOS on every release
+- [ ] Selectable track counts other than 8
+- [ ] Polyphonic note entering (arming multiple tracks so chords can be entered)
+- [ ] **More commands**
+    - [X] Retrig (`R`, FT2's multi retrig) and retrig note (`E9`)
+    - [x] BPM and SPD change (`F`)
+    - [X] Note delay (`ED`) and early note delay (`E8`)
+    - [X] Note probability (`Y`)
+    - [X] Note Cut (`EC`)
+    - [X] Legato (overlap notes, `L`)
+    - [X] Pitch bend in semitones, using the instrument's bend range (`I`)
+    - [X] Shorthand commands for common CCs
+        - [X] Mod wheel (`W`)
+        - [X] Filter cutoff (`Z`)
+    - [X] FT2-style per-tick slides: pitch up/down (`1`/`2`) and their fine versions
+    - [X] Tone portamento (`3`), gliding the pitch to the next note
+    - [X] Vibrato (`4`), arpeggio (`0`), panning (`8`) and pattern loop (`E6`)
+    - [X] Chords (`Q`), and a table of 16 chords with strumming (`X`)
+    - [X] Song modification
+        - [X] Pattern break (`D`)
+        - [X] Jump song position (`B`)
+        - [X] Pattern delay (`EE`)
+        - [X] Stop playback (`EF`)
+        - [X] Set global velocity (`G`)
+        - [X] Set track velocity (`C`)
+        - [X] Glide global velocity (`H`)
+- [ ] **Autosave and crash recovery**
+- [x] **Custom themes**
+    - [x] theme files, with ports of popular color schemes
+    - [x] editing themes in the Config dialog, with a live preview
+- [ ] **Keyboard remapping**
+    - [x] rebinding keys on the keybindings screen and in `keybinds.toml`
+    - [ ] piano key layouts per keyboard (QWERTZ, AZERTY, ...)
+- [x] **Proper CLI argument parsing** and a global app config
+- [ ] **Instrument Live Midi Effects**
+    - [x] Auto arp
+    - [x] Midi EQ
+    - [x] Chord mode / Harmonizer
+    - [x] Delay (Echo)
+    - [X] Swing
+    - [X] Randomizer
+    - [X] Scale mode
+    - [X] Note to CC
+    - [X] Global Probability
+    - [x] CC LFO
+    - [ ] Potential custom plugin format scripting method (no VSTs though)
+- [ ] ...and more
+
+Have an idea? Feel free to open an issue.

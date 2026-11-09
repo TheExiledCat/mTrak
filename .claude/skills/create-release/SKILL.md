@@ -35,7 +35,7 @@ vague ("themefixes", "0.0.1redo"), so the diff is the source of truth.
 - `git diff --stat <prev>..HEAD`
 - `git diff <prev>..HEAD -- src docs README.md Cargo.toml` and read the hunks. Open the changed
   files where the diff alone doesn't make the behavior clear.
-- `docs/COMMANDS.md` diff for new or changed pattern commands, and the README roadmap diff for
+- `docs/COMMANDS.md` diff for new or changed pattern commands, and the `docs/ROADMAP.md` diff for
   items that were ticked off.
 - `Cargo.toml` dependency changes.
 
