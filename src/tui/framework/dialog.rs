@@ -32,7 +32,7 @@ mod list;
 pub use color_picker::ColorPicker;
 pub use list::{List, ListEvent};
 
-/// The last button pressed in a row of `Buttons`, and how many presses there have been.
+/// The last button pressed in a row of `Buttons`; `count` goes up with every press.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Press {
     pub button: usize,
@@ -40,14 +40,12 @@ pub struct Press {
 }
 
 impl Press {
-    /// The button pressed last, if any was.
     pub fn pressed(&self) -> Option<usize> {
         return (self.count > 0).then_some(self.button);
     }
 }
 
-/// Hands back an input's value from a `DialogResult` or `DialogFields`, already the right
-/// type. Only works on the dialog it came from.
+/// Reads an input's value back with its type. Only valid for the dialog that made it.
 pub struct Field<T> {
     index: usize,
     value: PhantomData<fn() -> T>,
@@ -62,7 +60,6 @@ impl<T> Clone for Field<T> {
 
 impl<T> Copy for Field<T> {}
 
-/// The values of every input component.
 pub struct DialogResult {
     values: Vec<Option<Box<dyn Any>>>,
 }
@@ -85,12 +82,11 @@ pub struct DialogFields<'a> {
 }
 
 impl DialogFields<'_> {
-    /// Whether this field's change triggered this update.
     pub fn changed<T>(&self, field: Field<T>) -> bool {
         return self.changed == field.index;
     }
 
-    /// Sets the field. Doesn't trigger another update.
+    /// Doesn't trigger another update.
     pub fn set<T: 'static>(&mut self, field: Field<T>, value: T) {
         let slot = &mut self.slots[field.index];
         slot.set_value(Box::new(value));
@@ -139,8 +135,6 @@ pub trait DialogComponent: MtrakWidget {
     fn render_overlay(&mut self, state: &AppState, bounds: Rect, buf: &mut Buffer) {}
 }
 
-/// A component with a value, which comes back in the `DialogResult` through the `Field` that
-/// `Dialog::add_field` gives for it.
 pub trait DialogInput: DialogComponent {
     type Value: Clone + PartialEq + 'static;
 
@@ -149,17 +143,12 @@ pub trait DialogInput: DialogComponent {
     fn set_value(&mut self, value: Self::Value);
 }
 
-/// One place in a dialog's list of components. The components are all different types and
-/// only inputs have a value, so the value goes through `Any` here, and the `Field` made with
-/// it turns it back into the right type.
+// components are all different types, so values go through Any and a Field turns them back
 trait Slot {
     fn component(&self) -> &dyn DialogComponent;
     fn component_mut(&mut self) -> &mut dyn DialogComponent;
-    /// `None` if the component only shows something.
     fn value(&self) -> Option<Box<dyn Any>>;
-    /// Values of the wrong type are ignored.
     fn set_value(&mut self, value: Box<dyn Any>);
-    /// Whether the value is no longer `before`, one this slot gave earlier.
     fn changed_from(&self, before: &dyn Any) -> bool;
 }
 
@@ -283,7 +272,6 @@ impl Dialog {
         };
         return dialog;
     }
-    /// One text field, focused, already holding `text`.
     pub fn text_field(title: impl Into<String>, text: impl Into<String>) -> (Self, Field<String>) {
         let mut dialog = Dialog::new(title);
         let field = dialog.add_field(TextPrompt::new("").initial(text));
@@ -302,13 +290,11 @@ impl Dialog {
         dialog.level = level;
         return dialog;
     }
-    /// Adds something that only shows, like a `Label`.
     pub fn with(mut self, component: impl DialogComponent + 'static) -> Self {
         self.slots.push(Box::new(StaticSlot(component)));
         return self;
     }
 
-    /// Adds something to fill in, and gives back what reads its value from the result.
     pub fn add_field<C: DialogInput + 'static>(&mut self, input: C) -> Field<C::Value> {
         self.slots.push(Box::new(InputSlot(input)));
         return Field {
@@ -429,7 +415,6 @@ impl Dialog {
         return self.closed;
     }
 
-    /// The values the fields hold now.
     pub fn result(&self) -> DialogResult {
         let values = self.slots.iter().map(|slot| slot.value()).collect();
         return DialogResult { values };
@@ -1360,7 +1345,7 @@ impl DialogComponent for Buttons {
     }
 }
 
-/// Only to read; setting it does nothing.
+// setting it does nothing
 impl DialogInput for Buttons {
     type Value = Press;
 
@@ -1471,7 +1456,7 @@ impl DialogInput for Checkbox {
 }
 
 /// A dropdown. Up and Down change it in place; Space opens the whole list on top of the dialog.
-/// Its value is the chosen option, or with `checkboxes`, which options are ticked.
+/// The chosen option, or with `checkboxes`, which options are ticked.
 pub struct Select<V = usize> {
     label: Option<String>,
     options: Vec<String>,
@@ -1528,7 +1513,6 @@ impl Select {
         };
     }
 
-    /// Ticks options instead of choosing one.
     pub fn checkboxes(self, mut checks: Vec<bool>) -> Select<Vec<bool>> {
         checks.resize(self.options.len(), false);
         return Select {
@@ -2261,6 +2245,34 @@ mod tests {
         dialog.handle_event(&mut state, &press(KeyCode::Down));
         dialog.handle_event(&mut state, &press(KeyCode::Tab));
         assert_eq!(*seen.borrow(), vec![1]);
+    }
+
+    #[test]
+    fn every_button_press_is_a_change_even_on_the_same_button() {
+        use std::{cell::RefCell, rc::Rc};
+
+        use ratatui::crossterm::event::KeyEvent;
+
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut dialog = Dialog::new("");
+        let buttons = dialog.add_field(Buttons::new(vec!["A", "B"]));
+        let mut dialog = dialog.focus_first().on_update({
+            let seen = seen.clone();
+            move |_, fields| {
+                assert!(fields.changed(buttons));
+                seen.borrow_mut().extend(fields.get(buttons).pressed());
+                return Ok(());
+            }
+        });
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        dialog.handle_event(&mut state, &press(KeyCode::Char(' ')));
+        dialog.handle_event(&mut state, &press(KeyCode::Char(' ')));
+        dialog.handle_event(&mut state, &press(KeyCode::Tab));
+        dialog.handle_event(&mut state, &press(KeyCode::Char(' ')));
+        assert_eq!(*seen.borrow(), vec![0, 0, 1]);
     }
 
     #[test]

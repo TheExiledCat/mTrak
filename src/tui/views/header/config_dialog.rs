@@ -62,64 +62,74 @@ pub fn open_config_dialog(state: &mut AppState) {
         config: state.config.clone(),
     };
     let mut dialog = Dialog::new("Config");
+    let theme = dialog.add_field(Select::new(names).label("Theme").selected(current));
+    let color = dialog.add_field(Select::new(color_names).label("Color").max_visible(11));
+    let rgb = dialog.add_field(ColorPicker::new().color(first_color).indent(1));
+    let reset = dialog.add_field(Buttons::new(vec!["Reset color", "Reset all"]).indent(1));
+    let name = dialog.add_field(
+        TextPrompt::new("Save theme as")
+            .allowed(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+    );
+    let mut dialog = dialog.with(Label::new(""));
+    let midi_in = dialog.add_field(
+        Select::new(in_names)
+            .label("Default MIDI in")
+            .selected(in_selected),
+    );
+    let midi_out = dialog.add_field(
+        Select::new(out_names)
+            .label("Default MIDI out")
+            .selected(out_selected),
+    );
+    let config = &state.config;
+    let ascii = dialog.add_field(Checkbox::new("ASCII mode").checked(config.ascii_mode));
+    let update = dialog.add_field(Checkbox::new("Check for updates").checked(config.update_check));
+    let hex_values = dialog.add_field(Checkbox::new("Values are hex").checked(config.hex_values));
+    let value_ranges =
+        dialog.add_field(Checkbox::new("Show value ranges").checked(config.show_value_ranges));
+    let mut dialog = dialog.with(Label::new("Pattern editor"));
+    let line_numbers = dialog.add_field(
+        Select::new(line_number_names)
+            .label("Line numbers")
+            .selected(current_line_numbers)
+            .indent(1),
+    );
+    let hex = dialog.add_field(
+        Checkbox::new("Hex line numbers")
+            .checked(config.hex_line_numbers)
+            .indent(1),
+    );
+    let dashes = dialog.add_field(
+        Checkbox::new("Show dashes")
+            .checked(config.show_dashes)
+            .indent(1),
+    );
+    let track_numbers = dialog.add_field(
+        Checkbox::new("Track numbers")
+            .checked(config.track_numbers)
+            .indent(1),
+    );
+    let mut dialog = dialog.with(Label::new(""));
+    let open_folder = dialog.add_field(Buttons::new(vec!["Open config folder"]));
+    let save = dialog.add_field(Checkbox::new("Save to config.toml").checked(true));
     let fields = ConfigFields {
-        theme: dialog.add_field(Select::new(names).label("Theme").selected(current)),
-        color: dialog.add_field(Select::new(color_names).label("Color").max_visible(11)),
-        rgb: dialog.add_field(ColorPicker::new().color(first_color).indent(1)),
-        reset: dialog.add_field(Buttons::new(vec!["Reset color", "Reset all"]).indent(1)),
-        name: dialog.add_field(
-            TextPrompt::new("Save theme as")
-                .allowed(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
-        ),
-        midi_in: {
-            dialog = dialog.with(Label::new(""));
-            dialog.add_field(
-                Select::new(in_names)
-                    .label("Default MIDI in")
-                    .selected(in_selected),
-            )
-        },
-        midi_out: dialog.add_field(
-            Select::new(out_names)
-                .label("Default MIDI out")
-                .selected(out_selected),
-        ),
-        ascii: dialog.add_field(Checkbox::new("ASCII mode").checked(state.config.ascii_mode)),
-        update: dialog
-            .add_field(Checkbox::new("Check for updates").checked(state.config.update_check)),
-        hex_values: dialog
-            .add_field(Checkbox::new("Values are hex").checked(state.config.hex_values)),
-        value_ranges: dialog
-            .add_field(Checkbox::new("Show value ranges").checked(state.config.show_value_ranges)),
-        line_numbers: {
-            dialog = dialog.with(Label::new("Pattern editor"));
-            dialog.add_field(
-                Select::new(line_number_names)
-                    .label("Line numbers")
-                    .selected(current_line_numbers)
-                    .indent(1),
-            )
-        },
-        hex: dialog.add_field(
-            Checkbox::new("Hex line numbers")
-                .checked(state.config.hex_line_numbers)
-                .indent(1),
-        ),
-        dashes: dialog.add_field(
-            Checkbox::new("Show dashes")
-                .checked(state.config.show_dashes)
-                .indent(1),
-        ),
-        track_numbers: dialog.add_field(
-            Checkbox::new("Track numbers")
-                .checked(state.config.track_numbers)
-                .indent(1),
-        ),
-        open_folder: {
-            dialog = dialog.with(Label::new(""));
-            dialog.add_field(Buttons::new(vec!["Open config folder"]))
-        },
-        save: dialog.add_field(Checkbox::new("Save to config.toml").checked(true)),
+        theme,
+        color,
+        rgb,
+        reset,
+        name,
+        midi_in,
+        midi_out,
+        ascii,
+        update,
+        hex_values,
+        value_ranges,
+        line_numbers,
+        hex,
+        dashes,
+        track_numbers,
+        open_folder,
+        save,
     };
     let dialog = dialog
         .width(64)
@@ -187,7 +197,6 @@ pub fn open_config_dialog(state: &mut AppState) {
     state.open_dialog(dialog);
 }
 
-/// The dialog's fields.
 #[derive(Clone, Copy)]
 struct ConfigFields {
     theme: Field<usize>,
@@ -210,8 +219,7 @@ struct ConfigFields {
 }
 
 impl ConfigFields {
-    /// Saves the edited theme if there is one, then switches to the settings in the dialog and
-    /// writes them to config.toml if that's ticked.
+    /// Saves the edited theme first, so a bad theme name stops the rest.
     fn save(
         &self,
         state: &mut AppState,
@@ -243,8 +251,7 @@ impl ConfigFields {
         return apply_config(state, config, *result.get(self.save));
     }
 
-    /// The settings in the dialog, with `theme`. Settings the dialog doesn't show stay as they are
-    /// in `current`.
+    /// Settings the dialog doesn't show are kept from `current`.
     fn settings(
         &self,
         result: &DialogResult,

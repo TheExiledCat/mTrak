@@ -478,7 +478,6 @@ fn file_size(bytes: usize) -> String {
     };
 }
 
-/// The instrument dialog's fields, but for its Effects button.
 #[derive(Clone, Copy)]
 struct InstrumentFields {
     name: Field<String>,
@@ -669,7 +668,6 @@ fn truncate(text: &str, width: usize) -> String {
     return format!("{kept}{}", glyphs::pick("\u{2026}", "."));
 }
 
-/// The field for a parameter of an effect, before it's added to a dialog.
 enum ParamInput {
     Number(NumberBox),
     Toggle(Checkbox),
@@ -686,10 +684,9 @@ impl ParamInput {
     }
 }
 
-/// Reads a parameter's value back as the byte it's stored as.
 #[derive(Clone, Copy)]
 enum ParamField {
-    /// Signed numbers too, which wrap into the byte.
+    /// Signed numbers too; `as u8` wraps them like they're stored.
     Number(Field<i32>),
     Toggle(Field<bool>),
     Choice(Field<usize>),

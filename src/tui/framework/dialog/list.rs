@@ -384,7 +384,7 @@ impl DialogComponent for List {
     }
 }
 
-/// A list's value: what was last done in it, and how many times something has been.
+/// `count` goes up with every event, so the same event twice still counts as a change.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ListChange {
     pub last: Option<ListEvent>,
@@ -392,13 +392,12 @@ pub struct ListChange {
 }
 
 impl ListChange {
-    /// What was last done, if anything has been.
     pub fn event(&self) -> Option<ListEvent> {
         return self.last.filter(|_| self.count > 0);
     }
 }
 
-/// Only to read; setting it does nothing.
+// setting it does nothing
 impl DialogInput for List {
     type Value = ListChange;
 
