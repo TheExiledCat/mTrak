@@ -4,6 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
 use crate::{
     data::{
+        commands::{Command, CommandKind},
         midi::MIDI_CHANNEL_MAX,
         note::{Note, NoteKind, NotePitch},
     },
@@ -224,6 +225,79 @@ impl Pattern {
             }
         }
     }
+    /// Ramps the volumes between the nearest ones above and below `row`. False if a side has
+    /// none.
+    pub fn fill_volumes(&mut self, row: usize, track: usize) -> bool {
+        return self.fill_between(
+            row,
+            track,
+            |note| note.velocity,
+            |note, value| note.velocity = Some(value),
+        );
+    }
+
+    /// Like `fill_volumes` for command values; both ends need the same command.
+    pub fn fill_command_values(&mut self, row: usize, track: usize) -> bool {
+        let command =
+            |note: &Note| (note.command.kind != CommandKind::None).then_some(note.command);
+        let (Some(above), Some(below)) = (
+            self.nearest(row, track, true, command),
+            self.nearest(row, track, false, command),
+        ) else {
+            return false;
+        };
+        let kind = above.1.kind;
+        if below.1.kind != kind {
+            return false;
+        }
+        return self.fill_between(
+            row,
+            track,
+            |note| command(note).map(|command| command.value),
+            |note, value| note.command = Command::new(kind, value),
+        );
+    }
+
+    fn nearest<T>(
+        &self,
+        row: usize,
+        track: usize,
+        above: bool,
+        value: impl Fn(&Note) -> Option<T>,
+    ) -> Option<(usize, T)> {
+        let found = |row: usize| Some((row, value(self.get_event(row, track)?)?));
+        return match above {
+            true => (0..row).rev().find_map(found),
+            false => (row + 1..self.rows.len()).find_map(found),
+        };
+    }
+
+    fn fill_between(
+        &mut self,
+        row: usize,
+        track: usize,
+        value: impl Fn(&Note) -> Option<u8>,
+        set: impl Fn(&mut Note, u8),
+    ) -> bool {
+        let (Some((first, from)), Some((last, to))) = (
+            self.nearest(row, track, true, &value),
+            self.nearest(row, track, false, &value),
+        ) else {
+            return false;
+        };
+        let (from, to, steps) = (from as usize, to as usize, last - first);
+        for (step, between) in (first + 1..last).enumerate().map(|(i, row)| (i + 1, row)) {
+            let Some(&current) = self.get_event(between, track) else {
+                continue;
+            };
+            let mut note = current;
+            let value = (from * (steps - step) + to * step + steps / 2) / steps;
+            set(&mut note, value as u8);
+            self.set_event(between, track, note);
+        }
+        return true;
+    }
+
     pub fn clear(&mut self, block: Block, target: ClearTarget) {
         self.clear_instrument(block, target, None);
     }
@@ -495,6 +569,61 @@ mod tests {
         commands::{Command, CommandKind},
         note::NoteKind,
     };
+
+    fn filled(pattern: &Pattern, rows: std::ops::Range<usize>) -> Vec<Option<u8>> {
+        return rows
+            .map(|row| pattern.get_event(row, 0).unwrap().velocity)
+            .collect();
+    }
+
+    fn with_volumes(volumes: &[(usize, u8)]) -> Pattern {
+        let mut pattern = Pattern::new(16);
+        for &(row, volume) in volumes {
+            let mut note = Note::empty();
+            note.velocity = Some(volume);
+            pattern.set_event(row, 0, note);
+        }
+        return pattern;
+    }
+
+    #[test]
+    fn fill_draws_a_line_between_the_volumes_around_the_cursor() {
+        let mut pattern = with_volumes(&[(2, 0x00), (6, 0x40), (10, 0x7F)]);
+        assert!(pattern.fill_volumes(4, 0));
+        let ramp = [0x00, 0x10, 0x20, 0x30, 0x40].map(Some);
+        assert_eq!(filled(&pattern, 2..7), ramp);
+        assert!(pattern.fill_volumes(8, 0));
+        let down = [0x40, 0x50, 0x60, 0x6F, 0x7F].map(Some);
+        assert_eq!(filled(&pattern, 6..11), down);
+        assert_eq!(filled(&pattern, 11..12), [None]);
+    }
+
+    #[test]
+    fn fill_needs_a_volume_on_both_sides() {
+        let mut pattern = with_volumes(&[(2, 0x10)]);
+        assert!(!pattern.fill_volumes(1, 0));
+        assert!(!pattern.fill_volumes(5, 0));
+        assert_eq!(filled(&pattern, 3..6), [None, None, None]);
+    }
+
+    #[test]
+    fn fill_runs_command_values_between_the_same_command() {
+        let mut pattern = Pattern::new(8);
+        let mut set = |row, text: &str| {
+            let mut note = Note::empty();
+            note.command = text.parse().unwrap();
+            pattern.set_event(row, 0, note);
+        };
+        set(0, "M00");
+        set(4, "M80");
+        set(6, "S4A");
+        assert!(pattern.fill_command_values(2, 0));
+        let values: Vec<String> = (0..5)
+            .map(|row| pattern.get_event(row, 0).unwrap().command.to_string())
+            .collect();
+        assert_eq!(values, ["M00", "M20", "M40", "M60", "M80"]);
+        assert!(!pattern.fill_command_values(5, 0));
+    }
 
     fn note() -> Note {
         let mut note = Note::empty();

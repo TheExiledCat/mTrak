@@ -127,6 +127,8 @@ pub enum TimelineAction {
 
     RowLock,
     LoopBlock,
+    /// Command values on the command column, volumes anywhere else.
+    Fill,
 }
 
 impl Action for TimelineAction {
@@ -315,6 +317,7 @@ fn edit_keymap() -> Keymap<TimelineAction> {
                 DeleteEffect,
                 "Del",
             )
+            .bind(Key::alt('f'), Fill, "Fill")
             .bind(Key::plain(KeyCode::Insert), InsertNote, "Ins")
             .bind(
                 Key::new(KeyCode::Insert, KeyModifiers::ALT),
@@ -668,6 +671,20 @@ impl KeyActions for TimeLineView {
                     note.clear_command();
                 });
             }
+            TimelineAction::Fill => {
+                let (row, track) = (self.row_index as usize, self.track_index as usize);
+                let commands = TimelineColumnLocation::from_column_index(self.column_index)
+                    == TimelineColumnLocation::Command;
+                let filled = state.edit_pattern(|_, pattern| match commands {
+                    true => pattern.fill_command_values(row, track),
+                    false => pattern.fill_volumes(row, track),
+                });
+                state.notify(match (filled, commands) {
+                    (false, _) => "NO FILL",
+                    (true, true) => "CMD FILL",
+                    (true, false) => "VOL FILL",
+                });
+            }
             TimelineAction::DeleteEffect => {
                 self.edit_and_advance(state, Note::clear_command);
             }
@@ -825,6 +842,7 @@ impl KeyActions for TimeLineView {
             DeleteAll => "Clear note, volume and command",
             DeleteVolumeAndEffect => "Clear volume and command",
             DeleteEffect => "Clear command",
+            Fill => "Fill the volumes (or command values) between the ones above and below",
             DeletePreviousNote => "Delete the note above, pulling the track up",
             DeletePreviousLine => "Delete the row above, pulling every track up",
             InsertNote => "Insert an empty note, pushing the track down",
@@ -1524,6 +1542,37 @@ mod tests {
         press(&mut state, &mut view, 'z');
         assert_eq!(view.row_index, 6);
         assert!(has_note(&state, 2, 0));
+    }
+
+    #[test]
+    fn fill_ramps_the_volumes_around_the_cursor_and_undoes_in_one_go() {
+        let (mut state, mut view) = editor();
+        state.enter_volume(0, 0, 0x00);
+        state.enter_volume(0, 4, 0x40);
+        (view.row_index, view.column_index) = (2, 2);
+        view.perform(TimelineAction::Fill, &mut state).unwrap();
+        let volume =
+            |state: &AppState, row| state.active_pattern().get_event(row, 0).unwrap().velocity;
+        assert_eq!(volume(&state, 2), Some(0x20));
+        assert_eq!(state.notification.as_deref(), Some("VOL FILL"));
+        undo(&mut state, &mut view);
+        assert_eq!(
+            (1..4).map(|row| volume(&state, row)).collect::<Vec<_>>(),
+            [None; 3]
+        );
+        assert_eq!(volume(&state, 4), Some(0x40));
+    }
+
+    #[test]
+    fn fill_needs_the_same_command_at_both_ends() {
+        let (mut state, mut view) = editor();
+        state.enter_command(0, 0, "M00".parse().unwrap());
+        state.enter_command(0, 2, "S10".parse().unwrap());
+        (view.row_index, view.column_index) = (1, 5);
+        view.perform(TimelineAction::Fill, &mut state).unwrap();
+        assert_eq!(state.notification.as_deref(), Some("NO FILL"));
+        let cell = state.active_pattern().get_event(1, 0).unwrap();
+        assert_eq!(cell.command, Default::default());
     }
 
     #[test]
