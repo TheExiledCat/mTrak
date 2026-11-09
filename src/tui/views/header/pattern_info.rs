@@ -171,12 +171,11 @@ impl Collapsible for PatternInfo {
         ];
         let left_content = Paragraph::new(
             aligned(&tempo_rows)
-            .into_iter()
-            .map(|line| {
-                width = width.max(line.width() as u16) + 1; //border
-                line
-            })
-            .collect::<Vec<Line>>(),
+                .into_iter()
+                .inspect(|line| {
+                    width = width.max(line.width() as u16) + 1; //border
+                })
+                .collect::<Vec<Line>>(),
         )
         .block(Block::bordered().borders(Borders::RIGHT));
         let horizontal_layout = Layout::horizontal([Constraint::Max(width), Constraint::Fill(1)])
@@ -226,9 +225,8 @@ struct InfoRow {
 
 /// `LABEL: value down/up DN/UP`, padded so the values and the key slashes line up.
 fn aligned(rows: &[InfoRow]) -> Vec<Line<'static>> {
-    let width = |f: fn(&InfoRow) -> &str| {
-        rows.iter().map(|r| f(r).chars().count()).max().unwrap_or(0)
-    };
+    let width =
+        |f: fn(&InfoRow) -> &str| rows.iter().map(|r| f(r).chars().count()).max().unwrap_or(0);
     let value_width = width(|r| &r.value);
     let down_width = width(|r| &r.keys.0);
     let up_width = width(|r| &r.keys.1);
