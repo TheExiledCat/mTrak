@@ -128,6 +128,9 @@ pub enum TimelineAction {
 
     RowLock,
     LoopBlock,
+    /// Fills the volumes, or the command values on the command column, between the nearest
+    /// ones above and below the cursor in a straight line.
+    Fill,
 }
 
 impl Action for TimelineAction {
@@ -316,6 +319,7 @@ fn edit_keymap() -> Keymap<TimelineAction> {
                 DeleteEffect,
                 "Del",
             )
+            .bind(Key::alt('f'), Fill, "Fill")
             .bind(Key::plain(KeyCode::Insert), InsertNote, "Ins")
             .bind(
                 Key::new(KeyCode::Insert, KeyModifiers::ALT),
@@ -673,6 +677,20 @@ impl KeyActions for TimeLineView {
                     note.clear_command();
                 });
             }
+            TimelineAction::Fill => {
+                let (row, track) = (self.row_index as usize, self.track_index as usize);
+                let commands = TimelineColumnLocation::from_column_index(self.column_index)
+                    == TimelineColumnLocation::Command;
+                let filled = state.edit_pattern(|_, pattern| match commands {
+                    true => pattern.fill_command_values(row, track),
+                    false => pattern.fill_volumes(row, track),
+                });
+                if !filled && commands {
+                    state.notify("Fill needs the same command above and below".to_owned());
+                } else if !filled {
+                    state.notify("Fill needs a volume above and below".to_owned());
+                }
+            }
             TimelineAction::DeleteEffect => {
                 self.edit_and_advance(state, Note::clear_command);
             }
@@ -830,6 +848,7 @@ impl KeyActions for TimeLineView {
             DeleteAll => "Clear note, volume and command",
             DeleteVolumeAndEffect => "Clear volume and command",
             DeleteEffect => "Clear command",
+            Fill => "Fill the volumes (or command values) between the ones above and below",
             DeletePreviousNote => "Delete the note above, pulling the track up",
             DeletePreviousLine => "Delete the row above, pulling every track up",
             InsertNote => "Insert an empty note, pushing the track down",

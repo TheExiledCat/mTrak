@@ -17,6 +17,8 @@ Join us on the TrackerCatz Discord server.
 - Full TUI with total keyboard control for mouseless usage
 - No menu diving
 - Pattern editor with 8 tracks per pattern, FT2-style keyboard note entry and navigation
+- Linear fill: `Alt+F` ramps the volumes, or command values, between the ones above and
+  below the cursor
 - Song sequence with per-pattern repeats
 - Song, pattern and block loop playback, live recording into the playing pattern, and a
   metronome
