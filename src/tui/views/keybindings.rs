@@ -12,7 +12,6 @@ use crate::{
     tui::{
         app::AppState,
         framework::{
-            core_extensions::Boxed,
             dialog::{Buttons, Dialog, DialogComponent, InfoLevel, Label},
             keymap::{
                 Action, BindingInfo, HelpSection, Key, KeyActions, KeyHint, Keymap, UNBOUND,
@@ -328,28 +327,23 @@ pub fn help_section() -> HelpSection {
 
 pub fn keybindings_dialog(sections: Vec<HelpSection>, height: u8) -> Dialog {
     let table = KeyTable::new(sections, height.saturating_sub(2).max(1), true);
-    return Dialog::new(
-        "Keybindings",
-        vec![
-            table.boxed(),
-            Label::new("").boxed(),
-            Buttons::new("reset_all", vec!["Reset all keys"]).boxed(),
-        ],
-    )
-    .width(u16::MAX)
-    .focus_first()
-    .on_update(|state, fields| {
-        if fields.changed() == "reset_all" && fields.pressed("reset_all").is_some() {
-            let dialog = Dialog::confirm(
-                InfoLevel::Warning,
-                "Reset all keys",
-                "Put back the default keys of every action?",
-            )
-            .on_submit(|_, _| keybinds::reset_all());
-            state.open_dialog(dialog);
-        }
-        return Ok(());
-    });
+    let mut dialog = Dialog::new("Keybindings").with(table).with(Label::new(""));
+    let reset_all = dialog.add_field(Buttons::new(vec!["Reset all keys"]));
+    return dialog
+        .width(u16::MAX)
+        .focus_first()
+        .on_update(move |state, fields| {
+            if fields.changed(reset_all) {
+                let dialog = Dialog::confirm(
+                    InfoLevel::Warning,
+                    "Reset all keys",
+                    "Put back the default keys of every action?",
+                )
+                .on_submit(|_, _| keybinds::reset_all());
+                state.open_dialog(dialog);
+            }
+            return Ok(());
+        });
 }
 
 pub fn commands_dialog(height: u8) -> Dialog {
@@ -391,9 +385,7 @@ fn table_keymap(editable: bool) -> Keymap<KeyTableAction> {
 }
 
 fn table_dialog(title: &str, table: KeyTable) -> Dialog {
-    return Dialog::new(title, vec![table.boxed()])
-        .width(u16::MAX)
-        .focus_first();
+    return Dialog::new(title).with(table).width(u16::MAX).focus_first();
 }
 
 /// One row per way to write each command, e.g. `L0y` and `L1y` for the legato command.
