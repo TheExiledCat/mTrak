@@ -1,0 +1,11 @@
+# mTrak keys for GNOME Terminal and other VTE terminals, like Ptyxis, Tilix and Terminator.
+# Copy this over keybinds.toml in mTrak's config folder, or copy the lines you need into it.
+#
+# These terminals take F10 for their menu and F11 for fullscreen, so Ctrl+F10 and Ctrl+F11
+# jump to rows as well. F1 (octave 0) opens their help and can't be rebound; turn the menu
+# and help shortcuts off in the terminal's preferences to get the keys back.
+
+# Jump to row 10
+pattern.jump_to_marker_2 = "F10 ^F10"
+# Jump to row 20
+pattern.jump_to_marker_3 = "F11 ^F11"

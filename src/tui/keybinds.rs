@@ -221,7 +221,10 @@ fn to_toml() -> String {
          # Keys: letters and symbols as typed (a capital means Shift), Spc, Up, Dn, Lt, Rt,\n\
          # PgUp, PgDn, Home, End, Ins, Del, Bksp, Enter, Esc, Tab and F1-F12, after any of\n\
          # ^ (Ctrl), A- (Alt) and S- (Shift), e.g. \"^S\", \"A-O\" or \"S-Tab\". Separate several\n\
-         # keys with spaces, and use \"\" to unbind an action.\n",
+         # keys with spaces, and use \"\" to unbind an action.\n\
+         #\n\
+         # For terminals that keep some keys for themselves, there are premade overrides at\n\
+         # https://github.com/TheExiledCat/mTrak/tree/main/keybinds\n",
     );
     let mut section = "";
     for entry in &keybinds.entries {
@@ -281,5 +284,86 @@ mod tests {
         assert_eq!(lines["global.save"], 2);
         assert_eq!(parse("a.b = \"^\"").unwrap().0["a.b"], vec![Key::char('^')]);
         assert_eq!(parse("x = \"Fx\"").err().unwrap().line, 1);
+    }
+
+    fn all_sections() -> Vec<HelpSection> {
+        use ratatui::widgets::Padding;
+
+        use crate::tui::{
+            framework::{
+                core_extensions::Boxed, dialog::Dialog, widget::MtrakWidget,
+                widgets::container::Container,
+            },
+            views::{
+                file_browser::FileBrowser, keybindings, main_view::MainView, rowfall::RowfallView,
+            },
+        };
+
+        let mut sections = Vec::new();
+        Container::new(MainView::new().boxed(), Padding::ZERO).help(&mut sections);
+        FileBrowser::new().help(&mut sections);
+        RowfallView::new().help(&mut sections);
+        Dialog::help(&mut sections);
+        sections.push(keybindings::help_section());
+        return sections;
+    }
+
+    /// Dialogs, the file browser and the keybindings screen only see their own keys.
+    fn is_modal(scope: &str) -> bool {
+        return ["dialog", "file_browser", "keybindings", "rowfall"].contains(&scope);
+    }
+
+    fn shares_keys_with(scope: &str, other: &str) -> bool {
+        return scope == other || !is_modal(scope) && !is_modal(other);
+    }
+
+    #[test]
+    fn the_terminal_keybinds_in_the_repo_rebind_known_actions_to_free_keys() {
+        let bindings: Vec<BindingInfo> = all_sections()
+            .into_iter()
+            .flat_map(|section| section.entries)
+            .filter_map(|entry| entry.binding)
+            .collect();
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("keybinds");
+        let mut files: Vec<_> = fs::read_dir(folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
+            .collect();
+        files.sort();
+        assert!(!files.is_empty());
+        for file in files {
+            let name = file.display();
+            let (overrides, _) = parse(&fs::read_to_string(&file).unwrap()).unwrap();
+            let keys_of = |binding: &BindingInfo| {
+                return overrides
+                    .get(&binding.id)
+                    .cloned()
+                    .unwrap_or_else(|| binding.defaults.clone());
+            };
+            for (id, keys) in &overrides {
+                let binding = bindings.iter().find(|b| b.id == *id);
+                let binding = binding.unwrap_or_else(|| panic!("{name}: unknown action {id}"));
+                let scope = id.split('.').next().unwrap();
+                for key in keys.iter().filter(|key| !binding.defaults.contains(key)) {
+                    let clash = bindings.iter().find(|other| {
+                        let other_scope = other.id.split('.').next().unwrap();
+                        return other.id != *id
+                            && shares_keys_with(scope, other_scope)
+                            && keys_of(other).contains(key);
+                    });
+                    let clash = clash.map(|other| &other.id);
+                    assert!(
+                        clash.is_none(),
+                        "{name}: {id} {key:?} clashes with {clash:?}"
+                    );
+                    let fixed = fixed_keys().into_iter().find(|(fixed, _)| fixed == key);
+                    assert!(
+                        fixed.is_none() || is_modal(scope),
+                        "{name}: {id} takes a fixed key: {fixed:?}"
+                    );
+                }
+            }
+        }
     }
 }

@@ -1,0 +1,7 @@
+# mTrak keys for tmux, and for screen with its prefix set to Ctrl+B. Copy this over
+# keybinds.toml in mTrak's config folder, or copy the lines you need into it.
+#
+# Ctrl+B is tmux's prefix key, so the block loop moves to Alt+P.
+
+# Loop the rows of the marked block, or play on past them while looping
+pattern.loop_block = "A-P"

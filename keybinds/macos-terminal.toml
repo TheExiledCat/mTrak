@@ -1,0 +1,18 @@
+# mTrak keys for Terminal on macOS. Copy this over keybinds.toml in mTrak's config folder,
+# or copy the lines you need into it.
+#
+# macOS takes Ctrl with the arrow keys for Mission Control, so the pattern keys move to
+# Ctrl+Shift with the arrows.
+#
+# Every Alt key needs Option to work as Alt: in Terminal's settings, under Profiles >
+# Keyboard, tick "Use Option as Meta key". The function keys need Fn held down, unless
+# "Use F1, F2, etc. keys as standard function keys" is on in the Keyboard settings.
+
+# Previous pattern
+pattern_info.pattern_down = "^S-Lt"
+# Next pattern
+pattern_info.pattern_up = "^S-Rt"
+# Make the pattern a row longer
+pattern_info.pattern_length_up = "^S-Up"
+# Make the pattern a row shorter
+pattern_info.pattern_length_down = "^S-Dn"

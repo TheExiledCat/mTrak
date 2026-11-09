@@ -1,0 +1,11 @@
+# mTrak keys for the terminal in VS Code. Copy this over keybinds.toml in mTrak's config
+# folder, or copy the lines you need into it.
+#
+# VS Code keeps Ctrl+P and Ctrl+E (quick open) and F1 (command palette) for itself, even in
+# its terminal. F1 sets octave 0 and can't be rebound; to get it and the others back instead,
+# turn on "terminal.integrated.sendKeybindingsToShell" in VS Code's settings.
+
+# Edit the settings in config.toml
+util.config = "A-P"
+# Set the global velocity and transpose
+util.global = "A-D"

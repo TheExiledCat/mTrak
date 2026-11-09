@@ -85,7 +85,9 @@ You can also open projects from the built-in file browser with `Alt+O`.
 
 Press `?` to see every key in mTrak, grouped by section. The footer only shows the most
 common ones. Keys can be rebound on that screen or in `keybinds.toml`, see
-[docs/CONFIG.md](docs/CONFIG.md#keybindings).
+[docs/CONFIG.md](docs/CONFIG.md#keybindings). If your terminal keeps some keys for itself,
+the [keybinds](keybinds) folder has premade overrides for Windows Terminal, GNOME Terminal,
+Konsole, macOS Terminal, tmux and VS Code.
 
 Press `/` to see every pattern command with a short description. The full guide is
 [docs/COMMANDS.md](docs/COMMANDS.md), which is also included in every release zip.
@@ -192,10 +194,9 @@ Planned features, in no particular order:
     - [X] Note Cut (`EC`)
     - [X] Legato (overlap notes, `L`)
     - [X] Pitch bend in semitones, using the instrument's bend range (`I`)
-    - [ ] Shorthand commands for common CCs
+    - [X] Shorthand commands for common CCs
         - [X] Mod wheel (`W`)
         - [X] Filter cutoff (`Z`)
-        - [ ] More common CCs
     - [X] FT2-style per-tick slides: pitch up/down (`1`/`2`) and their fine versions
     - [X] Tone portamento (`3`), gliding the pitch to the next note
     - [X] Vibrato (`4`), arpeggio (`0`), panning (`8`) and pattern loop (`E6`)
