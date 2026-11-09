@@ -1,0 +1,18 @@
+# mTrak keys for Konsole. Copy this over keybinds.toml in mTrak's config folder, or copy the
+# lines you need into it.
+#
+# Konsole takes Shift+Left and Shift+Right to switch tabs, and Shift+Up and Shift+Down to
+# scroll, so these use Alt with the arrows instead.
+
+# Previous sequence position
+sequence.prev_pattern = "A-Lt"
+# Next sequence position
+sequence.next_pattern = "A-Rt"
+# Previous instrument
+instruments.prev_instrument = "A-Up"
+# Next instrument
+instruments.next_instrument = "A-Dn"
+# Move an item up
+dialog.move_up = "A-Up"
+# Move an item down
+dialog.move_down = "A-Dn"

@@ -129,6 +129,13 @@ The screen shows each key the way mTrak received it. Some terminals can't tell c
 apart, e.g. `Ctrl+I` arrives as `Tab` and `Ctrl+Shift+S` as `Ctrl+S`, and on macOS `Option`
 with a letter often types a symbol instead, so check the key shown after binding it.
 
+### Terminals that take keys
+
+Some terminals keep keys for themselves, e.g. Windows Terminal's `F11` for fullscreen or tmux's
+`Ctrl+B`. The [keybinds](https://github.com/TheExiledCat/mTrak/tree/main/keybinds) folder has a
+`keybinds.toml` for several terminals that moves those actions to keys the terminal lets
+through.
+
 ### keybinds.toml
 
 Lists every action with its keys, under a comment saying what it does. To rebind one, change

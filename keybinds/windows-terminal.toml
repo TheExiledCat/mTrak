@@ -1,0 +1,7 @@
+# mTrak keys for Windows Terminal. Copy this over keybinds.toml in mTrak's config folder,
+# or copy the lines you need into it.
+#
+# Windows Terminal takes F11 for fullscreen. Ctrl+F11 jumps to row 20 as well.
+
+# Jump to row 20
+pattern.jump_to_marker_3 = "F11 ^F11"
