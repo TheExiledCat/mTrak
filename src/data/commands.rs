@@ -3,10 +3,15 @@ use std::{fmt::Display, str::FromStr};
 use MidiCommand::*;
 
 use crate::error::MTrakError;
-pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 15] = [
+
+const MOD_WHEEL_CC: u8 = 1;
+/// The usual filter cutoff controller, sound controller 5.
+const FILTER_CUTOFF_CC: u8 = 74;
+pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 16] = [
     ('S', SetCC),
     ('M', ChangeCC),
     ('W', ModWheel),
+    ('Z', FilterCutoff),
     ('V', CCSlide),
     ('J', CCVelocitySlide),
     ('U', VelocitySlide),
@@ -81,6 +86,7 @@ pub enum MidiCommand {
     SetCC,           // Sets the CC to change with the ChangeCC command
     ChangeCC,        // Changes the CC set by SetCC
     ModWheel,        // Selects CC 1 like SetCC 01 and sends it like ChangeCC
+    FilterCutoff,    // Selects CC 74 like SetCC 4A and sends it like ChangeCC
     CCSlide, // Slides the CC set by SetCC from this value to the track's next CC or slide command
     CCVelocitySlide, // CCSlide that also sets the velocity of notes played during it
     VelocitySlide, // Slides the velocity of notes played during it, without sending anything itself
@@ -99,9 +105,19 @@ impl MidiCommand {
     pub fn is_slide(&self) -> bool {
         return matches!(self, CCSlide | CCVelocitySlide | VelocitySlide);
     }
+    /// The CC a shorthand command selects and sends, like an `S` and an `M` in one.
+    pub fn shorthand_cc(&self) -> Option<u8> {
+        return match self {
+            ModWheel => Some(MOD_WHEEL_CC),
+            FilterCutoff => Some(FILTER_CUTOFF_CC),
+            _ => None,
+        };
+    }
     /// Whether this command ends a slide that reaches it.
     pub fn is_slide_target(&self) -> bool {
-        return self.is_slide() || matches!(self, ChangeCC | ModWheel | EndSlide);
+        return self.is_slide()
+            || self.shorthand_cc().is_some()
+            || matches!(self, ChangeCC | EndSlide);
     }
     /// Whether this is one of FT2's slides, which move by a step every tick instead of
     /// towards a target.
@@ -124,6 +140,10 @@ impl MidiCommand {
             ModWheel => &[(
                 "xx",
                 "Mod wheel: select CC 1 like S01 and send it with this value",
+            )],
+            FilterCutoff => &[(
+                "xx",
+                "Filter cutoff: select CC 74 like S4A and send it with this value",
             )],
             CCSlide => &[(
                 "xx",

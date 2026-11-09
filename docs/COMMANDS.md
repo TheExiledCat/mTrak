@@ -77,6 +77,21 @@ too, so a `W` followed by a `V` glides it.
 
 - A running slide can land on a `W`, like on an `M`.
 
+### `Z` Filter cutoff
+
+Like `W`, but for filter cutoff: sends CC 74 with the given value and selects it, like an
+`S4A` followed by an `M` on the same row. CC 74 is the cutoff on most synths, but check your
+synth's manual.
+
+```
+---|1|--|Z20   cutoff = 16, and selected
+---|1|--|V20   open the filter from 16 ...
+---|1|--|000
+---|1|--|MC0   ... to 96 here
+```
+
+- A running slide can land on a `Z`, like on an `M`.
+
 ### `V` CC slide
 
 Sends the given value, then slides the selected CC smoothly to the target value
@@ -539,7 +554,7 @@ A slide moves from its own value to a target, updating once per tick. With a spe
 an `F` below `20`) of 6 that is 6 updates per row. Since ticks always last the same time at a
 given BPM, a slide over the same amount of time is equally smooth at any speed.
 
-- **Target:** the track's next `M`, `W`, `N`, or command that starts a slide. The slide reaches
+- **Target:** the track's next `M`, `W`, `Z`, `N`, or command that starts a slide. The slide reaches
   that value on that row.
 - **Chaining:** a command that starts a slide also counts as the target of a running one, so
   the running slide lands there and the new one carries straight on. That lets you draw a

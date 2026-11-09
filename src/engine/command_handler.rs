@@ -74,7 +74,6 @@ fn cc_value(value: u8) -> u8 {
 }
 
 const MIDI_CHANNEL_COUNT: usize = MIDI_CHANNEL_MAX as usize + 1;
-const MOD_WHEEL_CC: u8 = 1;
 const PANNING_CC: u8 = 10;
 /// FT2's global volume tops out at 64 and ours at 255, so H steps are 4x bigger to feel the same.
 const VELOCITY_SLIDE_STEP: i16 = 4;
@@ -378,11 +377,12 @@ impl MidiCommandHandler {
                 control,
                 cc_value(value),
             ))),
-            MidiCommand::ModWheel => {
-                state.active_control = Some(MOD_WHEEL_CC);
+            MidiCommand::ModWheel | MidiCommand::FilterCutoff => {
+                let shorthand = command.shorthand_cc().unwrap_or(control);
+                state.active_control = Some(shorthand);
                 events.push(MidiEvent::Message(ControlChange(
                     channel,
-                    MOD_WHEEL_CC,
+                    shorthand,
                     cc_value(value),
                 )));
             }
@@ -751,6 +751,19 @@ mod tests {
         assert_eq!(
             handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 0x40, 0)),
             vec![ControlChange(Channel::Ch1, 1, 32)]
+        );
+    }
+
+    #[test]
+    fn filter_cutoff_sends_cc_74_and_selects_it() {
+        let mut handler = MidiCommandHandler::new();
+        assert_eq!(
+            handle(&mut handler, 0, cc_note(MidiCommand::FilterCutoff, 0x80, 0)),
+            vec![ControlChange(Channel::Ch1, 74, 64)]
+        );
+        assert_eq!(
+            handle(&mut handler, 0, cc_note(MidiCommand::ChangeCC, 0x40, 0)),
+            vec![ControlChange(Channel::Ch1, 74, 32)]
         );
     }
 

@@ -192,7 +192,8 @@ Planned features, in no particular order:
     - [X] Pitch bend in semitones, using the instrument's bend range (`I`)
     - [ ] Shorthand commands for common CCs
         - [X] Mod wheel (`W`)
-        - [ ] filter cutoff, etc.
+        - [X] Filter cutoff (`Z`)
+        - [ ] More common CCs
     - [X] FT2-style per-tick slides: pitch up/down (`1`/`2`) and their fine versions
     - [X] Tone portamento (`3`), gliding the pitch to the next note
     - [X] Vibrato (`4`), arpeggio (`0`), panning (`8`) and pattern loop (`E6`)
