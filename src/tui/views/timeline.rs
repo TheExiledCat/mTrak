@@ -1191,12 +1191,12 @@ impl TimeLineView {
                 *row = Line::from(without_dashes(&row.to_string()));
             }
         }
-        if let Some(block) = self.marked_block(state) {
-            if block.tracks().contains(&(track_index as usize)) {
-                let marked = block.rows();
-                for row in rows.iter_mut().take(marked.end).skip(marked.start) {
-                    *row = row.clone().patch_style(state.theme.selection_subtle);
-                }
+        if let Some(block) = self.marked_block(state)
+            && block.tracks().contains(&(track_index as usize))
+        {
+            let marked = block.rows();
+            for row in rows.iter_mut().take(marked.end).skip(marked.start) {
+                *row = row.clone().patch_style(state.theme.selection_subtle);
             }
         }
         if let Some(row) = self.locked_playback_row(state) {
@@ -1351,14 +1351,13 @@ impl MtrakWidget for TimeLineView {
         }
 
         // enter_note_digit validates per column; '+' is rejected because from_str_radix accepts it as a sign
-        if let KeyCode::Char(digit) = key.code {
-            if digit != '+'
-                && !key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            {
-                return self.enter_note_digit(state, digit);
-            }
+        if let KeyCode::Char(digit) = key.code
+            && digit != '+'
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return self.enter_note_digit(state, digit);
         }
         return false;
     }

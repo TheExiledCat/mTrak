@@ -104,10 +104,10 @@ impl ColorPicker {
 
 impl MtrakWidget for ColorPicker {
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
-        if let Event::Key(key) = event {
-            if key.kind == KeyEventKind::Release {
-                return false;
-            }
+        if let Event::Key(key) = event
+            && key.kind == KeyEventKind::Release
+        {
+            return false;
         }
         if self.part == HEX_PART {
             return self.handle_hex_event(state, event);
