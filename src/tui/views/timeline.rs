@@ -685,11 +685,11 @@ impl KeyActions for TimeLineView {
                     true => pattern.fill_command_values(row, track),
                     false => pattern.fill_volumes(row, track),
                 });
-                if !filled && commands {
-                    state.notify("Fill needs the same command above and below".to_owned());
-                } else if !filled {
-                    state.notify("Fill needs a volume above and below".to_owned());
-                }
+                state.notify(match (filled, commands) {
+                    (false, _) => "NO FILL",
+                    (true, true) => "CMD FILL",
+                    (true, false) => "VOL FILL",
+                });
             }
             TimelineAction::DeleteEffect => {
                 self.edit_and_advance(state, Note::clear_command);
