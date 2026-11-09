@@ -202,7 +202,7 @@ pub fn open_info_dialog(state: &mut AppState) {
         .close_on_esc()
         .focus_first()
         .on_update(move |state, fields| {
-            set_project_name(state, fields.get(name));
+            set_project_name(state, fields.get(name).as_str());
             return Ok(());
         });
     state.open_dialog(dialog);
