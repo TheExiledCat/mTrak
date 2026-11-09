@@ -221,7 +221,10 @@ fn to_toml() -> String {
          # Keys: letters and symbols as typed (a capital means Shift), Spc, Up, Dn, Lt, Rt,\n\
          # PgUp, PgDn, Home, End, Ins, Del, Bksp, Enter, Esc, Tab and F1-F12, after any of\n\
          # ^ (Ctrl), A- (Alt) and S- (Shift), e.g. \"^S\", \"A-O\" or \"S-Tab\". Separate several\n\
-         # keys with spaces, and use \"\" to unbind an action.\n",
+         # keys with spaces, and use \"\" to unbind an action.\n\
+         #\n\
+         # For terminals that keep some keys for themselves, there are premade overrides at\n\
+         # https://github.com/TheExiledCat/mTrak/tree/main/keybinds\n",
     );
     let mut section = "";
     for entry in &keybinds.entries {

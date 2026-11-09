@@ -85,7 +85,9 @@ You can also open projects from the built-in file browser with `Alt+O`.
 
 Press `?` to see every key in mTrak, grouped by section. The footer only shows the most
 common ones. Keys can be rebound on that screen or in `keybinds.toml`, see
-[docs/CONFIG.md](docs/CONFIG.md#keybindings).
+[docs/CONFIG.md](docs/CONFIG.md#keybindings). If your terminal keeps some keys for itself,
+the [keybinds](keybinds) folder has premade overrides for Windows Terminal, GNOME Terminal,
+Konsole, macOS Terminal, tmux and VS Code.
 
 Press `/` to see every pattern command with a short description. The full guide is
 [docs/COMMANDS.md](docs/COMMANDS.md), which is also included in every release zip.

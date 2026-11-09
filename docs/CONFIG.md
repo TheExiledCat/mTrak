@@ -132,7 +132,7 @@ with a letter often types a symbol instead, so check the key shown after binding
 ### Terminals that take keys
 
 Some terminals keep keys for themselves, e.g. Windows Terminal's `F11` for fullscreen or tmux's
-`Ctrl+B`. The [keybinds](https://github.com/TheExiledCat/mTrak/tree/main/keybinds) folder has a
+`Ctrl+B`. The [keybinds](https://github.com/TheExiledCat/mTrak/tree/main/keybinds) folder has premade overrides: a
 `keybinds.toml` for several terminals that moves those actions to keys the terminal lets
 through.
 
