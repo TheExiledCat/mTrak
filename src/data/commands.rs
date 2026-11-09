@@ -473,8 +473,7 @@ impl Command {
         return Self { kind, value };
     }
 
-    /// The notes a `Q` or `X` adds, in semitones above the cell's note, and the ticks between
-    /// them.
+    /// Semitones above the cell's note, and the strum in ticks.
     pub fn chord(&self) -> (Vec<u8>, u8) {
         let (high, low) = (self.value >> 4, self.value & 0x0F);
         return match self.kind {

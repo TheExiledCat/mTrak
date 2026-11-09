@@ -23,7 +23,6 @@ struct Lingering {
     voice: Voice,
 }
 
-/// A strummed chord note waiting for its tick.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Strummed {
     track: usize,
@@ -35,7 +34,7 @@ struct Strummed {
 /// Tracks which note each track is playing, so note offs reach the right channel and pitch.
 pub struct Voices {
     tracks: [Option<Voice>; TRACK_COUNT as usize],
-    /// Notes a chord added to the track's note, which go with it.
+    /// Chord notes, released along with the track's note.
     chords: [Vec<Voice>; TRACK_COUNT as usize],
     lingering: Countdown<Lingering>,
     strummed: Countdown<Strummed>,
@@ -83,8 +82,8 @@ impl Voices {
         self.tracks[track] = self.start(channel, pitch, velocity, out);
     }
 
-    /// Adds notes to the track's note, released along with it. With `strum`, they start one
-    /// after another, that many ticks apart.
+    /// Does nothing without a note on the track. With `strum`, the notes start that many ticks
+    /// apart.
     pub fn chord_on(
         &mut self,
         track: usize,
