@@ -24,6 +24,7 @@ use crate::{
         commands::CommandKind,
         config::{Config, TITLE},
         effect::EffectKind,
+        instrument::Patch,
         metronome::Metronome,
         midi::{
             CC_MAX, MAX_SPEED, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX, VOLUME_MAX,
@@ -1288,6 +1289,10 @@ impl AppState {
         self.project_mut().instruments[channel as usize].pitch_wheel_range = range;
         self.engine.set_bend_range(channel, range);
     }
+    pub fn set_patch(&mut self, channel: u8, patch: Patch) {
+        self.project_mut().instruments[channel as usize].patch = patch;
+        self.engine.set_patch(channel, patch);
+    }
     pub fn add_effect(&mut self, channel: u8, kind: EffectKind) {
         let settings = default_settings(kind);
         self.project_mut().instruments[channel as usize]
@@ -1404,6 +1409,7 @@ impl AppState {
         self.engine.set_default_cc(channel, instrument.default_cc);
         self.engine
             .set_bend_range(channel, instrument.pitch_wheel_range);
+        self.engine.set_patch(channel, instrument.patch);
         self.engine
             .set_channel_transpose(channel, instrument.transpose);
         self.send_effect_chain(channel);

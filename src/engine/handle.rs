@@ -12,6 +12,7 @@ use midir::MidiOutputPort;
 use crate::{
     data::{
         effect::EffectSettings,
+        instrument::Patch,
         metronome::Metronome,
         midi::MidiEvent,
         note::NotePitch,
@@ -83,6 +84,10 @@ pub enum EngineCommand {
     SetBendRange {
         channel: u8,
         range: u8,
+    },
+    SetPatch {
+        channel: u8,
+        patch: Patch,
     },
     SetEffectChain {
         channel: u8,
@@ -321,6 +326,9 @@ impl EngineHandle {
     }
     pub fn set_bend_range(&self, channel: u8, range: u8) {
         self.send(EngineCommand::SetBendRange { channel, range });
+    }
+    pub fn set_patch(&self, channel: u8, patch: Patch) {
+        self.send(EngineCommand::SetPatch { channel, patch });
     }
     pub fn set_transpose(&self, transpose: i8) {
         self.send(EngineCommand::SetTranspose(transpose));
