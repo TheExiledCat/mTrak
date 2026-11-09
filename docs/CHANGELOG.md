@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.9.0 - 2026-11-09
+
+### Added
+
+- **MIDI file export.** `Alt+M` writes the song to a `.mid` file to take into a DAW. It's the
+  song as it plays from its first sequence position, with every command, effect, transpose and
+  volume applied, and it ends where the song length in the Info dialog does. Each instrument
+  that plays something gets its own track, starting with its bank and program, and the
+  song's tempo changes are kept.
+- **Program change and bank select per instrument.** The instrument dialog (`Ctrl+R`) has
+  `Program`, `Bank MSB` and `Bank LSB`. They're sent as bank select (CC 0 and 32) and a program
+  change when you change them, when a project loads, when the MIDI output connects and every
+  time playback starts, so a project always plays on the right patches. Leave one at `Off` to
+  not send it.
+- **FT2's pitch commands**, played as pitch bends within the instrument's bend range (see
+  [docs/COMMANDS.md](docs/COMMANDS.md)):
+  - `0xy` arpeggio: a `0` with a value steps through the note, `x` and `y` semitones up.
+  - `1xx` and `2xx` portamento up and down, in 1/16 semitones a tick.
+  - `3xx` tone portamento: bends the playing note to the cell's note instead of playing it.
+    `E3y` glissando makes it move in whole semitones.
+  - `4xy` vibrato, with `E4y` choosing sine, ramp or square.
+  - `E1y` and `E2y` fine portamento.
+  - A new note on the track starts unbent, and the bends start from wherever `P` or `I` left
+    the channel.
+- **Chords.** `Qxy` plays the note with notes `x` and `y` semitones up, all at once: `Q47` is a
+  major chord. `Xxy` plays chord `x` from a table of 16 (triads, 6ths, 7ths, add9s and more)
+  and strums its notes `y` ticks apart.
+  ```
+  C-4|1|--|Q37   C, D# and G
+  C-4|1|--|X92   C major 7, strummed 2 ticks apart
+  ```
+- **More commands:** `E6y` pattern loop (`E60` marks the start, `E6y` goes back `y` times),
+  `8xx` panning on CC 10, and `Zxx` filter cutoff, which sends CC 74 and selects it like `W`
+  does the mod wheel.
+- **Linear fill.** In edit mode, `Alt+F` ramps the volumes between the nearest ones above and
+  below the cursor in a straight line. On the command column it ramps the values between two of
+  the same command, e.g. `M00` and `M80`.
+- **Keybindings for terminals that take keys.** The
+  [keybinds](https://github.com/TheExiledCat/mTrak/tree/main/keybinds) folder has premade
+  overrides for Windows Terminal, GNOME Terminal, Konsole, macOS Terminal, tmux and VS Code,
+  moving the actions whose keys those terminals keep for themselves.
+- Changing the octave with `F1`-`F8` shows it in the notification line.
+
+### Changed
+
+- The Commands screen (`/`) splits the slides into slides to a target (`V`, `J`, `U`, `N`) and
+  FT2's slides that move a step every tick, and lists the `X` chord table.
+- The pattern info in the header lines up its values and keys, and shows `ADD` when collapsed
+  too.
+- Projects are saved as file version 6, which adds each instrument's bank and program. Projects
+  from older versions open as before, but v0.8.0 can't open projects saved by this version.
+- Building from source needs Rust 1.88 or newer.
+
 ## v0.8.0 - 2026-10-31
 
 ### Added
