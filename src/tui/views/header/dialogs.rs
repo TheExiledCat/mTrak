@@ -1194,6 +1194,26 @@ mod tests {
     }
 
     #[test]
+    fn the_instrument_dialog_sets_the_patch_as_it_changes() {
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        open_instrument_dialog(&mut state);
+        let mut dialog = state.take_pending_dialogs().remove(0);
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        // from the name to the program, then two values down
+        for code in [KeyCode::Tab; 5].into_iter().chain([KeyCode::Down; 2]) {
+            dialog.handle_event(&mut state, &press(code));
+        }
+        let patch = |state: &AppState| state.project().instruments[0].patch;
+        assert_eq!(patch(&state).program, Some(1));
+        dialog.handle_event(&mut state, &press(KeyCode::Tab));
+        dialog.handle_event(&mut state, &press(KeyCode::Down));
+        assert_eq!(patch(&state).bank_msb, Some(0));
+        dialog.handle_event(&mut state, &press(KeyCode::Up));
+        assert_eq!(patch(&state).bank_msb, None);
+        assert_eq!(patch(&state).bank_lsb, None);
+    }
+
+    #[test]
     fn dialogs_with_live_changes_close_with_esc_or_enter() {
         let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
         for open in [open_instrument_dialog, open_global_dialog] {

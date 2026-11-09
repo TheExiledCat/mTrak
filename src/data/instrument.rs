@@ -25,7 +25,7 @@ pub struct Instrument {
     pub patch: Patch,
 }
 
-/// The sound the instrument picks on its synth. Anything left at `None` isn't sent.
+/// What's `None` isn't sent.
 #[derive(Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Patch {
     pub bank_msb: Option<u8>,
