@@ -1136,9 +1136,6 @@ impl MtrakEngine {
                         .pitch_command(&mut events, track, pitch, note);
                 out.extend(audible(events, &mutes));
             }
-            if let Some(slide) = note.command.velocity_slide() {
-                self.playback_command_handler.apply(track, slide);
-            }
             let action = match note.command.kind {
                 CommandKind::None => NoteAction::Play,
                 CommandKind::Midi(command) => {

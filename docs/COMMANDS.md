@@ -199,9 +199,8 @@ starting from wherever `P` or `I` left it:
 - A new note on the track starts unbent: its channel goes back to the `P` or `I` bend just
   before the note starts.
 - Tracks playing the same instrument share its channel, so their bends add up.
-- Like FT2, a value of `00` carries on with the command's last value on the track (`E1`,
-  `E2`, `X1` and `X2` remember theirs too). For vibrato, speed and depth are remembered
-  separately.
+- Like FT2, a value of `00` carries on with the command's last value on the track (`E1`
+  and `E2` remember theirs too). For vibrato, speed and depth are remembered separately.
 - The bend affects every note on the channel, so play pitch commands on a monophonic part.
 
 ### `0` Arpeggio
@@ -261,20 +260,6 @@ C-4|1|--|448   at speed 6, a round every 16 ticks, a semitone each way
 
 - It only wobbles on the rows that have it, and not on their first tick, like FT2.
 - `E4y` picks the shape (see [`E` Extended](#e-extended)).
-
-### `5` Tone portamento and track velocity slide
-
-Like FT2's `5xy`: a `300` and an `Axy` at once. The tone portamento carries on at its last
-speed.
-
-### `6` Vibrato and track velocity slide
-
-Like FT2's `6xy`: a `400` and an `Axy` at once.
-
-### `X` Extra fine portamento
-
-Like FT2's `X1y` and `X2y`: bends the note `y`/64 semitones once, on the row's first tick.
-`X1y` bends up and `X2y` down. Other values do nothing.
 
 ## Playback commands
 
@@ -339,8 +324,6 @@ FastTracker 2's `E` commands: the first digit picks the command, the second is i
 | `90`-`9F` | Retrig note: replays the note every that many ticks in its row        |
 | `C0`-`CF` | Note cut: releases the track's note on that tick of the row           |
 | `D0`-`DF` | Note delay: starts the note that many ticks into its row              |
-| `A0`-`AF` | Fine track velocity up: raises the track velocity that many steps once |
-| `B0`-`BF` | Fine track velocity down: lowers it that many steps once              |
 | `E0`-`EF` | Pattern delay: holds the row that many rows longer                    |
 | `F0`-`FF` | Stop: stops playback once the row has played                          |
 
@@ -366,11 +349,6 @@ C-4|1|--|E92   at speed 6, hits on ticks 0, 2 and 4
   before playback carries on past it, so `E62` plays the rows three times.
 - Each track keeps its own loop, and a new pattern starts with its loop at its top row.
 - A block loop ignores it.
-
-**Fine track velocity (`EA`, `EB`):**
-
-- Like FT2's `EAy` and `EBy`: move the track velocity (see `C`) by `y` steps of 4, once. A
-  `0` repeats the last step the same way.
 
 **Note delay (`ED`) and early delay (`E8`):**
 
@@ -549,29 +527,11 @@ Scales the velocity of every note on the track from this row on, from `00` (sile
 - FT2's `C` sets the volume of the note on its row; here it keeps scaling the track, on top
   of each note's own volume and the global velocity.
 
-### `A` Track velocity slide
-
-Like FT2's `Axy`: slides the track velocity (see `C`) up by `x` or down by `y` steps on every
-tick of the row but its first. A step is 4 out of `FF`, as for `H`.
-
-```
----|1|--|A04   at speed 6, 5 ticks of 16 down: 50 lower by the end of the row
-```
-
-- A synth can't change the velocity of a note that's already playing, so the slide is heard
-  on the notes that start after it, e.g. retrigs.
-- If both are set, `x` wins. `A00` repeats the last slide, which `5` and `6` share.
-
-### `K` Key off
-
-Like FT2's `Kxx`: releases the track's note on tick `xx` of the row, like `ECy` but with two
-digits. `K00` releases it straight away without playing the cell's note.
-
 ## Slides
 
 mTrak has two kinds of slides: slides to a target (`V`, `J` and `U`, landed with `N`), and
-FT2's slides, which move by a step every tick (`1`, `2`, `3`, `4`, `5`, `6`, `A` and `H`, and
-the fine ones that step once: `E1`, `E2`, `X`, `EA` and `EB`).
+FT2's slides, which move by a step every tick (`1`, `2`, `3`, `4` and `H`, and the fine ones
+that step once: `E1` and `E2`).
 
 ### Slides to a target
 
@@ -599,17 +559,27 @@ These work like FastTracker 2's:
   slides further in a row.
 - They only run on rows that have them: put one on every row the slide should last. A value
   of `00` carries on with the last one.
-- What they slid stays when they stop: a portamento's bend until the track's next note, a
-  velocity until something else changes it. Vibrato and arpeggio are the exception and go
+- What they slid stays when they stop: a portamento's bend until the track's next note, the
+  global velocity until something else changes it. Vibrato and arpeggio are the exception and go
   back to the note's pitch.
 
 ### FT2 commands mTrak doesn't have
 
-Some of FastTracker 2's commands change what a sample does, which has no meaning for a synth,
-and some letters do something else in mTrak:
+Some of FastTracker 2's commands change a note while it plays in ways a synth can't follow
+over MIDI, or do what another command already does, so mTrak leaves them out:
 
-- `7` (tremolo) and `9` (sample offset) can't be entered, and `E5` (finetune) and `E7`
-  (tremolo shape) do nothing.
+- `A`, `5`, `6`, `EA` and `EB` slide the volume of the playing note, and `7` and `E7` wobble
+  it. MIDI can't change the velocity of a note once it has started; slide a CC instead, e.g.
+  CC 7 or 11 with `V`.
+- `X` (extra fine portamento) bends by 1/64 semitones, too little to hear in one go; use `E1`
+  and `E2`.
+- `K` (key off) is the same as `EC` over MIDI, which only has note off.
+- `9` (sample offset) and `E5` (finetune) have no meaning for a synth.
+- `L` is [legato](#l-legato), `P` [pitch bend](#p-pitch-bend), `T` [aftertouch](#t-aftertouch)
+  and `C` [track velocity](#c-track-velocity); FT2's envelope position, panning slide, tremor
+  and set volume aren't there.
+- Command letters mTrak doesn't have can't be entered, and `E` values it doesn't use do
+  nothing.
 - `L` is [legato](#l-legato), `P` [pitch bend](#p-pitch-bend), `T` [aftertouch](#t-aftertouch)
   and `C` [track velocity](#c-track-velocity); FT2's envelope position, panning slide, tremor
   and set volume aren't there.

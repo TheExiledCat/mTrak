@@ -23,8 +23,6 @@ struct Memory {
     tone_porta: u8,
     fine_up: u8,
     fine_down: u8,
-    extra_fine_up: u8,
-    extra_fine_down: u8,
     vibrato_speed: u8,
     vibrato_depth: u8,
 }
@@ -114,20 +112,12 @@ impl TrackPitch {
             PitchAction::FinePortaDown(step) => {
                 PitchAction::FinePortaDown(remember(&mut memory.fine_down, step))
             }
-            PitchAction::ExtraFinePortaUp(step) => {
-                PitchAction::ExtraFinePortaUp(remember(&mut memory.extra_fine_up, step))
-            }
-            PitchAction::ExtraFinePortaDown(step) => {
-                PitchAction::ExtraFinePortaDown(remember(&mut memory.extra_fine_down, step))
-            }
             action => action,
         };
         self.action = Some(action);
         match action {
             PitchAction::FinePortaUp(step) => self.bend_by(step as i32 * PORTA_STEP, limit),
             PitchAction::FinePortaDown(step) => self.bend_by(-(step as i32) * PORTA_STEP, limit),
-            PitchAction::ExtraFinePortaUp(step) => self.bend_by(step as i32, limit),
-            PitchAction::ExtraFinePortaDown(step) => self.bend_by(-(step as i32), limit),
             PitchAction::Glissando(on) => self.glissando = on,
             PitchAction::VibratoWaveform(waveform) => self.waveform = waveform,
             PitchAction::TonePorta(_) => {
@@ -293,8 +283,8 @@ mod tests {
             [12, 12, 12]
         );
         assert_eq!(
-            row(&mut track, PitchAction::ExtraFinePortaDown(2), None, 1),
-            [10]
+            row(&mut track, PitchAction::FinePortaDown(1), None, 1),
+            [8]
         );
         track.note_started(0, 64);
         assert_eq!(track.offset(), 0);

@@ -76,7 +76,7 @@ fn cc_value(value: u8) -> u8 {
 const MIDI_CHANNEL_COUNT: usize = MIDI_CHANNEL_MAX as usize + 1;
 const MOD_WHEEL_CC: u8 = 1;
 const PANNING_CC: u8 = 10;
-/// FT2's volumes top out at 64 and ours at 255, so H and A steps are 4x bigger to feel the same.
+/// FT2's global volume tops out at 64 and ours at 255, so H steps are 4x bigger to feel the same.
 const VELOCITY_SLIDE_STEP: i16 = 4;
 
 /// Maps a 00-FF command value to a 14 bit pitch bend: 00 is full down, 80 is no bend and
@@ -434,10 +434,7 @@ impl MidiCommandHandler {
             MidiCommand::PortaUp
             | MidiCommand::PortaDown
             | MidiCommand::TonePorta
-            | MidiCommand::Vibrato
-            | MidiCommand::TonePortaVelocitySlide
-            | MidiCommand::VibratoVelocitySlide
-            | MidiCommand::ExtraFinePorta => {}
+            | MidiCommand::Vibrato => {}
         }
     }
 
@@ -523,11 +520,6 @@ pub struct PlaybackCommandHandler {
     /// H00 repeats the last slide, like FT2's effect memory.
     global_slide_memory: i16,
     track_velocities: [u8; TRACK_COUNT as usize],
-    /// Each track's `A` slide on this row, per tick.
-    track_slides: [Option<i16>; TRACK_COUNT as usize],
-    /// The last `A`, `5` or `6` slide and `EA` and `EB` steps, which a 0 repeats.
-    track_slide_memory: [i16; TRACK_COUNT as usize],
-    fine_velocity_memory: [(u8, u8); TRACK_COUNT as usize],
     /// The pattern and row playing, for pattern loops.
     pattern: Option<usize>,
     row: usize,
@@ -551,9 +543,6 @@ impl PlaybackCommandHandler {
             global_slide: None,
             global_slide_memory: 0,
             track_velocities: [u8::MAX; TRACK_COUNT as usize],
-            track_slides: [None; TRACK_COUNT as usize],
-            track_slide_memory: [0; TRACK_COUNT as usize],
-            fine_velocity_memory: [(0, 0); TRACK_COUNT as usize],
             pattern: None,
             row: 0,
             loops: [(0, 0); TRACK_COUNT as usize],
@@ -585,18 +574,12 @@ impl PlaybackCommandHandler {
         self.pattern = Some(pattern);
         self.row = row;
         self.global_slide = None;
-        self.track_slides = [None; TRACK_COUNT as usize];
         self.flow = RowFlow::default();
     }
     pub fn take_flow(&mut self) -> RowFlow {
         return std::mem::take(&mut self.flow);
     }
     pub fn tick(&mut self, song_velocity: u8) {
-        for (velocity, slide) in self.track_velocities.iter_mut().zip(self.track_slides) {
-            if let Some(step) = slide {
-                *velocity = slid(*velocity, step);
-            }
-        }
         let Some(step) = self.global_slide else {
             return;
         };
@@ -659,20 +642,6 @@ impl PlaybackCommandHandler {
                 self.global_slide = Some(step);
                 NoteAction::Play
             }
-            PlaybackAction::TrackVelocitySlide { up, down } => {
-                if let Some(memory) = self.track_slide_memory.get_mut(track) {
-                    self.track_slides[track] = Some(slide_step(up, down, memory));
-                }
-                NoteAction::Play
-            }
-            PlaybackAction::FineTrackVelocityUp(step) => {
-                self.fine_track_velocity(track, step, true);
-                NoteAction::Play
-            }
-            PlaybackAction::FineTrackVelocityDown(step) => {
-                self.fine_track_velocity(track, step, false);
-                NoteAction::Play
-            }
             PlaybackAction::PatternLoop(count) => {
                 let Some((start, left)) = self.loops.get_mut(track) else {
                     return NoteAction::Play;
@@ -709,29 +678,13 @@ impl PlaybackCommandHandler {
         };
     }
 
-    /// FT2's EAy and EBy; a 0 repeats the last step the same way.
-    fn fine_track_velocity(&mut self, track: usize, step: u8, up: bool) {
-        let (Some(memory), Some(velocity)) = (
-            self.fine_velocity_memory.get_mut(track),
-            self.track_velocities.get_mut(track),
-        ) else {
-            return;
-        };
-        let memory = if up { &mut memory.0 } else { &mut memory.1 };
-        if step != 0 {
-            *memory = step;
-        }
-        let step = *memory as i16 * VELOCITY_SLIDE_STEP;
-        *velocity = slid(*velocity, if up { step } else { -step });
-    }
-
     pub fn reset(&mut self) {
         *self = Self::new();
     }
 }
 
-/// A velocity slide's step per tick, from FT2's `xy`: up by `x`, else down by `y`, else the
-/// last step again.
+/// A global velocity slide's step per tick, from FT2's `Hxy`: up by `x`, else down by `y`,
+/// else the last step again.
 fn slide_step(up: u8, down: u8, memory: &mut i16) -> i16 {
     *memory = match (up, down) {
         (0, 0) => *memory,
@@ -1064,30 +1017,6 @@ mod tests {
             handle(&mut handler, 0, cc_note(MidiCommand::Panning, 0x80, 1)),
             vec![ControlChange(Channel::Ch2, PANNING_CC, 64)]
         );
-    }
-
-    #[test]
-    fn track_velocity_slides_on_every_tick_but_the_first() {
-        let mut handler = PlaybackCommandHandler::new();
-        handler.start_row(0, 0);
-        handler.apply(0, PlaybackAction::TrackVelocitySlide { up: 0, down: 4 });
-        for _ in 0..5 {
-            handler.tick(u8::MAX);
-        }
-        assert_eq!(handler.track_velocity(0), 0xFF - 5 * 16);
-        assert_eq!(handler.track_velocity(1), 0xFF);
-        handler.start_row(0, 1);
-        handler.tick(u8::MAX);
-        assert_eq!(handler.track_velocity(0), 0xFF - 5 * 16);
-    }
-
-    #[test]
-    fn fine_track_velocity_moves_once_and_remembers_each_way() {
-        let mut handler = PlaybackCommandHandler::new();
-        handler.apply(0, PlaybackAction::FineTrackVelocityDown(2));
-        handler.apply(0, PlaybackAction::FineTrackVelocityUp(1));
-        handler.apply(0, PlaybackAction::FineTrackVelocityDown(0));
-        assert_eq!(handler.track_velocity(0), 0xFF - 8 + 4 - 8);
     }
 
     #[test]
