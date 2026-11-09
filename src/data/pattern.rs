@@ -225,8 +225,8 @@ impl Pattern {
             }
         }
     }
-    /// Fills the volumes between the nearest ones above and below `row` on `track` with a
-    /// straight line from one to the other. False when there isn't a volume on both sides.
+    /// Ramps the volumes between the nearest ones above and below `row`. False if a side has
+    /// none.
     pub fn fill_volumes(&mut self, row: usize, track: usize) -> bool {
         return self.fill_between(
             row,
@@ -236,8 +236,7 @@ impl Pattern {
         );
     }
 
-    /// Like `fill_volumes`, for the values of the nearest commands above and below `row`, which
-    /// have to be the same command.
+    /// Like `fill_volumes` for command values; both ends need the same command.
     pub fn fill_command_values(&mut self, row: usize, track: usize) -> bool {
         let command =
             |note: &Note| (note.command.kind != CommandKind::None).then_some(note.command);
@@ -259,7 +258,6 @@ impl Pattern {
         );
     }
 
-    /// The nearest row above or below `row` on `track` that `value` finds something in.
     fn nearest<T>(
         &self,
         row: usize,
@@ -287,16 +285,14 @@ impl Pattern {
         ) else {
             return false;
         };
-        let steps = (last - first) as i32;
-        for between in first + 1..last {
-            let step = (between - first) as i32;
-            let filled =
-                from as i32 + ((to as i32 - from as i32) * step * 2 + steps).div_euclid(steps * 2);
+        let (from, to, steps) = (from as usize, to as usize, last - first);
+        for (step, between) in (first + 1..last).enumerate().map(|(i, row)| (i + 1, row)) {
             let Some(&current) = self.get_event(between, track) else {
                 continue;
             };
             let mut note = current;
-            set(&mut note, filled as u8);
+            let value = (from * (steps - step) + to * step + steps / 2) / steps;
+            set(&mut note, value as u8);
             self.set_event(between, track, note);
         }
         return true;

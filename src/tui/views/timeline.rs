@@ -128,8 +128,7 @@ pub enum TimelineAction {
 
     RowLock,
     LoopBlock,
-    /// Fills the volumes, or the command values on the command column, between the nearest
-    /// ones above and below the cursor in a straight line.
+    /// Command values on the command column, volumes anywhere else.
     Fill,
 }
 
@@ -1548,6 +1547,37 @@ mod tests {
         press(&mut state, &mut view, 'z');
         assert_eq!(view.row_index, 6);
         assert!(has_note(&state, 2, 0));
+    }
+
+    #[test]
+    fn fill_ramps_the_volumes_around_the_cursor_and_undoes_in_one_go() {
+        let (mut state, mut view) = editor();
+        state.enter_volume(0, 0, 0x00);
+        state.enter_volume(0, 4, 0x40);
+        (view.row_index, view.column_index) = (2, 2);
+        view.perform(TimelineAction::Fill, &mut state).unwrap();
+        let volume =
+            |state: &AppState, row| state.active_pattern().get_event(row, 0).unwrap().velocity;
+        assert_eq!(volume(&state, 2), Some(0x20));
+        assert_eq!(state.notification.as_deref(), Some("VOL FILL"));
+        undo(&mut state, &mut view);
+        assert_eq!(
+            (1..4).map(|row| volume(&state, row)).collect::<Vec<_>>(),
+            [None; 3]
+        );
+        assert_eq!(volume(&state, 4), Some(0x40));
+    }
+
+    #[test]
+    fn fill_needs_the_same_command_at_both_ends() {
+        let (mut state, mut view) = editor();
+        state.enter_command(0, 0, "M00".parse().unwrap());
+        state.enter_command(0, 2, "S10".parse().unwrap());
+        (view.row_index, view.column_index) = (1, 5);
+        view.perform(TimelineAction::Fill, &mut state).unwrap();
+        assert_eq!(state.notification.as_deref(), Some("NO FILL"));
+        let cell = state.active_pattern().get_event(1, 0).unwrap();
+        assert_eq!(cell.command, Default::default());
     }
 
     #[test]
