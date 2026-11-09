@@ -1126,6 +1126,7 @@ impl AppState {
     }
     pub fn set_octave(&mut self, octave: u8) {
         self.current_octave = octave.clamp(0, 7);
+        self.notify(format!("OCT {}", self.current_octave));
     }
     pub fn enter_key(&mut self, track: usize, row: usize, key: KeyEvent) -> Option<NotePitch> {
         let pitch = self.play_key(track, key)?;
