@@ -2,7 +2,7 @@
 name = "mtrak"
 version = "0.8.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license-file="LICENSE"
 [[bin]]
 name = "mtrak"
