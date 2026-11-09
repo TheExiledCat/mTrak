@@ -67,14 +67,14 @@ Each entry plays a pattern a number of times:
 
 The first instrument plays on MIDI channel 1, the last on channel 16.
 
-| Field               | Type   | Contents                                                       |
-| ------------------- | ------ | -------------------------------------------------------------- |
-| `name`              | string | The instrument's name, can be empty                            |
-| `volume`            | int    | Scales the velocity of the instrument's notes, `0`-`255`       |
-| `pitch_wheel_range` | int    | The synth's pitch bend range in semitones, for the `I` command |
-| `default_cc`        | int    | The CC that CC commands change on a track without an `S`       |
-| `transpose`         | int    | Semitones added to the instrument's notes, can be negative     |
-| `effects`           | array of maps | The instrument's live MIDI effects, see below           |
+| Field               | Type          | Contents                                                                  |
+| ------------------- | ------------- | ------------------------------------------------------------------------- |
+| `name`              | string        | The instrument's name, can be empty                                       |
+| `volume`            | int           | Scales the velocity of the instrument's notes, `0`-`255`                  |
+| `pitch_wheel_range` | int           | The synth's pitch bend range in semitones, for `I` and the pitch commands |
+| `default_cc`        | int           | The CC that CC commands change on a track without an `S`                  |
+| `transpose`         | int           | Semitones added to the instrument's notes, can be negative                |
+| `effects`           | array of maps | The instrument's live MIDI effects, see below                             |
 
 #### Effects
 
@@ -242,17 +242,18 @@ Like FastTracker 2's XM patterns, each cell starts with a flag byte that says wh
 follow it, so an empty cell takes one byte. The top bit of the flag byte is always set, and the
 two bits below it are always clear:
 
-| Flag bit | Field that follows | Values                                                 |
-| -------- | ------------------ | ------------------------------------------------------ |
+| Flag bit | Field that follows | Values                                                  |
+| -------- | ------------------ | ------------------------------------------------------- |
 | `0x01`   | Note               | `1` note off, `12`-`127` the MIDI note (60 is middle C) |
-| `0x02`   | Instrument         | `0`-`15`                                               |
-| `0x04`   | Volume             | `0`-`128` (`0x80`)                                     |
-| `0x08`   | Command            | The command's letter in ASCII, e.g. `F` or `S`         |
-| `0x10`   | Command value      | `0`-`255`                                              |
+| `0x02`   | Instrument         | `0`-`15`                                                |
+| `0x04`   | Volume             | `0`-`128` (`0x80`)                                      |
+| `0x08`   | Command            | The command's letter or digit in ASCII, e.g. `F` or `1` |
+| `0x10`   | Command value      | `0`-`255`                                               |
 
 The fields follow in the order of the table. A field that's missing is empty: no note, no
-instrument, no volume or no command. A missing command value is `0`. See
-[COMMANDS.md](COMMANDS.md) for what each command letter does.
+instrument, no volume or no command. A missing command value is `0`. A value without a
+command is an arpeggio, written `0xy` in the editor. See [COMMANDS.md](COMMANDS.md) for what
+each command does.
 
 Some cells and their bytes:
 
