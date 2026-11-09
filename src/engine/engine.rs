@@ -1359,7 +1359,16 @@ impl MtrakEngine {
                         Some(overlap) => self
                             .voices
                             .legato_on(track, channel, pitch.0, velocity, overlap, out),
-                        None => self.voices.note_on(track, channel, pitch.0, velocity, out),
+                        None => {
+                            self.voices.note_on(track, channel, pitch.0, velocity, out);
+                            let chord: Vec<u8> = note
+                                .command
+                                .chord()
+                                .into_iter()
+                                .map(|interval| pitch.0.saturating_add(interval))
+                                .collect();
+                            self.voices.chord_on(track, channel, &chord, velocity, out);
+                        }
                     },
                     _ => self.voices.release(track, out),
                 }
@@ -4935,5 +4944,39 @@ mod tests {
             .map(|(_, row)| row)
             .collect();
         assert_eq!(rows, vec![1, 2, 1, 2, 1, 2, 3]);
+    }
+
+    #[test]
+    fn a_chord_plays_the_note_and_its_intervals_together() {
+        let mut harness = Harness::new(vec![pattern(
+            2,
+            &[
+                (
+                    0,
+                    0,
+                    playback(note("C-4 1 --"), PlaybackCommand::Chord, 0x47),
+                ),
+                (1, 0, note("=== 1 --")),
+            ],
+        )]);
+        harness
+            .engine
+            .apply(EngineCommand::PlayPattern(PatternId(0)));
+        let pitches: Vec<u8> = harness
+            .messages()
+            .iter()
+            .filter_map(|m| match m {
+                Message::NoteOn(_, pitch, _) => Some(*pitch),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pitches, vec![60, 64, 67]);
+        harness.next_row();
+        let offs = harness
+            .messages()
+            .iter()
+            .filter(|m| matches!(m, Message::NoteOff(..)))
+            .count();
+        assert_eq!(offs, 3);
     }
 }

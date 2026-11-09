@@ -543,6 +543,25 @@ Scales the velocity of every note on the track from this row on, from `00` (sile
 - FT2's `C` sets the volume of the note on its row; here it keeps scaling the track, on top
   of each note's own volume and the global velocity.
 
+### `Q` Chord
+
+Plays the cell's note with two more on top, `x` and `y` semitones up, all at once and at the
+same velocity. It's the [arpeggio](#0-arpeggio) played together: `Q37` is the minor chord
+`037` steps through.
+
+```
+C-4|1|--|Q47   C, E and G: a major chord
+C-4|1|--|Q37   C, D# and G: minor
+C-4|1|--|Q07   C and G, a power chord
+```
+
+- A `0` adds nothing, so `Q07` plays two notes and `Q00` just the note.
+- The chord goes when the track's note does: on the next note, a note off, a cut or a mute.
+- Without a note on the cell, `Q` does nothing. `R` and `E9` on later rows repeat the whole
+  chord.
+- The synth needs to be polyphonic. For other shapes, more notes or inversions, use the
+  Chord instrument effect (see [EFFECTS.md](EFFECTS.md#chord)).
+
 ## Slides
 
 mTrak has two kinds of slides: slides to a target (`V`, `J` and `U`, landed with `N`), and

@@ -25,7 +25,7 @@ pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 16] = [
     ('3', TonePorta),
     ('4', Vibrato),
 ];
-pub const PLAYBACK_COMMAND_LOOKUP: [(char, PlaybackCommand); 10] = [
+pub const PLAYBACK_COMMAND_LOOKUP: [(char, PlaybackCommand); 11] = [
     ('F', PlaybackCommand::SetTempo),
     ('Y', PlaybackCommand::Probability),
     ('E', PlaybackCommand::Extended),
@@ -36,6 +36,7 @@ pub const PLAYBACK_COMMAND_LOOKUP: [(char, PlaybackCommand); 10] = [
     ('G', PlaybackCommand::SetGlobalVelocity),
     ('H', PlaybackCommand::GlobalVelocitySlide),
     ('C', PlaybackCommand::SetTrackVelocity),
+    ('Q', PlaybackCommand::Chord),
 ];
 /// A way to write a command's value, e.g. `xy`, and what it does.
 pub type CommandForm = (&'static str, &'static str);
@@ -218,6 +219,7 @@ pub enum PlaybackCommand {
     SetGlobalVelocity, // FT2's G
     GlobalVelocitySlide, // FT2's H
     SetTrackVelocity, // scales every note on the track from here on
+    Chord,  // plays the note with two more, x and y semitones up
 }
 /// Values from 20 up set the BPM; lower values set the speed.
 const TEMPO_MIN_BPM: u8 = 0x20;
@@ -259,6 +261,11 @@ pub enum PlaybackAction {
         down: u8,
     },
     SetTrackVelocity(u8),
+    /// Semitones above the note; 0 adds nothing.
+    Chord {
+        x: u8,
+        y: u8,
+    },
     /// E60 marks the start, E6y loops back y times.
     PatternLoop(u8),
     Pitch(PitchAction),
@@ -307,6 +314,7 @@ impl PlaybackCommand {
                 down: low,
             },
             PlaybackCommand::SetTrackVelocity => PlaybackAction::SetTrackVelocity(value),
+            PlaybackCommand::Chord => PlaybackAction::Chord { x: high, y: low },
         };
     }
 
@@ -377,6 +385,9 @@ impl PlaybackCommand {
                 "xx",
                 "Track velocity: scale the track's notes, 00 silent, FF full",
             )],
+            PlaybackCommand::Chord => {
+                &[("xy", "Chord: play the note with notes x and y semitones up")]
+            }
         };
     }
 
@@ -426,6 +437,17 @@ pub struct Command {
 impl Command {
     pub fn new(kind: CommandKind, value: u8) -> Self {
         return Self { kind, value };
+    }
+
+    /// The notes a `Q` adds, in semitones above the cell's note.
+    pub fn chord(&self) -> Vec<u8> {
+        return match self.kind {
+            CommandKind::Playback(PlaybackCommand::Chord) => [self.value >> 4, self.value & 0x0F]
+                .into_iter()
+                .filter(|&interval| interval > 0)
+                .collect(),
+            _ => Vec::new(),
+        };
     }
 
     /// A `0` with a value is FT2's arpeggio.
@@ -611,6 +633,15 @@ mod tests {
         assert_eq!(PlaybackCommand::Legato.decode(0x35), PlaybackAction::Unused);
         assert_eq!(PlaybackCommand::Legato.decode(0x20), PlaybackAction::Unused);
         assert_eq!(PlaybackCommand::Legato.decode(0x40), PlaybackAction::Unused);
+    }
+
+    #[test]
+    fn a_chord_skips_zero_intervals() {
+        let chord = |text: &str| Command::from_str(text).unwrap().chord();
+        assert_eq!(chord("Q37"), vec![3, 7]);
+        assert_eq!(chord("Q07"), vec![7]);
+        assert!(chord("Q00").is_empty());
+        assert!(chord("037").is_empty());
     }
 
     #[test]

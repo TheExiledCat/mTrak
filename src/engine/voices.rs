@@ -26,6 +26,8 @@ struct Lingering {
 /// Tracks which note each track is playing, so note offs reach the right channel and pitch.
 pub struct Voices {
     tracks: [Option<Voice>; TRACK_COUNT as usize],
+    /// Notes a chord added to the track's note, which go with it.
+    chords: [Vec<Voice>; TRACK_COUNT as usize],
     lingering: Countdown<Lingering>,
     held: HeldNotes,
     channel_volumes: [u8; MIDI_CHANNEL_COUNT],
@@ -44,6 +46,7 @@ impl Voices {
     pub fn new() -> Self {
         return Self {
             tracks: [None; TRACK_COUNT as usize],
+            chords: std::array::from_fn(|_| Vec::new()),
             lingering: Countdown::new(),
             held: HeldNotes::new(),
             channel_volumes: [0xFF; MIDI_CHANNEL_COUNT],
@@ -66,7 +69,26 @@ impl Voices {
             return;
         }
         self.release(track, out);
-        self.start(track, channel, pitch, velocity, out);
+        self.tracks[track] = self.start(channel, pitch, velocity, out);
+    }
+
+    /// Adds notes to the track's note, released along with it.
+    pub fn chord_on(
+        &mut self,
+        track: usize,
+        channel: u8,
+        pitches: &[u8],
+        velocity: u8,
+        out: &mut Vec<Message>,
+    ) {
+        if self.tracks.get(track).copied().flatten().is_none() {
+            return;
+        }
+        for &pitch in pitches {
+            if let Some(voice) = self.start(channel, pitch, velocity, out) {
+                self.chords[track].push(voice);
+            }
+        }
     }
 
     /// Starts the new note before releasing the track's current one, so a synth in legato
@@ -84,7 +106,11 @@ impl Voices {
             return;
         }
         let previous = self.tracks[track].take();
-        self.start(track, channel, pitch, velocity, out);
+        let chord = std::mem::take(&mut self.chords[track]);
+        self.tracks[track] = self.start(channel, pitch, velocity, out);
+        for voice in chord {
+            self.note_off(voice, out);
+        }
         let Some(previous) = previous else {
             return;
         };
@@ -107,13 +133,17 @@ impl Voices {
         if let Some(voice) = self.tracks.get_mut(track).and_then(Option::take) {
             self.note_off(voice, out);
         }
+        for voice in std::mem::take(&mut self.chords[track]) {
+            self.note_off(voice, out);
+        }
     }
 
     /// Stops the track's note and any note still ringing after a legato note, straight away.
     pub fn cut(&mut self, track: usize, out: &mut Vec<Message>) {
-        if let Some(voice) = self.tracks.get_mut(track).and_then(Option::take) {
-            self.note_off(voice, out);
+        if track >= self.tracks.len() {
+            return;
         }
+        self.release(track, out);
         for lingering in self.lingering.remove(|lingering| lingering.track == track) {
             self.note_off(lingering.voice, out);
         }
@@ -146,8 +176,7 @@ impl Voices {
             if let Some(voice) = self.tracks[track]
                 && is_muted(&voice)
             {
-                self.tracks[track] = None;
-                self.note_off(voice, out);
+                self.release(track, out);
             }
         }
         for lingering in self
@@ -188,34 +217,30 @@ impl Voices {
 
     fn start(
         &mut self,
-        track: usize,
         channel: u8,
         pitch: u8,
         velocity: u8,
         out: &mut Vec<Message>,
-    ) {
+    ) -> Option<Voice> {
         let channel = channel.min(MIDI_CHANNEL_MAX);
         let played = pitch;
         // a note transposed out of MIDI's range isn't played
         let transposed =
             pitch as i32 + self.transpose as i32 + self.channel_transposes[channel as usize] as i32;
-        let Ok(pitch) = u8::try_from(transposed) else {
-            return;
-        };
-        if pitch as usize >= PITCH_COUNT {
-            return;
-        }
+        let pitch = u8::try_from(transposed)
+            .ok()
+            .filter(|&pitch| (pitch as usize) < PITCH_COUNT)?;
         let velocity = scale_velocity(
             scale_velocity(velocity, self.channel_volumes[channel as usize], u8::MAX),
             self.velocity,
             u8::MAX,
         );
-        self.tracks[track] = Some(Voice {
+        self.held.note_on(to_channel(channel), pitch, velocity, out);
+        return Some(Voice {
             channel,
             pitch,
             played,
         });
-        self.held.note_on(to_channel(channel), pitch, velocity, out);
     }
 
     /// The note off is only sent once no other track holds that pitch.
@@ -449,5 +474,44 @@ mod tests {
         voices.set_transpose(127);
         voices.note_on(1, 0, 60, 100, &mut out);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_chord_is_released_with_its_note() {
+        let mut voices = Voices::new();
+        let mut out = vec![];
+        voices.note_on(0, 0, 60, 100, &mut out);
+        voices.chord_on(0, 0, &[64, 67], 100, &mut out);
+        assert_eq!(out.len(), 3);
+        out.clear();
+        voices.note_on(0, 0, 62, 100, &mut out);
+        assert_eq!(note_offs(&out), 3);
+        out.clear();
+        voices.release(0, &mut out);
+        assert_eq!(note_offs(&out), 1);
+    }
+
+    #[test]
+    fn a_chord_needs_a_note_to_go_with() {
+        let mut voices = Voices::new();
+        let mut out = vec![];
+        voices.chord_on(0, 0, &[64, 67], 100, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn muting_and_cutting_release_the_whole_chord() {
+        let mut voices = Voices::new();
+        let mut out = vec![];
+        voices.note_on(0, 0, 60, 100, &mut out);
+        voices.chord_on(0, 0, &[64, 67], 100, &mut out);
+        out.clear();
+        voices.release_channels(&[true], &mut out);
+        assert_eq!(note_offs(&out), 3);
+        voices.note_on(1, 0, 60, 100, &mut out);
+        voices.chord_on(1, 0, &[63], 100, &mut out);
+        out.clear();
+        voices.cut(1, &mut out);
+        assert_eq!(note_offs(&out), 2);
     }
 }
