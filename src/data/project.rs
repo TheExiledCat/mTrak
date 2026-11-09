@@ -13,6 +13,7 @@ use crate::{
         pattern::{Pattern, PatternId, PatternStore},
     },
     error::{MTrakError, Result},
+    tui::constants::TRACK_COUNT,
 };
 /// A project file starts with these bytes, then the format version as a little-endian u16,
 /// then the payload's length in bytes as a little-endian u32, then the payload itself: the
@@ -232,9 +233,13 @@ impl Project {
                 continue;
             };
             let mut next = None;
-            for row in pattern.rows.iter().skip(first_row) {
+            // each track's E60 row and how many more times its E6y goes back, as in the engine
+            let mut loops = [(0, 0u8); TRACK_COUNT as usize];
+            let mut row_index = first_row;
+            while let Some(row) = pattern.rows.get(row_index) {
                 let (mut jump, mut break_row, mut delay, mut stop) = (None, None, 0, false);
-                for note in &row.tracks {
+                let mut loop_row = None;
+                for (track, note) in row.tracks.iter().enumerate() {
                     let CommandKind::Playback(command) = note.command.kind else {
                         continue;
                     };
@@ -246,6 +251,17 @@ impl Project {
                         PlaybackAction::PatternBreak(target) => break_row = Some(target as usize),
                         PlaybackAction::PatternDelay(rows) => delay = delay.max(rows),
                         PlaybackAction::StopSong => stop = true,
+                        PlaybackAction::PatternLoop(0) => loops[track].0 = row_index,
+                        PlaybackAction::PatternLoop(count) => {
+                            let (start, left) = &mut loops[track];
+                            *left = match *left {
+                                0 => count,
+                                left => left - 1,
+                            };
+                            if *left > 0 {
+                                loop_row = Some(*start);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -255,10 +271,15 @@ impl Project {
                 if stop {
                     return (rows, Duration::from_secs_f64(seconds));
                 }
+                if let Some(start) = loop_row {
+                    row_index = start;
+                    continue;
+                }
                 if jump.is_some() || break_row.is_some() {
                     next = Some((jump, break_row.unwrap_or(0)));
                     break;
                 }
+                row_index += 1;
             }
             (index, repeat, first_row) = match next {
                 Some((Some(target), _)) if target <= index || target >= self.sequence.len() => {
@@ -501,6 +522,13 @@ mod tests {
         let stats = project.stats();
         assert_eq!(stats.song_rows, 4);
         assert!((stats.song_length.as_secs_f64() - 5.0 * 0.125).abs() < 1e-6);
+    }
+
+    #[test]
+    fn song_length_counts_pattern_loops() {
+        // rows 1 and 2 three times, then row 3, then the 4 rows of the next pattern
+        let project = two_pattern_song(&[(0, 1, "E60"), (0, 2, "E62")]);
+        assert_eq!(project.stats().song_rows, 1 + 6 + 1 + 4);
     }
 
     #[test]

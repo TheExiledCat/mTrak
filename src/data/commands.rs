@@ -3,7 +3,7 @@ use std::{fmt::Display, str::FromStr};
 use MidiCommand::*;
 
 use crate::error::MTrakError;
-pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 10] = [
+pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 18] = [
     ('S', SetCC),
     ('M', ChangeCC),
     ('W', ModWheel),
@@ -14,8 +14,16 @@ pub const MIDI_COMMAND_LOOKUP: [(char, MidiCommand); 10] = [
     ('T', AfterTouch),
     ('P', PitchBend),
     ('I', Interval),
+    ('8', Panning),
+    ('1', PortaUp),
+    ('2', PortaDown),
+    ('3', TonePorta),
+    ('4', Vibrato),
+    ('5', TonePortaVelocitySlide),
+    ('6', VibratoVelocitySlide),
+    ('X', ExtraFinePorta),
 ];
-pub const PLAYBACK_COMMAND_LOOKUP: [(char, PlaybackCommand); 10] = [
+pub const PLAYBACK_COMMAND_LOOKUP: [(char, PlaybackCommand); 12] = [
     ('F', PlaybackCommand::SetTempo),
     ('Y', PlaybackCommand::Probability),
     ('E', PlaybackCommand::Extended),
@@ -26,6 +34,8 @@ pub const PLAYBACK_COMMAND_LOOKUP: [(char, PlaybackCommand); 10] = [
     ('G', PlaybackCommand::SetGlobalVelocity),
     ('H', PlaybackCommand::GlobalVelocitySlide),
     ('C', PlaybackCommand::SetTrackVelocity),
+    ('A', PlaybackCommand::TrackVelocitySlide),
+    ('K', PlaybackCommand::KeyOff),
 ];
 /// A way to write a command's value, e.g. `xy`, and what it does.
 pub type CommandForm = (&'static str, &'static str);
@@ -73,9 +83,9 @@ impl CommandKind {
 
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum MidiCommand {
-    SetCC,           // Sets the CC to change with the ChangeCC command
-    ChangeCC,        // Changes the CC set by SetCC
-    ModWheel,        // Selects CC 1 like SetCC 01 and sends it like ChangeCC
+    SetCC,                  // Sets the CC to change with the ChangeCC command
+    ChangeCC,               // Changes the CC set by SetCC
+    ModWheel,               // Selects CC 1 like SetCC 01 and sends it like ChangeCC
     CCSlide, // Slides the CC set by SetCC from this value to the track's next CC or slide command
     CCVelocitySlide, // CCSlide that also sets the velocity of notes played during it
     VelocitySlide, // Slides the velocity of notes played during it, without sending anything itself
@@ -83,6 +93,14 @@ pub enum MidiCommand {
     AfterTouch, // Sets Channel AfterTouch
     PitchBend, // Sets Pitchbend with low resolution as a single byte
     Interval, // Bends by whole semitones, scaled to the instrument's bend range
+    Panning,  // FT2's 8: sends CC 10
+    PortaUp,  // FT2's 1: bends up a little every tick
+    PortaDown, // FT2's 2
+    TonePorta, // FT2's 3: bends towards the cell's note instead of playing it
+    Vibrato,  // FT2's 4
+    TonePortaVelocitySlide, // FT2's 5: carries on a 3 and slides the track velocity like an A
+    VibratoVelocitySlide, // FT2's 6: carries on a 4 and slides the track velocity like an A
+    ExtraFinePorta, // FT2's X1 and X2
 }
 impl MidiCommand {
     /// Whether this command starts a slide towards the track's next CC or slide command.
@@ -92,6 +110,20 @@ impl MidiCommand {
     /// Whether this command ends a slide that reaches it.
     pub fn is_slide_target(&self) -> bool {
         return self.is_slide() || matches!(self, ChangeCC | ModWheel | EndSlide);
+    }
+    /// Whether this is one of FT2's slides, which move by a step every tick instead of
+    /// towards a target.
+    pub fn is_ft2_slide(&self) -> bool {
+        return matches!(
+            self,
+            PortaUp
+                | PortaDown
+                | TonePorta
+                | Vibrato
+                | TonePortaVelocitySlide
+                | VibratoVelocitySlide
+                | ExtraFinePorta
+        );
     }
     /// Whether the slide this command starts sends the selected CC.
     pub fn slides_cc(&self) -> bool {
@@ -138,6 +170,26 @@ impl MidiCommand {
                 "xx",
                 "Interval: bend by semitones from 80 (83 up 3, 7D down 3) in the bend range",
             )],
+            Panning => &[("xx", "Panning: send CC 10, 00 left, 80 centre, FF right")],
+            PortaUp => &[("xx", "Portamento up: bend up xx/16 semitone every tick")],
+            PortaDown => &[("xx", "Portamento down: bend down xx/16 semitone every tick")],
+            TonePorta => &[(
+                "xx",
+                "Tone portamento: bend towards the note by xx/16 semitone a tick",
+            )],
+            Vibrato => &[("xy", "Vibrato: wobble the pitch at speed x, depth y")],
+            TonePortaVelocitySlide => &[(
+                "xy",
+                "Tone portamento + track velocity slide: a 300 and an Axy",
+            )],
+            VibratoVelocitySlide => &[("xy", "Vibrato + track velocity slide: a 400 and an Axy")],
+            ExtraFinePorta => &[
+                ("1y", "Extra fine portamento up: bend up y/64 semitone once"),
+                (
+                    "2y",
+                    "Extra fine portamento down: bend down y/64 semitone once",
+                ),
+            ],
         };
     }
 
@@ -177,6 +229,8 @@ pub enum PlaybackCommand {
     SetGlobalVelocity, // FT2's G
     GlobalVelocitySlide, // FT2's H
     SetTrackVelocity, // scales every note on the track from here on
+    TrackVelocitySlide, // FT2's A: slides the track velocity every tick
+    KeyOff, // FT2's K: releases the note on a tick of the row
 }
 /// Values from 20 up set the BPM; lower values set the speed.
 const TEMPO_MIN_BPM: u8 = 0x20;
@@ -218,6 +272,18 @@ pub enum PlaybackAction {
         down: u8,
     },
     SetTrackVelocity(u8),
+    /// Slides the track velocity by `up` or `down` steps on every tick but the first.
+    TrackVelocitySlide {
+        up: u8,
+        down: u8,
+    },
+    /// Moves the track velocity once, on the row's first tick.
+    FineTrackVelocityUp(u8),
+    FineTrackVelocityDown(u8),
+    /// 0 marks the row the loop starts from; otherwise jumps back there this many times.
+    PatternLoop(u8),
+    /// A pitch command, run by the MIDI command handler.
+    Pitch(PitchAction),
     /// A value no subcommand uses yet.
     Unused,
 }
@@ -233,11 +299,18 @@ impl PlaybackCommand {
             },
             PlaybackCommand::Probability => PlaybackAction::Probability(value),
             PlaybackCommand::Extended => match high {
+                0x1 => PlaybackAction::Pitch(PitchAction::FinePortaUp(low)),
+                0x2 => PlaybackAction::Pitch(PitchAction::FinePortaDown(low)),
+                0x3 => PlaybackAction::Pitch(PitchAction::Glissando(low != 0)),
+                0x4 => PlaybackAction::Pitch(PitchAction::VibratoWaveform(low)),
+                0x6 => PlaybackAction::PatternLoop(low),
                 0x8 => PlaybackAction::DelayEarly(low),
                 0x9 => PlaybackAction::RetrigNote(low),
                 0xC => PlaybackAction::Cut(low),
                 0xD => PlaybackAction::DelayLate(low),
                 0xE => PlaybackAction::PatternDelay(low),
+                0xA => PlaybackAction::FineTrackVelocityUp(low),
+                0xB => PlaybackAction::FineTrackVelocityDown(low),
                 0xF => PlaybackAction::StopSong,
                 _ => PlaybackAction::Unused,
             },
@@ -258,6 +331,11 @@ impl PlaybackCommand {
                 down: low,
             },
             PlaybackCommand::SetTrackVelocity => PlaybackAction::SetTrackVelocity(value),
+            PlaybackCommand::TrackVelocitySlide => PlaybackAction::TrackVelocitySlide {
+                up: high,
+                down: low,
+            },
+            PlaybackCommand::KeyOff => PlaybackAction::Cut(value),
         };
     }
 
@@ -273,6 +351,18 @@ impl PlaybackCommand {
                 "Probability: chance the note plays, 00 never, FF always",
             )],
             PlaybackCommand::Extended => &[
+                ("1y", "Fine portamento up: bend up y/16 semitone once"),
+                ("2y", "Fine portamento down: bend down y/16 semitone once"),
+                (
+                    "3y",
+                    "Glissando: 1 makes tone portamento move in semitones, 0 smoothly",
+                ),
+                (
+                    "4y",
+                    "Vibrato waveform: 0 sine, 1 ramp, 2 square, +4 keeps it going",
+                ),
+                ("60", "Pattern loop: mark this row as the start of a loop"),
+                ("6y", "Pattern loop: go back to the loop start y times"),
                 ("8y", "Early delay: start the note y ticks before its row"),
                 (
                     "9y",
@@ -280,6 +370,14 @@ impl PlaybackCommand {
                 ),
                 ("Cy", "Note cut: release the note on tick y"),
                 ("Dy", "Note delay: start the note y ticks into its row"),
+                (
+                    "Ay",
+                    "Fine track velocity up: raise the track velocity y steps once",
+                ),
+                (
+                    "By",
+                    "Fine track velocity down: lower the track velocity y steps once",
+                ),
                 ("Ey", "Pattern delay: hold the row y rows longer"),
                 ("F0", "Stop: stop playback after this row"),
             ],
@@ -316,7 +414,20 @@ impl PlaybackCommand {
                 "xx",
                 "Track velocity: scale the track's notes, 00 silent, FF full",
             )],
+            PlaybackCommand::TrackVelocitySlide => &[
+                ("x0", "Track velocity slide: up by x every tick"),
+                ("0y", "Track velocity slide: down by y every tick"),
+            ],
+            PlaybackCommand::KeyOff => &[("xx", "Key off: release the note on tick xx")],
         };
+    }
+
+    /// Whether this is one of FT2's slides, which move by a step every tick.
+    pub fn is_ft2_slide(&self) -> bool {
+        return matches!(
+            self,
+            PlaybackCommand::GlobalVelocitySlide | PlaybackCommand::TrackVelocitySlide
+        );
     }
 
     fn from_char(char: char) -> Result<Self, MTrakError> {
@@ -330,6 +441,33 @@ impl PlaybackCommand {
         return CommandKind::Playback(*self);
     }
 }
+/// What one of FT2's pitch commands does, decoded from its letter and value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PitchAction {
+    /// FT2's 0xy: the note, then `x` semitones up, then `y` up, a tick each.
+    Arpeggio {
+        x: u8,
+        y: u8,
+    },
+    /// In 1/16 semitones per tick, after the first.
+    PortaUp(u8),
+    PortaDown(u8),
+    TonePorta(u8),
+    /// `speed` in 64ths of a cycle per tick, `depth` in 1/8 semitones.
+    Vibrato {
+        speed: u8,
+        depth: u8,
+    },
+    /// In 1/16 semitones, once on the row's first tick.
+    FinePortaUp(u8),
+    FinePortaDown(u8),
+    /// In 1/64 semitones, once on the row's first tick.
+    ExtraFinePortaUp(u8),
+    ExtraFinePortaDown(u8),
+    Glissando(bool),
+    VibratoWaveform(u8),
+}
+
 #[derive(Debug, Clone, PartialEq, Copy)]
 
 pub struct Command {
@@ -340,6 +478,51 @@ pub struct Command {
 impl Command {
     pub fn new(kind: CommandKind, value: u8) -> Self {
         return Self { kind, value };
+    }
+
+    /// What the command does to the pitch of the track's note, if it's a pitch command. An
+    /// empty command letter with a value is FT2's arpeggio.
+    pub fn pitch_action(&self) -> Option<PitchAction> {
+        let (high, low) = (self.value >> 4, self.value & 0x0F);
+        return match self.kind {
+            CommandKind::None if self.value != 0 => Some(PitchAction::Arpeggio { x: high, y: low }),
+            CommandKind::Midi(PortaUp) => Some(PitchAction::PortaUp(self.value)),
+            CommandKind::Midi(PortaDown) => Some(PitchAction::PortaDown(self.value)),
+            CommandKind::Midi(TonePorta) => Some(PitchAction::TonePorta(self.value)),
+            CommandKind::Midi(TonePortaVelocitySlide) => Some(PitchAction::TonePorta(0)),
+            CommandKind::Midi(Vibrato) => Some(PitchAction::Vibrato {
+                speed: high,
+                depth: low,
+            }),
+            CommandKind::Midi(VibratoVelocitySlide) => {
+                Some(PitchAction::Vibrato { speed: 0, depth: 0 })
+            }
+            CommandKind::Midi(ExtraFinePorta) => match high {
+                0x1 => Some(PitchAction::ExtraFinePortaUp(low)),
+                0x2 => Some(PitchAction::ExtraFinePortaDown(low)),
+                _ => None,
+            },
+            CommandKind::Playback(PlaybackCommand::Extended) => {
+                match PlaybackCommand::Extended.decode(self.value) {
+                    PlaybackAction::Pitch(action) => Some(action),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+    }
+
+    /// The track velocity slide a 5 or a 6 runs alongside its pitch command.
+    pub fn velocity_slide(&self) -> Option<PlaybackAction> {
+        return match self.kind {
+            CommandKind::Midi(TonePortaVelocitySlide | VibratoVelocitySlide) => {
+                Some(PlaybackAction::TrackVelocitySlide {
+                    up: self.value >> 4,
+                    down: self.value & 0x0F,
+                })
+            }
+            _ => None,
+        };
     }
 }
 
@@ -464,8 +647,33 @@ mod tests {
         );
         assert_eq!(
             PlaybackCommand::Extended.decode(0x13),
+            PlaybackAction::Pitch(PitchAction::FinePortaUp(3))
+        );
+        assert_eq!(
+            PlaybackCommand::Extended.decode(0x62),
+            PlaybackAction::PatternLoop(2)
+        );
+        assert_eq!(
+            PlaybackCommand::Extended.decode(0x53),
             PlaybackAction::Unused
         );
+    }
+
+    #[test]
+    fn pitch_commands_decode_with_ft2_letters() {
+        let action = |text: &str| Command::from_str(text).unwrap().pitch_action();
+        assert_eq!(action("037"), Some(PitchAction::Arpeggio { x: 3, y: 7 }));
+        assert_eq!(action("000"), None);
+        assert_eq!(action("120"), Some(PitchAction::PortaUp(0x20)));
+        assert_eq!(
+            action("448"),
+            Some(PitchAction::Vibrato { speed: 4, depth: 8 })
+        );
+        assert_eq!(action("5A0"), Some(PitchAction::TonePorta(0)));
+        assert_eq!(action("X23"), Some(PitchAction::ExtraFinePortaDown(3)));
+        assert_eq!(action("X33"), None);
+        assert_eq!(action("E31"), Some(PitchAction::Glissando(true)));
+        assert_eq!(action("M40"), None);
     }
 
     #[test]
@@ -497,7 +705,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_commands() {
-        for text in ["", "00", "0000", "X00", "0G0", "s00"] {
+        for text in ["", "00", "0000", "Z00", "0G0", "s00", "x00"] {
             assert!(
                 Command::from_str(text).is_err(),
                 "{:?} should not parse",

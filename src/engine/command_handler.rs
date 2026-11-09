@@ -7,11 +7,12 @@ use rand::RngExt;
 
 use crate::{
     data::{
-        commands::{MidiCommand, PlaybackAction},
+        commands::{MidiCommand, PitchAction, PlaybackAction},
         instrument::DEFAULT_PITCH_WHEEL_RANGE,
-        midi::{BEND_CENTER, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX},
-        note::Note,
+        midi::{BEND_CENTER, BEND_MAX, MIDI_CHANNEL_MAX, MidiEvent, VELOCITY_MAX},
+        note::{Note, NoteKind},
     },
+    engine::pitch::{STEPS_PER_SEMITONE, TrackPitch},
     tui::constants::TRACK_COUNT,
 };
 
@@ -74,8 +75,9 @@ fn cc_value(value: u8) -> u8 {
 
 const MIDI_CHANNEL_COUNT: usize = MIDI_CHANNEL_MAX as usize + 1;
 const MOD_WHEEL_CC: u8 = 1;
-/// FT2's global volume tops out at 64 and ours at 255, so H steps are 4x bigger to feel the same.
-const GLOBAL_SLIDE_STEP: i16 = 4;
+const PANNING_CC: u8 = 10;
+/// FT2's volumes top out at 64 and ours at 255, so H and A steps are 4x bigger to feel the same.
+const VELOCITY_SLIDE_STEP: i16 = 4;
 
 /// Maps a 00-FF command value to a 14 bit pitch bend: 00 is full down, 80 is no bend and
 /// FF is full up.
@@ -87,6 +89,20 @@ fn bend_value(value: u8) -> u16 {
         offset * 8191 / 127
     };
     return (BEND_CENTER as i32 + scaled) as u16;
+}
+
+/// Pitch steps as a bend away from the center over `range` semitones, clamped to a full bend.
+fn steps_bend(steps: i32, range: u8) -> i32 {
+    if range == 0 {
+        return 0;
+    }
+    let full = range as i32 * STEPS_PER_SEMITONE;
+    let steps = steps.clamp(-full, full);
+    return if steps < 0 {
+        steps * 8192 / full
+    } else {
+        steps * 8191 / full
+    };
 }
 
 /// Semitones from 80 as a pitch bend over `range` semitones, clamped to a full bend.
@@ -195,6 +211,13 @@ pub struct MidiCommandHandler {
     default_controls: [u8; MIDI_CHANNEL_COUNT],
     /// Each instrument's bend range in semitones, by channel.
     bend_ranges: [u8; MIDI_CHANNEL_COUNT],
+    /// Each track's note and how far FT2's pitch commands bent it.
+    pitches: [TrackPitch; TRACK_COUNT as usize],
+    /// The bend a `P` or `I` set, away from the center, by channel. Pitch commands bend from
+    /// there.
+    base_bends: [i32; MIDI_CHANNEL_COUNT],
+    /// The last bend sent on each channel.
+    sent_bends: [u16; MIDI_CHANNEL_COUNT],
 }
 impl Default for MidiCommandHandler {
     fn default() -> Self {
@@ -210,7 +233,87 @@ impl MidiCommandHandler {
             pressed: [false; MIDI_CHANNEL_COUNT],
             default_controls: [0; MIDI_CHANNEL_COUNT],
             bend_ranges: [DEFAULT_PITCH_WHEEL_RANGE; MIDI_CHANNEL_COUNT],
+            pitches: [TrackPitch::default(); TRACK_COUNT as usize],
+            base_bends: [0; MIDI_CHANNEL_COUNT],
+            sent_bends: [BEND_CENTER; MIDI_CHANNEL_COUNT],
         };
+    }
+
+    /// The channel's bend: the `P` or `I` one, plus what pitch commands bent each of the
+    /// channel's tracks.
+    fn channel_bend(&self, channel: usize) -> u16 {
+        let range = self.bend_ranges[channel];
+        let bent: i32 = self
+            .pitches
+            .iter()
+            .filter(|pitch| pitch.channel() == Some(channel as u8))
+            .map(|pitch| steps_bend(pitch.offset(), range))
+            .sum();
+        let bend = BEND_CENTER as i32 + self.base_bends[channel] + bent;
+        return bend.clamp(0, BEND_MAX as i32) as u16;
+    }
+
+    fn send_bend(&mut self, events: &mut Vec<MidiEvent>, channel: usize) {
+        let bend = self.channel_bend(channel);
+        self.bent[channel] = true;
+        self.sent_bends[channel] = bend;
+        let channel = Channel::from_u8(channel as u8).unwrap();
+        events.push(MidiEvent::Message(PitchBend(channel, bend)));
+    }
+
+    /// Sends the bend of every channel whose bend changed.
+    fn send_changed_bends(&mut self, events: &mut Vec<MidiEvent>) {
+        for channel in 0..MIDI_CHANNEL_COUNT {
+            if self.channel_bend(channel) != self.sent_bends[channel] {
+                self.send_bend(events, channel);
+            }
+        }
+    }
+
+    /// How far the track's channel can bend, in pitch steps.
+    fn bend_limit(&self, track: usize) -> i32 {
+        let range = self.pitches[track]
+            .channel()
+            .map_or(0, |channel| self.bend_ranges[channel as usize]);
+        return range as i32 * STEPS_PER_SEMITONE;
+    }
+
+    /// A new note on the track starts unbent, so its channel's bend goes back to where `P`
+    /// and `I` left it, before the note starts.
+    pub fn note_started(
+        &mut self,
+        events: &mut Vec<MidiEvent>,
+        track: usize,
+        channel: u8,
+        pitch: u8,
+    ) {
+        let Some(state) = self.pitches.get_mut(track) else {
+            return;
+        };
+        state.note_started(channel, pitch);
+        self.send_changed_bends(events);
+    }
+
+    /// Runs one of FT2's pitch commands on the first tick of its row. Returns whether the
+    /// cell's note shouldn't play, for tone portamento, which bends to it instead.
+    pub fn pitch_command(
+        &mut self,
+        events: &mut Vec<MidiEvent>,
+        track: usize,
+        action: PitchAction,
+        note: &Note,
+    ) -> bool {
+        if track >= self.pitches.len() {
+            return false;
+        }
+        let pitch = match note.kind {
+            NoteKind::On(pitch) => Some(pitch.0),
+            _ => None,
+        };
+        let limit = self.bend_limit(track);
+        let skip = self.pitches[track].apply(action, pitch, limit);
+        self.send_changed_bends(events);
+        return skip;
     }
 
     pub fn set_bend_range(&mut self, channel: usize, range: u8) {
@@ -313,22 +416,43 @@ impl MidiCommandHandler {
                 )));
             }
             MidiCommand::PitchBend => {
-                self.bent[channel as usize] = true;
-                events.push(MidiEvent::Message(PitchBend(channel, bend_value(value))));
+                self.base_bends[channel as usize] = bend_value(value) as i32 - BEND_CENTER as i32;
+                self.send_bend(events, channel as usize);
             }
             MidiCommand::Interval => {
-                self.bent[channel as usize] = true;
                 let range = self.bend_ranges[channel as usize];
-                events.push(MidiEvent::Message(PitchBend(
-                    channel,
-                    interval_bend(value, range),
-                )));
+                let bend = interval_bend(value, range) as i32 - BEND_CENTER as i32;
+                self.base_bends[channel as usize] = bend;
+                self.send_bend(events, channel as usize);
             }
+            MidiCommand::Panning => events.push(MidiEvent::Message(ControlChange(
+                channel,
+                PANNING_CC,
+                cc_value(value),
+            ))),
+            // see `pitch_command`
+            MidiCommand::PortaUp
+            | MidiCommand::PortaDown
+            | MidiCommand::TonePorta
+            | MidiCommand::Vibrato
+            | MidiCommand::TonePortaVelocitySlide
+            | MidiCommand::VibratoVelocitySlide
+            | MidiCommand::ExtraFinePorta => {}
         }
     }
 
-    /// Advances running slides by one tick; called at every row start and tick between rows.
-    pub fn tick(&mut self, events: &mut Vec<MidiEvent>) {
+    /// Advances running slides and pitch commands by one tick; called at every row start and
+    /// tick between rows. `tick` counts from the row start.
+    pub fn tick(&mut self, events: &mut Vec<MidiEvent>, tick: u32) {
+        for track in 0..self.pitches.len() {
+            let limit = self.bend_limit(track);
+            let pitch = &mut self.pitches[track];
+            match tick {
+                0 => pitch.start_row(),
+                tick => pitch.tick(tick, limit),
+            }
+        }
+        self.send_changed_bends(events);
         for state in self.tracks.iter_mut() {
             state.row_velocity = None;
             state.landed = None;
@@ -373,11 +497,16 @@ impl MidiCommandHandler {
         }
         self.bent = [false; MIDI_CHANNEL_COUNT];
         self.pressed = [false; MIDI_CHANNEL_COUNT];
+        self.pitches = [TrackPitch::default(); TRACK_COUNT as usize];
+        self.base_bends = [0; MIDI_CHANNEL_COUNT];
+        self.sent_bends = [BEND_CENTER; MIDI_CHANNEL_COUNT];
     }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct RowFlow {
+    /// The row of the current pattern an `E6y` loops back to.
+    pub loop_row: Option<usize>,
     pub jump: Option<u8>,
     pub break_row: Option<u8>,
     pub delay: u8,
@@ -394,6 +523,17 @@ pub struct PlaybackCommandHandler {
     /// H00 repeats the last slide, like FT2's effect memory.
     global_slide_memory: i16,
     track_velocities: [u8; TRACK_COUNT as usize],
+    /// Each track's `A` slide on this row, per tick.
+    track_slides: [Option<i16>; TRACK_COUNT as usize],
+    /// The last `A`, `5` or `6` slide and `EA` and `EB` steps, which a 0 repeats.
+    track_slide_memory: [i16; TRACK_COUNT as usize],
+    fine_velocity_memory: [(u8, u8); TRACK_COUNT as usize],
+    /// The pattern and row playing, for pattern loops.
+    pattern: Option<usize>,
+    row: usize,
+    /// Each track's `E60` row and how many more times its `E6y` goes back there, like FT2's
+    /// pattern loop, which every channel keeps for itself.
+    loops: [(usize, u8); TRACK_COUNT as usize],
     flow: RowFlow,
 }
 impl Default for PlaybackCommandHandler {
@@ -411,6 +551,12 @@ impl PlaybackCommandHandler {
             global_slide: None,
             global_slide_memory: 0,
             track_velocities: [u8::MAX; TRACK_COUNT as usize],
+            track_slides: [None; TRACK_COUNT as usize],
+            track_slide_memory: [0; TRACK_COUNT as usize],
+            fine_velocity_memory: [(0, 0); TRACK_COUNT as usize],
+            pattern: None,
+            row: 0,
+            loops: [(0, 0); TRACK_COUNT as usize],
             flow: RowFlow::default(),
         };
     }
@@ -431,19 +577,31 @@ impl PlaybackCommandHandler {
         return self.track_velocities.get(track).copied().unwrap_or(u8::MAX);
     }
 
-    pub fn start_row(&mut self) {
+    /// A new pattern starts its loops from its top.
+    pub fn start_row(&mut self, pattern: usize, row: usize) {
+        if self.pattern != Some(pattern) {
+            self.loops = [(0, 0); TRACK_COUNT as usize];
+        }
+        self.pattern = Some(pattern);
+        self.row = row;
         self.global_slide = None;
+        self.track_slides = [None; TRACK_COUNT as usize];
         self.flow = RowFlow::default();
     }
     pub fn take_flow(&mut self) -> RowFlow {
         return std::mem::take(&mut self.flow);
     }
     pub fn tick(&mut self, song_velocity: u8) {
+        for (velocity, slide) in self.track_velocities.iter_mut().zip(self.track_slides) {
+            if let Some(step) = slide {
+                *velocity = slid(*velocity, step);
+            }
+        }
         let Some(step) = self.global_slide else {
             return;
         };
-        let current = self.global_velocity.unwrap_or(song_velocity) as i16;
-        self.global_velocity = Some((current + step).clamp(0, u8::MAX as i16) as u8);
+        let current = self.global_velocity.unwrap_or(song_velocity);
+        self.global_velocity = Some(slid(current, step));
     }
 
     /// Runs a playback action and says what happens to the note on its cell.
@@ -497,16 +655,50 @@ impl PlaybackCommandHandler {
                 NoteAction::Play
             }
             PlaybackAction::GlobalVelocitySlide { up, down } => {
-                // like FT2's Hxy, x wins when both are set
-                let step = match (up, down) {
-                    (0, 0) => self.global_slide_memory,
-                    (0, down) => -(down as i16) * GLOBAL_SLIDE_STEP,
-                    (up, _) => up as i16 * GLOBAL_SLIDE_STEP,
-                };
-                self.global_slide_memory = step;
+                let step = slide_step(up, down, &mut self.global_slide_memory);
                 self.global_slide = Some(step);
                 NoteAction::Play
             }
+            PlaybackAction::TrackVelocitySlide { up, down } => {
+                if let Some(memory) = self.track_slide_memory.get_mut(track) {
+                    self.track_slides[track] = Some(slide_step(up, down, memory));
+                }
+                NoteAction::Play
+            }
+            PlaybackAction::FineTrackVelocityUp(step) => {
+                self.fine_track_velocity(track, step, true);
+                NoteAction::Play
+            }
+            PlaybackAction::FineTrackVelocityDown(step) => {
+                self.fine_track_velocity(track, step, false);
+                NoteAction::Play
+            }
+            PlaybackAction::PatternLoop(count) => {
+                let Some((start, left)) = self.loops.get_mut(track) else {
+                    return NoteAction::Play;
+                };
+                // like FT2: the count is set on the first time round, then counts down
+                let again = match (count, *left) {
+                    (0, _) => {
+                        *start = self.row;
+                        false
+                    }
+                    (count, 0) => {
+                        *left = count;
+                        true
+                    }
+                    _ => {
+                        *left -= 1;
+                        *left > 0
+                    }
+                };
+                if again {
+                    self.flow.loop_row = Some(*start);
+                }
+                NoteAction::Play
+            }
+            // the MIDI command handler runs these
+            PlaybackAction::Pitch(_) => NoteAction::Play,
             PlaybackAction::SetTrackVelocity(velocity) => {
                 if let Some(slot) = self.track_velocities.get_mut(track) {
                     *slot = velocity;
@@ -517,9 +709,40 @@ impl PlaybackCommandHandler {
         };
     }
 
+    /// FT2's EAy and EBy; a 0 repeats the last step the same way.
+    fn fine_track_velocity(&mut self, track: usize, step: u8, up: bool) {
+        let (Some(memory), Some(velocity)) = (
+            self.fine_velocity_memory.get_mut(track),
+            self.track_velocities.get_mut(track),
+        ) else {
+            return;
+        };
+        let memory = if up { &mut memory.0 } else { &mut memory.1 };
+        if step != 0 {
+            *memory = step;
+        }
+        let step = *memory as i16 * VELOCITY_SLIDE_STEP;
+        *velocity = slid(*velocity, if up { step } else { -step });
+    }
+
     pub fn reset(&mut self) {
         *self = Self::new();
     }
+}
+
+/// A velocity slide's step per tick, from FT2's `xy`: up by `x`, else down by `y`, else the
+/// last step again.
+fn slide_step(up: u8, down: u8, memory: &mut i16) -> i16 {
+    *memory = match (up, down) {
+        (0, 0) => *memory,
+        (0, down) => -(down as i16) * VELOCITY_SLIDE_STEP,
+        (up, _) => up as i16 * VELOCITY_SLIDE_STEP,
+    };
+    return *memory;
+}
+
+fn slid(velocity: u8, step: i16) -> u8 {
+    return (velocity as i16 + step).clamp(0, u8::MAX as i16) as u8;
 }
 
 #[cfg(test)]
@@ -832,5 +1055,60 @@ mod tests {
         let mut handler = MidiCommandHandler::new();
         let track = TRACK_COUNT as usize;
         assert!(handle(&mut handler, track, cc_note(MidiCommand::ChangeCC, 1, 0)).is_empty());
+    }
+
+    #[test]
+    fn panning_sends_cc_10() {
+        let mut handler = MidiCommandHandler::new();
+        assert_eq!(
+            handle(&mut handler, 0, cc_note(MidiCommand::Panning, 0x80, 1)),
+            vec![ControlChange(Channel::Ch2, PANNING_CC, 64)]
+        );
+    }
+
+    #[test]
+    fn track_velocity_slides_on_every_tick_but_the_first() {
+        let mut handler = PlaybackCommandHandler::new();
+        handler.start_row(0, 0);
+        handler.apply(0, PlaybackAction::TrackVelocitySlide { up: 0, down: 4 });
+        for _ in 0..5 {
+            handler.tick(u8::MAX);
+        }
+        assert_eq!(handler.track_velocity(0), 0xFF - 5 * 16);
+        assert_eq!(handler.track_velocity(1), 0xFF);
+        handler.start_row(0, 1);
+        handler.tick(u8::MAX);
+        assert_eq!(handler.track_velocity(0), 0xFF - 5 * 16);
+    }
+
+    #[test]
+    fn fine_track_velocity_moves_once_and_remembers_each_way() {
+        let mut handler = PlaybackCommandHandler::new();
+        handler.apply(0, PlaybackAction::FineTrackVelocityDown(2));
+        handler.apply(0, PlaybackAction::FineTrackVelocityUp(1));
+        handler.apply(0, PlaybackAction::FineTrackVelocityDown(0));
+        assert_eq!(handler.track_velocity(0), 0xFF - 8 + 4 - 8);
+    }
+
+    #[test]
+    fn pitch_commands_bend_from_where_pitch_bend_left_the_channel() {
+        let mut handler = MidiCommandHandler::new();
+        let mut events = vec![];
+        handler.note_started(&mut events, 0, 1, 60);
+        handle(&mut handler, 0, cc_note(MidiCommand::Interval, 0x81, 1));
+        let mut events = vec![];
+        handler.pitch_command(
+            &mut events,
+            0,
+            PitchAction::FinePortaUp(0xF),
+            &Note::empty(),
+        );
+        // a semitone from I81 and 15/16 of one from the fine portamento
+        let bend = 8192 + 682 + 15 * 4 * 8191 / 768;
+        let messages: Vec<Message> = events
+            .into_iter()
+            .flat_map(MidiEvent::into_messages)
+            .collect();
+        assert_eq!(messages, vec![PitchBend(Channel::Ch2, bend as u16)]);
     }
 }

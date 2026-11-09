@@ -193,8 +193,9 @@ Planned features, in no particular order:
     - [ ] Shorthand commands for common CCs
         - [X] Mod wheel (`W`)
         - [ ] filter cutoff, etc.
-    - [ ] FT2-style per-tick slides: velocity (`A`), pitch up/down (`1`/`2`) and their fine versions
-    - [ ] Tone portamento (`3`), gliding the pitch to the next note
+    - [X] FT2-style per-tick slides: velocity (`A`), pitch up/down (`1`/`2`) and their fine versions
+    - [X] Tone portamento (`3`), gliding the pitch to the next note
+    - [X] Vibrato (`4`), arpeggio (`0`), panning (`8`), key off (`K`) and pattern loop (`E6`)
     - [X] Song modification
         - [X] Pattern break (`D`)
         - [X] Jump song position (`B`)
