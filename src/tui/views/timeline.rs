@@ -24,7 +24,6 @@ use crate::{
         app::{AppState, CursorJump, TrackCache, column_index_to_note_string_index},
         constants::{self, NOTE_OFF_KEY},
         framework::{
-            core_extensions::Boxed,
             dialog::{Dialog, Label, Select},
             keymap::{
                 ALT_SYMBOL, ASCII_ALT_SYMBOL, Action, HelpSection, Key, KeyActions, KeyHint,
@@ -352,30 +351,26 @@ fn open_paste_length_dialog(state: &mut AppState, row_count: u16, copied_length:
             ],
         )
     };
-    let dialog = Dialog::new(
-        "Paste pattern",
-        vec![
-            Label::new(text).boxed(),
-            Select::new("action", options).boxed(),
-        ],
-    )
-    .focus_first()
-    .width(60)
-    .on_submit(move |state, result| {
-        let set_length = match result.choice("action") {
-            Some(0) => true,
-            Some(1) => false,
-            _ => return Ok(()),
-        };
-        state.edit_pattern(|buffers, pattern| {
-            if set_length {
-                pattern.set_length(copied_length);
-            }
-            buffers.paste_pattern_keeping_length(pattern);
+    let mut dialog = Dialog::new("Paste pattern").with(Label::new(text));
+    let action = dialog.add_field(Select::new(options));
+    let dialog = dialog
+        .focus_first()
+        .width(60)
+        .on_submit(move |state, result| {
+            let set_length = match *result.get(action) {
+                0 => true,
+                1 => false,
+                _ => return Ok(()),
+            };
+            state.edit_pattern(|buffers, pattern| {
+                if set_length {
+                    pattern.set_length(copied_length);
+                }
+                buffers.paste_pattern_keeping_length(pattern);
+            });
+            state.notify("PTN PASTE");
+            return Ok(());
         });
-        state.notify("PTN PASTE");
-        return Ok(());
-    });
     state.open_dialog(dialog);
 }
 

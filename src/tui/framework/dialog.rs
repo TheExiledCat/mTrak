@@ -1,10 +1,10 @@
-use std::{collections::HashMap, ops::Deref};
+use std::{any::Any, marker::PhantomData, ops::Deref};
 
 use ratatui::{
     buffer::Buffer,
     crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers},
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{
         Block, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
@@ -18,7 +18,6 @@ use crate::{
     tui::{
         app::AppState,
         framework::{
-            core_extensions::Boxed,
             keymap::{Action, HelpSection, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
             widgets::footer::Footer,
@@ -33,124 +32,65 @@ mod list;
 pub use color_picker::ColorPicker;
 pub use list::{List, ListEvent};
 
-/// The value a single input component contributes to a `DialogResult`.
-#[derive(Clone, Debug, PartialEq)]
-pub enum DialogValue {
-    Text(String),
-    Bool(bool),
-    Choice(usize),
-    Checks(Vec<bool>),
-    Number(i32),
-    Color(Color),
-    /// The last button pressed in a row of buttons, and how many presses there have been.
-    Press {
-        button: usize,
-        count: u32,
-    },
-    /// What was last done in a list, and how many times something has been.
-    List {
-        event: Option<ListEvent>,
-        count: u32,
-    },
+/// The last button pressed in a row of `Buttons`; `count` goes up with every press.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Press {
+    pub button: usize,
+    pub count: u32,
 }
 
-/// The values of every input component, keyed by component id.
-#[derive(PartialEq)]
+impl Press {
+    pub fn pressed(&self) -> Option<usize> {
+        return (self.count > 0).then_some(self.button);
+    }
+}
+
+/// Reads an input's value back with its type. Only valid for the dialog that made it.
+pub struct Field<T> {
+    index: usize,
+    value: PhantomData<fn() -> T>,
+}
+
+// derive would want T: Clone
+impl<T> Clone for Field<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Field<T> {}
+
 pub struct DialogResult {
-    values: HashMap<&'static str, DialogValue>,
+    values: Vec<Option<Box<dyn Any>>>,
 }
 
 impl DialogResult {
-    pub fn get(&self, id: &str) -> Option<&DialogValue> {
-        return self.values.get(id);
-    }
-
-    pub fn text(&self, id: &str) -> Option<&str> {
-        return match self.values.get(id) {
-            Some(DialogValue::Text(s)) => Some(s),
-            _ => None,
-        };
-    }
-
-    pub fn bool(&self, id: &str) -> Option<bool> {
-        return match self.values.get(id) {
-            Some(DialogValue::Bool(b)) => Some(*b),
-            _ => None,
-        };
-    }
-
-    pub fn number(&self, id: &str) -> Option<i32> {
-        return match self.values.get(id) {
-            Some(DialogValue::Number(n)) => Some(*n),
-            _ => None,
-        };
-    }
-
-    pub fn choice(&self, id: &str) -> Option<usize> {
-        return match self.values.get(id) {
-            Some(DialogValue::Choice(i)) => Some(*i),
-            _ => None,
-        };
-    }
-
-    pub fn checks(&self, id: &str) -> Option<Vec<bool>> {
-        return match self.get(id)? {
-            DialogValue::Checks(checks) => Some(checks.clone()),
-            _ => None,
-        };
-    }
-
-    /// The button of a row of buttons that was pressed last, if any was.
-    pub fn pressed(&self, id: &str) -> Option<usize> {
-        return match self.values.get(id) {
-            Some(DialogValue::Press { button, count }) if *count > 0 => Some(*button),
-            _ => None,
-        };
-    }
-
-    pub fn list_event(&self, id: &str) -> Option<ListEvent> {
-        return match self.values.get(id) {
-            Some(DialogValue::List { event, count }) if *count > 0 => *event,
-            _ => None,
-        };
-    }
-
-    pub fn color(&self, id: &str) -> Option<Color> {
-        return match self.values.get(id) {
-            Some(DialogValue::Color(c)) => Some(*c),
-            _ => None,
-        };
+    pub fn get<T: 'static>(&self, field: Field<T>) -> &T {
+        return self.values[field.index]
+            .as_ref()
+            .and_then(|value| value.downcast_ref())
+            .expect("a field gets the value of the input it was made for");
     }
 }
 
 /// The fields of an open dialog, handed to `on_update` after one of them changed. It reads
 /// like a `DialogResult` and can also set fields, so one field can follow another.
 pub struct DialogFields<'a> {
-    components: &'a mut [Box<dyn DialogComponent>],
+    slots: &'a mut [Box<dyn Slot>],
     result: DialogResult,
-    changed: &'static str,
+    changed: usize,
 }
 
 impl DialogFields<'_> {
-    /// The id of the field whose change triggered this update.
-    pub fn changed(&self) -> &'static str {
-        return self.changed;
+    pub fn changed<T>(&self, field: Field<T>) -> bool {
+        return self.changed == field.index;
     }
 
-    /// Sets the field with this id, if it takes that kind of value. Doesn't trigger another
-    /// update.
-    pub fn set(&mut self, id: &str, value: DialogValue) {
-        let Some(component) = self
-            .components
-            .iter_mut()
-            .find(|c| c.value().is_some_and(|(cid, _)| cid == id))
-        else {
-            return;
-        };
-        component.set_value(value);
-        if let Some((id, value)) = component.value() {
-            self.result.values.insert(id, value);
-        }
+    /// Doesn't trigger another update.
+    pub fn set<T: 'static>(&mut self, field: Field<T>, value: T) {
+        let slot = &mut self.slots[field.index];
+        slot.set_value(Box::new(value));
+        self.result.values[field.index] = slot.value();
     }
 }
 
@@ -193,12 +133,63 @@ pub trait DialogComponent: MtrakWidget {
     fn focus_subcomponent(&mut self, index: usize) {}
     /// Draws on top of the whole dialog, e.g. an open dropdown list.
     fn render_overlay(&mut self, state: &AppState, bounds: Rect, buf: &mut Buffer) {}
-    /// The id and current value of an input component; `None` for static content.
-    fn value(&self) -> Option<(&'static str, DialogValue)> {
+}
+
+pub trait DialogInput: DialogComponent {
+    type Value: Clone + PartialEq + 'static;
+
+    fn value(&self) -> Self::Value;
+
+    fn set_value(&mut self, value: Self::Value);
+}
+
+// components are all different types, so values go through Any and a Field turns them back
+trait Slot {
+    fn component(&self) -> &dyn DialogComponent;
+    fn component_mut(&mut self) -> &mut dyn DialogComponent;
+    fn value(&self) -> Option<Box<dyn Any>>;
+    fn set_value(&mut self, value: Box<dyn Any>);
+    fn changed_from(&self, before: &dyn Any) -> bool;
+}
+
+struct StaticSlot<C>(C);
+
+impl<C: DialogComponent> Slot for StaticSlot<C> {
+    fn component(&self) -> &dyn DialogComponent {
+        return &self.0;
+    }
+    fn component_mut(&mut self) -> &mut dyn DialogComponent {
+        return &mut self.0;
+    }
+    fn value(&self) -> Option<Box<dyn Any>> {
         return None;
     }
-    /// Replaces the value of an input component; values of the wrong kind are ignored.
-    fn set_value(&mut self, value: DialogValue) {}
+    fn set_value(&mut self, _value: Box<dyn Any>) {}
+    fn changed_from(&self, _before: &dyn Any) -> bool {
+        return false;
+    }
+}
+
+struct InputSlot<C>(C);
+
+impl<C: DialogInput> Slot for InputSlot<C> {
+    fn component(&self) -> &dyn DialogComponent {
+        return &self.0;
+    }
+    fn component_mut(&mut self) -> &mut dyn DialogComponent {
+        return &mut self.0;
+    }
+    fn value(&self) -> Option<Box<dyn Any>> {
+        return Some(Box::new(self.0.value()));
+    }
+    fn set_value(&mut self, value: Box<dyn Any>) {
+        if let Ok(value) = value.downcast::<C::Value>() {
+            self.0.set_value(*value);
+        }
+    }
+    fn changed_from(&self, before: &dyn Any) -> bool {
+        return before.downcast_ref::<C::Value>() != Some(&self.0.value());
+    }
 }
 
 type OnSubmit = Box<dyn FnOnce(&mut AppState, DialogResult) -> Result<()>>;
@@ -239,7 +230,7 @@ pub struct Dialog {
     width: u16,
     level: InfoLevel,
     on_esc: OnEsc,
-    components: Vec<Box<dyn DialogComponent>>,
+    slots: Vec<Box<dyn Slot>>,
     focus: Option<usize>,
     /// The focused field inside the focused component, for one with subcomponents.
     sub_focus: usize,
@@ -254,13 +245,13 @@ pub struct Dialog {
 }
 
 impl Dialog {
-    pub fn new(title: impl Into<String>, components: Vec<Box<dyn DialogComponent>>) -> Self {
+    pub fn new(title: impl Into<String>) -> Self {
         let dialog = Self {
             title: title.into(),
             width: 50,
             level: InfoLevel::Info,
             on_esc: OnEsc::Cancel,
-            components,
+            slots: Vec::new(),
             focus: None,
             sub_focus: 0,
             on_submit: None,
@@ -281,19 +272,13 @@ impl Dialog {
         };
         return dialog;
     }
-    pub fn text_field(
-        title: impl Into<String>,
-        placeholder: impl Into<String>,
-        id: &'static str,
-    ) -> Self {
-        return Dialog::new(
-            title,
-            vec![TextPrompt::new(id, "").initial(placeholder).boxed()],
-        )
-        .focus_first();
+    pub fn text_field(title: impl Into<String>, text: impl Into<String>) -> (Self, Field<String>) {
+        let mut dialog = Dialog::new(title);
+        let field = dialog.add_field(TextPrompt::new("").initial(text));
+        return (dialog.focus_first(), field);
     }
     pub fn confirm(level: InfoLevel, title: impl Into<String>, text: impl Into<String>) -> Self {
-        let mut dialog = Self::new(title, vec![Label::new(text).boxed()]);
+        let mut dialog = Self::new(title).with(Label::new(text));
         dialog.keys = Keymap::new("dialog")
             .bind(Key::plain(KeyCode::Enter), DialogAction::Submit, "Confirm")
             .bind(Key::plain(KeyCode::Esc), DialogAction::Cancel, "Cancel");
@@ -301,10 +286,23 @@ impl Dialog {
         return dialog;
     }
     pub fn popup(level: InfoLevel, title: impl Into<String>, text: impl Into<String>) -> Self {
-        let mut dialog = Dialog::new(title, vec![Label::new(text).boxed()]).cancellable(false);
+        let mut dialog = Dialog::new(title).with(Label::new(text)).cancellable(false);
         dialog.level = level;
         return dialog;
     }
+    pub fn with(mut self, component: impl DialogComponent + 'static) -> Self {
+        self.slots.push(Box::new(StaticSlot(component)));
+        return self;
+    }
+
+    pub fn add_field<C: DialogInput + 'static>(&mut self, input: C) -> Field<C::Value> {
+        self.slots.push(Box::new(InputSlot(input)));
+        return Field {
+            index: self.slots.len() - 1,
+            value: PhantomData,
+        };
+    }
+
     pub fn level(mut self, level: InfoLevel) -> Self {
         self.level = level;
         return self;
@@ -378,17 +376,22 @@ impl Dialog {
     }
 
     pub fn help(sections: &mut Vec<HelpSection>) {
-        let dialog = Dialog::new("", Vec::new());
-        let select = Select::new("", Vec::<String>::new());
-        let checkbox = Checkbox::new("", "");
-        let buttons = Buttons::new("", Vec::<String>::new());
-        let number = NumberBox::new("", "", 2).steps();
+        let dialog = Dialog::new("");
+        let select = Select::new(Vec::<String>::new());
+        let checkbox = Checkbox::new("");
+        let buttons = Buttons::new(Vec::<String>::new());
+        let number = NumberBox::new("", 2).steps();
         sections.push(
             dialog
                 .help_section("Dialogs")
-                .entries(select.keys.help_entries(Select::describe))
-                .entries(open_list_keys(Keymap::new("dialog")).help_entries(Select::describe))
-                .entries(toggle_option_key(Keymap::new("dialog")).help_entries(Select::describe))
+                .entries(select.keys.help_entries(Select::<usize>::describe))
+                .entries(
+                    open_list_keys(Keymap::new("dialog")).help_entries(Select::<usize>::describe),
+                )
+                .entries(
+                    toggle_option_key(Keymap::new("dialog"))
+                        .help_entries(Select::<usize>::describe),
+                )
                 .entries(checkbox.keys.help_entries(Checkbox::describe))
                 .entries(buttons.keys.help_entries(Buttons::describe))
                 .entries(number.keys.help_entries(NumberBox::describe))
@@ -405,15 +408,15 @@ impl Dialog {
     pub fn takes_all_keys(&self) -> bool {
         return self
             .focus
-            .is_some_and(|index| self.components[index].takes_all_keys());
+            .is_some_and(|index| self.slots[index].component().takes_all_keys());
     }
 
     pub fn is_closed(&self) -> bool {
         return self.closed;
     }
 
-    fn result(&self) -> DialogResult {
-        let values = self.components.iter().filter_map(|c| c.value()).collect();
+    pub fn result(&self) -> DialogResult {
+        let values = self.slots.iter().map(|slot| slot.value()).collect();
         return DialogResult { values };
     }
 
@@ -436,7 +439,7 @@ impl Dialog {
     /// component before leaving it, and wrapping round through none.
     fn move_focus(&mut self, forward: bool) {
         if let Some(focus) = self.focus {
-            let count = self.components[focus].subcomponents();
+            let count = self.slots[focus].component().subcomponents();
             let next = if forward {
                 Some(self.sub_focus + 1).filter(|&sub| sub < count)
             } else {
@@ -444,12 +447,12 @@ impl Dialog {
             };
             if let Some(sub) = next {
                 self.sub_focus = sub;
-                self.components[focus].focus_subcomponent(sub);
+                self.slots[focus].component_mut().focus_subcomponent(sub);
                 return;
             }
         }
-        let focusable: Vec<usize> = (0..self.components.len())
-            .filter(|&i| self.components[i].focusable())
+        let focusable: Vec<usize> = (0..self.slots.len())
+            .filter(|&i| self.slots[i].component().focusable())
             .collect();
         let current = self
             .focus
@@ -461,14 +464,16 @@ impl Dialog {
             (Some(at), false) => at.checked_sub(1).map(|at| focusable[at]),
         };
         if let Some(old) = self.focus {
-            self.components[old].set_focused(false);
+            self.slots[old].component_mut().set_focused(false);
         }
         if let Some(new) = next {
-            self.components[new].set_focused(true);
-            let count = self.components[new].subcomponents();
+            self.slots[new].component_mut().set_focused(true);
+            let count = self.slots[new].component().subcomponents();
             self.sub_focus = if forward { 0 } else { count.saturating_sub(1) };
             if count > 0 {
-                self.components[new].focus_subcomponent(self.sub_focus);
+                self.slots[new]
+                    .component_mut()
+                    .focus_subcomponent(self.sub_focus);
             }
         }
         self.focus = next;
@@ -478,7 +483,7 @@ impl Dialog {
     /// its rows, ending in a corner unless another component follows at its level, and the
     /// lines of outer levels passing by.
     fn render_tree_lines(&self, state: &AppState, index: usize, area: Rect, buf: &mut Buffer) {
-        let level = self.components[index].indent_level();
+        let level = self.slots[index].component().indent_level();
         for depth in 1..=level {
             let x = area.x + (depth as u16 - 1) * INDENT_WIDTH;
             if x + INDENT_WIDTH > area.right() {
@@ -500,8 +505,8 @@ impl Dialog {
 
     /// Whether a component at `depth` comes after `index` before the tree steps back out of it.
     fn has_later_sibling(&self, index: usize, depth: u8) -> bool {
-        for component in &self.components[index + 1..] {
-            let level = component.indent_level();
+        for slot in &self.slots[index + 1..] {
+            let level = slot.component().indent_level();
             if level < depth {
                 return false;
             }
@@ -513,7 +518,11 @@ impl Dialog {
     }
 
     fn content_height(&self) -> u16 {
-        return self.components.iter().map(|c| c.get_height() as u16).sum();
+        return self
+            .slots
+            .iter()
+            .map(|slot| slot.component().get_height() as u16)
+            .sum();
     }
 
     /// Clears the dialog's area and draws its border and title, returning the area inside.
@@ -578,17 +587,17 @@ impl KeyActions for Dialog {
 
 impl MtrakWidget for Dialog {
     fn update(&mut self, state: &mut AppState) {
-        for component in &mut self.components {
-            component.update(state);
+        for slot in &mut self.slots {
+            slot.component_mut().update(state);
         }
     }
 
     /// Always returns true: a dialog is modal, so nothing beneath it sees input.
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
         if let Some(index) = self.focus
-            && self.components[index].takes_keys_first()
+            && self.slots[index].component().takes_keys_first()
         {
-            if !self.components[index].handle_event(state, event) {
+            if !self.slots[index].component_mut().handle_event(state, event) {
                 self.dispatch(state, event);
             }
             return true;
@@ -599,21 +608,20 @@ impl MtrakWidget for Dialog {
         let Some(index) = self.focus else {
             return true;
         };
-        let before = self.components[index].value();
-        self.components[index].handle_event(state, event);
-        let after = self.components[index].value();
-        if after == before {
-            return true;
-        }
-        let Some((changed, _)) = after else {
+        let before = self.slots[index].value();
+        self.slots[index].component_mut().handle_event(state, event);
+        let Some(before) = before else {
             return true;
         };
+        if !self.slots[index].changed_from(&*before) {
+            return true;
+        }
         let result = self.result();
         if let Some(on_update) = self.on_update.as_mut() {
             let mut fields = DialogFields {
-                components: &mut self.components,
+                slots: &mut self.slots,
                 result,
-                changed,
+                changed: index,
             };
             if let Err(e) = on_update(state, &mut fields) {
                 state.report_error(e);
@@ -624,18 +632,18 @@ impl MtrakWidget for Dialog {
 
     fn key_hints(&self, state: &AppState, hints: &mut Vec<KeyHint>) {
         if let Some(index) = self.focus {
-            self.components[index].key_hints(state, hints);
+            self.slots[index].component().key_hints(state, hints);
         }
         if self
             .focus
-            .is_some_and(|index| self.components[index].takes_all_keys())
+            .is_some_and(|index| self.slots[index].component().takes_all_keys())
         {
             return;
         }
         let component_hints = hints.len();
         self.keys.hints(hints);
         if let Some(index) = self.focus
-            && self.components[index].takes_keys_first()
+            && self.slots[index].component().takes_keys_first()
         {
             let taken: Vec<String> = hints[..component_hints]
                 .iter()
@@ -657,7 +665,7 @@ impl MtrakWidget for Dialog {
                 }
             }
         }
-        if !self.components.iter().any(|c| c.focusable()) {
+        if !self.slots.iter().any(|slot| slot.component().focusable()) {
             hints.retain(|h| h.label != "Field");
         }
     }
@@ -673,16 +681,16 @@ impl MtrakWidget for Dialog {
         .areas(inner);
 
         let rows = Layout::vertical(
-            self.components
+            self.slots
                 .iter()
-                .map(|c| Constraint::Length(c.get_height() as u16)),
+                .map(|slot| Constraint::Length(slot.component().get_height() as u16)),
         )
         .split(content);
         for (index, row) in rows.iter().enumerate() {
             self.render_tree_lines(state, index, *row, buf);
         }
-        for (component, row) in self.components.iter_mut().zip(rows.iter()) {
-            component.render(state, *row, buf);
+        for (slot, row) in self.slots.iter_mut().zip(rows.iter()) {
+            slot.component_mut().render(state, *row, buf);
         }
 
         let mut hints = Vec::new();
@@ -691,7 +699,9 @@ impl MtrakWidget for Dialog {
         self.footer.render(state, hint_area, buf);
 
         if let Some(index) = self.focus {
-            self.components[index].render_overlay(state, area, buf);
+            self.slots[index]
+                .component_mut()
+                .render_overlay(state, area, buf);
         }
     }
 }
@@ -763,10 +773,15 @@ impl<T: DialogComponent> DialogComponent for Indented<T> {
     fn render_overlay(&mut self, state: &AppState, bounds: Rect, buf: &mut Buffer) {
         self.inner.render_overlay(state, bounds, buf);
     }
-    fn value(&self) -> Option<(&'static str, DialogValue)> {
+}
+
+impl<T: DialogInput> DialogInput for Indented<T> {
+    type Value = T::Value;
+
+    fn value(&self) -> T::Value {
         return self.inner.value();
     }
-    fn set_value(&mut self, value: DialogValue) {
+    fn set_value(&mut self, value: T::Value) {
         self.inner.set_value(value);
     }
 }
@@ -850,7 +865,6 @@ impl DialogComponent for Link {}
 
 /// A single-line text input.
 pub struct TextPrompt {
-    id: &'static str,
     label: String,
     text: String,
     focused: bool,
@@ -858,9 +872,8 @@ pub struct TextPrompt {
 }
 
 impl TextPrompt {
-    pub fn new(id: &'static str, label: impl Into<String>) -> Self {
+    pub fn new(label: impl Into<String>) -> Self {
         return Self {
-            id,
             label: label.into(),
             text: String::new(),
             focused: false,
@@ -922,20 +935,22 @@ impl DialogComponent for TextPrompt {
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
     }
-    fn value(&self) -> Option<(&'static str, DialogValue)> {
-        return Some((self.id, DialogValue::Text(self.text.clone())));
+}
+
+impl DialogInput for TextPrompt {
+    type Value = String;
+
+    fn value(&self) -> String {
+        return self.text.clone();
     }
-    fn set_value(&mut self, value: DialogValue) {
-        if let DialogValue::Text(text) = value {
-            self.text = text;
-        }
+    fn set_value(&mut self, text: String) {
+        self.text = text;
     }
 }
 
 /// A number input that Up and Down step within its range. It's in hex or decimal as the
 /// config's `hex_values` says, switching along with it.
 pub struct NumberBox {
-    id: &'static str,
     label: String,
     /// How many digits the value has in hex.
     digits: usize,
@@ -966,10 +981,9 @@ pub enum NumberBoxAction {
 impl Action for NumberBoxAction {}
 
 impl NumberBox {
-    pub fn new(id: &'static str, label: impl Into<String>, digits: usize) -> Self {
+    pub fn new(label: impl Into<String>, digits: usize) -> Self {
         let digits = digits.clamp(1, 7);
         let mut number = Self {
-            id,
             label: label.into(),
             digits,
             min: 0,
@@ -1222,20 +1236,22 @@ impl DialogComponent for NumberBox {
         }
         self.focused = focused;
     }
-    fn value(&self) -> Option<(&'static str, DialogValue)> {
-        return Some((self.id, DialogValue::Number(self.number())));
+}
+
+impl DialogInput for NumberBox {
+    type Value = i32;
+
+    fn value(&self) -> i32 {
+        return self.number();
     }
-    fn set_value(&mut self, value: DialogValue) {
-        if let DialogValue::Number(number) = value {
-            self.set(number);
-        }
+    fn set_value(&mut self, value: i32) {
+        self.set(value);
     }
 }
 
 /// A row of buttons that Tab moves through. A press doesn't close the dialog; it shows up
-/// in `on_update`, where `DialogResult::pressed` tells which button it was.
+/// in `on_update`, where `Press::pressed` tells which button it was.
 pub struct Buttons {
-    id: &'static str,
     labels: Vec<String>,
     focused: Option<usize>,
     presses: u32,
@@ -1251,9 +1267,8 @@ pub enum ButtonsAction {
 impl Action for ButtonsAction {}
 
 impl Buttons {
-    pub fn new(id: &'static str, labels: Vec<impl Into<String>>) -> Self {
+    pub fn new(labels: Vec<impl Into<String>>) -> Self {
         return Self {
-            id,
             labels: labels.into_iter().map(|l| l.into()).collect(),
             focused: None,
             presses: 0,
@@ -1328,19 +1343,22 @@ impl DialogComponent for Buttons {
     fn focus_subcomponent(&mut self, index: usize) {
         self.focused = Some(index.min(self.labels.len().saturating_sub(1)));
     }
-    fn value(&self) -> Option<(&'static str, DialogValue)> {
-        return Some((
-            self.id,
-            DialogValue::Press {
-                button: self.last,
-                count: self.presses,
-            },
-        ));
+}
+
+// setting it does nothing
+impl DialogInput for Buttons {
+    type Value = Press;
+
+    fn value(&self) -> Press {
+        return Press {
+            button: self.last,
+            count: self.presses,
+        };
     }
+    fn set_value(&mut self, _press: Press) {}
 }
 
 pub struct Checkbox {
-    id: &'static str,
     label: String,
     checked: bool,
     focused: bool,
@@ -1355,9 +1373,8 @@ pub enum CheckboxAction {
 impl Action for CheckboxAction {}
 
 impl Checkbox {
-    pub fn new(id: &'static str, label: impl Into<String>) -> Self {
+    pub fn new(label: impl Into<String>) -> Self {
         return Self {
-            id,
             label: label.into(),
             checked: false,
             focused: false,
@@ -1425,19 +1442,22 @@ impl DialogComponent for Checkbox {
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
     }
-    fn value(&self) -> Option<(&'static str, DialogValue)> {
-        return Some((self.id, DialogValue::Bool(self.checked)));
+}
+
+impl DialogInput for Checkbox {
+    type Value = bool;
+
+    fn value(&self) -> bool {
+        return self.checked;
     }
-    fn set_value(&mut self, value: DialogValue) {
-        if let DialogValue::Bool(checked) = value {
-            self.checked = checked;
-        }
+    fn set_value(&mut self, checked: bool) {
+        self.checked = checked;
     }
 }
 
 /// A dropdown. Up and Down change it in place; Space opens the whole list on top of the dialog.
-pub struct Select {
-    id: &'static str,
+/// The chosen option, or with `checkboxes`, which options are ticked.
+pub struct Select<V = usize> {
     label: Option<String>,
     options: Vec<String>,
     selected: usize,
@@ -1455,6 +1475,7 @@ pub struct Select {
     typed_from: usize,
     keys: Keymap<SelectAction>,
     open_keys: Keymap<SelectAction>,
+    value: PhantomData<fn() -> V>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1472,9 +1493,9 @@ pub enum SelectAction {
 impl Action for SelectAction {}
 
 impl Select {
-    pub fn new(id: &'static str, options: Vec<impl Into<String>>) -> Self {
+    pub fn new(options: Vec<impl Into<String>>) -> Self {
         return Self {
-            id,
+            value: PhantomData,
             label: None,
             options: options.into_iter().map(|s| s.into()).collect(),
             selected: 0,
@@ -1492,6 +1513,29 @@ impl Select {
         };
     }
 
+    pub fn checkboxes(self, mut checks: Vec<bool>) -> Select<Vec<bool>> {
+        checks.resize(self.options.len(), false);
+        return Select {
+            value: PhantomData,
+            label: self.label,
+            options: self.options,
+            selected: self.selected,
+            offset: self.offset,
+            max_visible: self.max_visible,
+            page_step: self.page_step,
+            focused: self.focused,
+            checks: Some(checks),
+            open: None,
+            area: self.area,
+            typed: self.typed,
+            typed_from: self.typed_from,
+            keys: toggle_option_key(closed_list_keys()),
+            open_keys: toggle_option_key(open_list_keys(select_keys())),
+        };
+    }
+}
+
+impl<V> Select<V> {
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
         return self;
@@ -1509,15 +1553,6 @@ impl Select {
 
     pub fn page_step(mut self, options: usize) -> Self {
         self.page_step = Some(options.max(1));
-        return self;
-    }
-
-    pub fn checkboxes(mut self, checks: Vec<bool>) -> Self {
-        let mut checks = checks;
-        checks.resize(self.options.len(), false);
-        self.checks = Some(checks);
-        self.keys = toggle_option_key(closed_list_keys());
-        self.open_keys = toggle_option_key(open_list_keys(select_keys()));
         return self;
     }
 
@@ -1646,7 +1681,7 @@ fn select_keys() -> Keymap<SelectAction> {
         );
 }
 
-impl KeyActions for Select {
+impl<V> KeyActions for Select<V> {
     type Action = SelectAction;
 
     fn keymap(&self) -> &Keymap<SelectAction> {
@@ -1696,7 +1731,7 @@ impl KeyActions for Select {
     }
 }
 
-impl MtrakWidget for Select {
+impl<V> MtrakWidget for Select<V> {
     /// A hex digit picks the option at that index.
     fn handle_event(&mut self, state: &mut AppState, event: &Event) -> bool {
         if self.dispatch(state, event) {
@@ -1760,7 +1795,7 @@ impl MtrakWidget for Select {
     }
 }
 
-impl DialogComponent for Select {
+impl<V> DialogComponent for Select<V> {
     fn render_overlay(&mut self, state: &AppState, bounds: Rect, buf: &mut Buffer) {
         if !self.focused || !self.is_open() || self.options.is_empty() {
             return;
@@ -1817,26 +1852,28 @@ impl DialogComponent for Select {
         self.open = None;
         self.typed.clear();
     }
-    fn value(&self) -> Option<(&'static str, DialogValue)> {
-        if self.options.is_empty() {
-            return None;
-        }
-        if let Some(checks) = &self.checks {
-            return Some((self.id, DialogValue::Checks(checks.clone())));
-        }
-        return Some((self.id, DialogValue::Choice(self.selected)));
+}
+
+impl DialogInput for Select {
+    type Value = usize;
+
+    fn value(&self) -> usize {
+        return self.selected;
     }
-    fn set_value(&mut self, value: DialogValue) {
-        match value {
-            DialogValue::Choice(index) => {
-                self.selected = index.min(self.options.len().saturating_sub(1));
-            }
-            DialogValue::Checks(mut checks) if self.checks.is_some() => {
-                checks.resize(self.options.len(), false);
-                self.checks = Some(checks);
-            }
-            _ => {}
-        }
+    fn set_value(&mut self, index: usize) {
+        self.selected = index.min(self.options.len().saturating_sub(1));
+    }
+}
+
+impl DialogInput for Select<Vec<bool>> {
+    type Value = Vec<bool>;
+
+    fn value(&self) -> Vec<bool> {
+        return self.checks.clone().unwrap_or_default();
+    }
+    fn set_value(&mut self, mut checks: Vec<bool>) {
+        checks.resize(self.options.len(), false);
+        self.checks = Some(checks);
     }
 }
 
@@ -1845,7 +1882,7 @@ mod tests {
     use super::*;
 
     fn select_at(y: u16, options: usize) -> Select {
-        let mut select = Select::new("", (0..options).map(|i| i.to_string()).collect());
+        let mut select = Select::new((0..options).map(|i| i.to_string()).collect());
         select.area = Rect::new(10, y, 20, 1);
         return select;
     }
@@ -1881,7 +1918,8 @@ mod tests {
         let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
         let submitted = Rc::new(Cell::new(false));
         let cancelled = Rc::new(Cell::new(false));
-        let mut dialog = Dialog::new("", vec![Checkbox::new("c", "C").boxed()])
+        let mut dialog = Dialog::new("")
+            .with(Checkbox::new("C"))
             .close_on_esc()
             .on_submit({
                 let submitted = submitted.clone();
@@ -1915,7 +1953,7 @@ mod tests {
 
     #[test]
     fn typed_digits_add_up_to_pick_options_past_the_first_digit() {
-        let mut select = Select::new("s", (0..0x81).map(|i| i.to_string()).collect());
+        let mut select = Select::new((0..0x81).map(|i| i.to_string()).collect());
         select.type_digit('4', true);
         select.type_digit('a', true);
         assert_eq!(select.selected, 0x4A);
@@ -1933,7 +1971,7 @@ mod tests {
 
     #[test]
     fn typed_numbers_can_skip_the_first_options() {
-        let mut select = Select::new("s", (0..0x81).map(|i| i.to_string()).collect()).typed_from(1);
+        let mut select = Select::new((0..0x81).map(|i| i.to_string()).collect()).typed_from(1);
         select.type_digit('0', true);
         assert_eq!(select.selected, 1);
         select.type_digit('7', true);
@@ -1946,7 +1984,7 @@ mod tests {
         use crate::{data::project::Project, tui::theme::Theme};
 
         let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
-        let mut number = NumberBox::new("n", "N", 2)
+        let mut number = NumberBox::new("N", 2)
             .value(3)
             .value_label(|value| format!("is {value}"));
         let area = Rect::new(0, 0, 30, 1);
@@ -1963,7 +2001,7 @@ mod tests {
         use crate::{data::project::Project, tui::theme::Theme};
 
         let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
-        let mut select = Select::new("s", (0..12).map(|i| i.to_string()).collect());
+        let mut select = Select::new((0..12).map(|i| i.to_string()).collect());
         let mut press = |select: &mut Select, c| {
             let event = Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
             return select.handle_event(&mut state, &event);
@@ -1978,14 +2016,10 @@ mod tests {
 
     #[test]
     fn tab_cycles_through_fields_and_back_to_none() {
-        let mut dialog = Dialog::new(
-            "",
-            vec![
-                Label::new("").boxed(),
-                Checkbox::new("a", "A").boxed(),
-                Checkbox::new("b", "B").boxed(),
-            ],
-        );
+        let mut dialog = Dialog::new("")
+            .with(Label::new(""))
+            .with(Checkbox::new("A"))
+            .with(Checkbox::new("B"));
         assert_eq!(focused(&dialog), None);
         dialog.move_focus(true);
         assert_eq!(focused(&dialog), Some(1));
@@ -1999,16 +2033,12 @@ mod tests {
 
     #[test]
     fn tree_lines_end_where_a_level_does() {
-        let dialog = Dialog::new(
-            "",
-            vec![
-                Label::new("").boxed(),
-                Label::new("").indent(1).boxed(),
-                Label::new("").indent(2).boxed(),
-                Label::new("").indent(1).boxed(),
-                Label::new("").boxed(),
-            ],
-        );
+        let dialog = Dialog::new("")
+            .with(Label::new(""))
+            .with(Label::new("").indent(1))
+            .with(Label::new("").indent(2))
+            .with(Label::new("").indent(1))
+            .with(Label::new(""));
         assert!(dialog.has_later_sibling(1, 1));
         assert!(!dialog.has_later_sibling(2, 2));
         assert!(!dialog.has_later_sibling(3, 1));
@@ -2016,12 +2046,12 @@ mod tests {
 
     #[test]
     fn focus_first_starts_on_the_first_field() {
-        let dialog = Dialog::text_field("", "", "name");
+        let (dialog, _) = Dialog::text_field("", "");
         assert_eq!(focused(&dialog), Some(0));
     }
 
     fn number_box(digits: usize) -> NumberBox {
-        let mut number = NumberBox::new("n", "", digits);
+        let mut number = NumberBox::new("", digits);
         number.focused = true;
         return number;
     }
@@ -2121,7 +2151,7 @@ mod tests {
     #[test]
     fn number_box_labels_show_the_range_when_asked() {
         let config = ranges_shown();
-        let volume = NumberBox::new("v", "Volume", 2);
+        let volume = NumberBox::new("Volume", 2);
         assert_eq!(volume.label(&config), "Volume");
         let mut volume = volume.show_range();
         assert_eq!(volume.label(&config), "Volume (00-FF)");
@@ -2129,21 +2159,19 @@ mod tests {
         state.config.show_value_ranges = true;
         volume.follow_config(&state);
         assert_eq!(volume.label(&state.config), "Volume (0-255)");
-        let cc = NumberBox::new("c", "Default CC", 2)
-            .range(0, 0x7F)
-            .show_range();
+        let cc = NumberBox::new("Default CC", 2).range(0, 0x7F).show_range();
         assert_eq!(cc.label(&config), "Default CC (00-7F)");
     }
 
     #[test]
     fn value_ranges_are_off_unless_the_config_turns_them_on() {
-        let volume = NumberBox::new("v", "Volume", 2).show_range();
+        let volume = NumberBox::new("Volume", 2).show_range();
         assert_eq!(volume.label(&Config::default()), "Volume");
     }
 
     #[test]
     fn signed_ranges_go_inside_the_labels_own_brackets() {
-        let mut transpose = NumberBox::new("t", "Transpose (semitones)", 2)
+        let mut transpose = NumberBox::new("Transpose (semitones)", 2)
             .range(-0x80, 0x7F)
             .show_range();
         assert_eq!(
@@ -2203,20 +2231,48 @@ mod tests {
 
         let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
         let seen = Rc::new(RefCell::new(Vec::new()));
-        let mut dialog = Dialog::new("", vec![Select::new("s", vec!["a", "b"]).boxed()])
-            .focus_first()
-            .on_update({
-                let seen = seen.clone();
-                move |_, result| {
-                    seen.borrow_mut().extend(result.choice("s"));
-                    return Ok(());
-                }
-            });
+        let mut dialog = Dialog::new("");
+        let select = dialog.add_field(Select::new(vec!["a", "b"]));
+        let mut dialog = dialog.focus_first().on_update({
+            let seen = seen.clone();
+            move |_, result| {
+                seen.borrow_mut().push(*result.get(select));
+                return Ok(());
+            }
+        });
         let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
         dialog.handle_event(&mut state, &press(KeyCode::Down));
         dialog.handle_event(&mut state, &press(KeyCode::Down));
         dialog.handle_event(&mut state, &press(KeyCode::Tab));
         assert_eq!(*seen.borrow(), vec![1]);
+    }
+
+    #[test]
+    fn every_button_press_is_a_change_even_on_the_same_button() {
+        use std::{cell::RefCell, rc::Rc};
+
+        use ratatui::crossterm::event::KeyEvent;
+
+        use crate::{data::project::Project, tui::theme::Theme};
+
+        let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut dialog = Dialog::new("");
+        let buttons = dialog.add_field(Buttons::new(vec!["A", "B"]));
+        let mut dialog = dialog.focus_first().on_update({
+            let seen = seen.clone();
+            move |_, fields| {
+                assert!(fields.changed(buttons));
+                seen.borrow_mut().extend(fields.get(buttons).pressed());
+                return Ok(());
+            }
+        });
+        let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        dialog.handle_event(&mut state, &press(KeyCode::Char(' ')));
+        dialog.handle_event(&mut state, &press(KeyCode::Char(' ')));
+        dialog.handle_event(&mut state, &press(KeyCode::Tab));
+        dialog.handle_event(&mut state, &press(KeyCode::Char(' ')));
+        assert_eq!(*seen.borrow(), vec![0, 0, 1]);
     }
 
     #[test]
@@ -2226,24 +2282,19 @@ mod tests {
         use crate::{data::project::Project, tui::theme::Theme};
 
         let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
-        let mut dialog = Dialog::new(
-            "",
-            vec![
-                Select::new("color", vec!["red", "green"]).boxed(),
-                TextPrompt::new("hex", "Hex").initial("#ff0000").boxed(),
-            ],
-        )
-        .focus_first()
-        .on_update(|_, fields| {
-            if fields.changed() == "color" {
-                let hex = ["#ff0000", "#00ff00"][fields.choice("color").unwrap()];
-                fields.set("hex", DialogValue::Text(hex.to_owned()));
+        let mut dialog = Dialog::new("");
+        let color = dialog.add_field(Select::new(vec!["red", "green"]));
+        let hex = dialog.add_field(TextPrompt::new("Hex").initial("#ff0000"));
+        let mut dialog = dialog.focus_first().on_update(move |_, fields| {
+            if fields.changed(color) {
+                let text = ["#ff0000", "#00ff00"][*fields.get(color)];
+                fields.set(hex, text.to_owned());
             }
-            assert_eq!(fields.text("hex"), Some("#00ff00"));
+            assert_eq!(fields.get(hex), "#00ff00");
             return Ok(());
         });
         dialog.handle_event(&mut state, &Event::Key(KeyEvent::from(KeyCode::Down)));
-        assert_eq!(dialog.result().text("hex"), Some("#00ff00"));
+        assert_eq!(dialog.result().get(hex), "#00ff00");
     }
 
     #[test]
@@ -2256,15 +2307,15 @@ mod tests {
 
         let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
         let seen = Rc::new(RefCell::new(Vec::new()));
-        let mut dialog = Dialog::new("", vec![List::new("l", vec!["a", "b"]).boxed()])
-            .focus_first()
-            .on_update({
-                let seen = seen.clone();
-                move |_, fields| {
-                    seen.borrow_mut().extend(fields.list_event("l"));
-                    return Ok(());
-                }
-            });
+        let mut dialog = Dialog::new("");
+        let list = dialog.add_field(List::new(vec!["a", "b"]));
+        let mut dialog = dialog.focus_first().on_update({
+            let seen = seen.clone();
+            move |_, fields| {
+                seen.borrow_mut().extend(fields.get(list).event());
+                return Ok(());
+            }
+        });
         let press = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
         dialog.handle_event(&mut state, &press(KeyCode::Down));
         dialog.handle_event(&mut state, &press(KeyCode::Char(' ')));
@@ -2276,18 +2327,22 @@ mod tests {
 
     impl NumberBox {
         fn clone_with(&self, value: i32) -> NumberBox {
-            return NumberBox::new(self.id, "", self.digits)
+            return NumberBox::new("", self.digits)
                 .range(self.min, self.max)
                 .value(value);
         }
     }
 
-    fn dropdown_dialog(select: Select) -> (AppState, Dialog) {
+    fn dropdown_dialog<V>(select: Select<V>) -> (AppState, Dialog, Field<V>)
+    where
+        Select<V>: DialogInput<Value = V> + 'static,
+    {
         use crate::{data::project::Project, tui::theme::Theme};
 
         let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
-        let dialog = Dialog::new("", vec![select.boxed()]).focus_first();
-        return (state, dialog);
+        let mut dialog = Dialog::new("");
+        let field = dialog.add_field(select);
+        return (state, dialog.focus_first(), field);
     }
 
     fn press(dialog: &mut Dialog, state: &mut AppState, code: KeyCode) {
@@ -2296,51 +2351,51 @@ mod tests {
         dialog.handle_event(state, &Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
     }
 
-    fn choice(dialog: &Dialog) -> Option<usize> {
-        return dialog.result().choice("s");
+    fn choice(dialog: &Dialog, field: Field<usize>) -> usize {
+        return *dialog.result().get(field);
     }
 
     #[test]
     fn up_and_down_change_a_dropdown_without_opening_it() {
-        let (mut state, mut dialog) = dropdown_dialog(Select::new("s", vec!["a", "b", "c"]));
+        let (mut state, mut dialog, field) = dropdown_dialog(Select::new(vec!["a", "b", "c"]));
         press(&mut dialog, &mut state, KeyCode::Down);
         press(&mut dialog, &mut state, KeyCode::Down);
-        assert_eq!(choice(&dialog), Some(2));
+        assert_eq!(choice(&dialog, field), 2);
         press(&mut dialog, &mut state, KeyCode::Enter);
         assert!(dialog.is_closed());
     }
 
     #[test]
     fn space_opens_the_list_and_esc_puts_the_option_back() {
-        let (mut state, mut dialog) = dropdown_dialog(Select::new("s", vec!["a", "b", "c"]));
+        let (mut state, mut dialog, field) = dropdown_dialog(Select::new(vec!["a", "b", "c"]));
         press(&mut dialog, &mut state, KeyCode::Char(' '));
         press(&mut dialog, &mut state, KeyCode::Down);
         press(&mut dialog, &mut state, KeyCode::Esc);
         assert!(!dialog.is_closed());
-        assert_eq!(choice(&dialog), Some(0));
+        assert_eq!(choice(&dialog, field), 0);
         press(&mut dialog, &mut state, KeyCode::Char(' '));
         press(&mut dialog, &mut state, KeyCode::Down);
         press(&mut dialog, &mut state, KeyCode::Enter);
         assert!(!dialog.is_closed());
-        assert_eq!(choice(&dialog), Some(1));
+        assert_eq!(choice(&dialog, field), 1);
     }
 
     #[test]
     fn page_keys_move_by_the_page_step() {
         let notes: Vec<String> = (0..40).map(|i| i.to_string()).collect();
-        let (mut state, mut dialog) = dropdown_dialog(Select::new("s", notes).page_step(12));
+        let (mut state, mut dialog, field) = dropdown_dialog(Select::new(notes).page_step(12));
         press(&mut dialog, &mut state, KeyCode::PageDown);
         press(&mut dialog, &mut state, KeyCode::PageDown);
-        assert_eq!(choice(&dialog), Some(24));
+        assert_eq!(choice(&dialog, field), 24);
         press(&mut dialog, &mut state, KeyCode::PageUp);
-        assert_eq!(choice(&dialog), Some(12));
+        assert_eq!(choice(&dialog, field), 12);
     }
 
     #[test]
     fn x_ticks_options_and_esc_in_the_list_undoes_it() {
-        let select = Select::new("s", vec!["a", "b", "c"]).checkboxes(vec![false, true, false]);
-        let (mut state, mut dialog) = dropdown_dialog(select);
-        let checks = |dialog: &Dialog| dialog.result().checks("s").unwrap();
+        let select = Select::new(vec!["a", "b", "c"]).checkboxes(vec![false, true, false]);
+        let (mut state, mut dialog, field) = dropdown_dialog(select);
+        let checks = |dialog: &Dialog| dialog.result().get(field).clone();
         press(&mut dialog, &mut state, KeyCode::Char('x'));
         assert_eq!(checks(&dialog), vec![true, true, false]);
         press(&mut dialog, &mut state, KeyCode::Char(' '));

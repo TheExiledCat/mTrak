@@ -15,12 +15,9 @@ use crate::{
     engine::effects::{Param, ParamKind, ValueLabel, effect_params},
     tui::{
         app::AppState,
-        framework::{
-            core_extensions::Boxed,
-            dialog::{
-                Buttons, Checkbox, Dialog, DialogComponent, DialogResult, InfoLevel, Label, Link,
-                List, ListEvent, NumberBox, Select, TextPrompt,
-            },
+        framework::dialog::{
+            Buttons, Checkbox, Dialog, DialogFields, DialogResult, Field, InfoLevel, Label, Link,
+            List, ListEvent, NumberBox, Select, TextPrompt,
         },
         glyphs,
     },
@@ -32,7 +29,6 @@ const FIRST_YEAR: i32 = 2026;
 
 const REPOSITORY_URL: &str = "https://github.com/TheExiledCat/mTrak";
 
-const CC_MAPPING_ID: &str = "cc_mapping";
 const CC_NAME_WIDTH: usize = 16;
 /// In the order of `remap_scope`.
 const REMAP_SCOPES: [&str; 4] = ["Block", "Track", "Pattern", "Song"];
@@ -67,64 +63,46 @@ pub fn open_midi_dialog(state: &mut AppState) {
         .and_then(|(p, client)| client.port_name(p).ok())
         .and_then(|name| out_names.iter().position(|n| *n == name))
         .unwrap_or(0);
-    let dialog = Dialog::new(
-        "MIDI",
-        vec![
-            Select::new("input", in_names)
-                .label("MIDI input")
-                .selected(current_in)
-                .boxed(),
-            Select::new("clock", clock_names)
-                .label("Clock SRC")
-                .selected(current_clock)
-                .boxed(),
-            Checkbox::new("velocity", "Record Velocity")
-                .checked(state.project().record_input_velocity)
-                .boxed(),
-            Checkbox::new("soft_thru", "Soft thru")
-                .checked(state.config.soft_thru)
-                .boxed(),
-            Select::new("output", out_names)
-                .label("MIDI output")
-                .selected(current_out)
-                .boxed(),
-            Checkbox::new("midi_clock", "Send MIDI clock")
-                .checked(state.project().send_midi_clock)
-                .boxed(),
-        ],
-    )
-    .on_submit(|state, result| {
-        if let Some(midi_clock) = result.bool("midi_clock") {
-            state.set_midi_clock(midi_clock);
-        }
-        if let Some(velocity) = result.bool("velocity") {
-            state.set_midi_velocity_record(velocity);
-        }
-        let soft_thru = result
-            .bool("soft_thru")
-            .map(|enabled| state.set_soft_thru(enabled));
-        if let Some(output) = result.choice("output") {
-            let output = if output == 0 {
-                None
-            } else {
-                state
-                    .midi_out_client
-                    .as_ref()
-                    .and_then(|client| client.ports().get(output - 1).cloned())
-            };
-            state.set_midi_output(output);
-        }
+    let mut dialog = Dialog::new("MIDI");
+    let input = dialog.add_field(
+        Select::new(in_names)
+            .label("MIDI input")
+            .selected(current_in),
+    );
+    let clock = dialog.add_field(
+        Select::new(clock_names)
+            .label("Clock SRC")
+            .selected(current_clock),
+    );
+    let velocity = dialog
+        .add_field(Checkbox::new("Record Velocity").checked(state.project().record_input_velocity));
+    let soft_thru = dialog.add_field(Checkbox::new("Soft thru").checked(state.config.soft_thru));
+    let output = dialog.add_field(
+        Select::new(out_names)
+            .label("MIDI output")
+            .selected(current_out),
+    );
+    let midi_clock =
+        dialog.add_field(Checkbox::new("Send MIDI clock").checked(state.project().send_midi_clock));
+    let dialog = dialog.on_submit(move |state, result| {
+        state.set_midi_clock(*result.get(midi_clock));
+        state.set_midi_velocity_record(*result.get(velocity));
+        let soft_thru = state.set_soft_thru(*result.get(soft_thru));
+        let output = match *result.get(output) {
+            0 => None,
+            output => state
+                .midi_out_client
+                .as_ref()
+                .and_then(|client| client.ports().get(output - 1).cloned()),
+        };
+        state.set_midi_output(output);
         // inputs last, so a port that fails to open doesn't drop the other changes
-        let clock = result
-            .choice("clock")
-            .map(|clock| state.set_midi_sync(clock));
-        let input = result.choice("input").map(|input| {
-            let port = state.input_port_for_choice(input);
-            state.set_midi_input(port)
-        });
-        clock.unwrap_or(Ok(()))?;
-        soft_thru.unwrap_or(Ok(()))?;
-        return input.unwrap_or(Ok(()));
+        let clock = state.set_midi_sync(*result.get(clock));
+        let port = state.input_port_for_choice(*result.get(input));
+        let input = state.set_midi_input(port);
+        clock?;
+        soft_thru?;
+        return input;
     });
     state.open_dialog(dialog);
 }
@@ -136,35 +114,31 @@ pub fn open_clear_dialog(state: &mut AppState) {
     let mut instruments = instrument_names(state);
     let all_instruments = instruments.len();
     instruments.push("All".to_owned());
-    let dialog = Dialog::new(
-        "Clear",
-        vec![
-            Select::new("clear", options).label("Selection").boxed(),
-            Select::new("target", targets).label("Target").boxed(),
-            Select::new("instrument", instruments)
-                .label("Instrument")
-                .selected(all_instruments)
-                .boxed(),
-        ],
-    )
-    .on_submit(move |state, result| {
+    let mut dialog = Dialog::new("Clear");
+    let clear = dialog.add_field(Select::new(options).label("Selection"));
+    let target = dialog.add_field(Select::new(targets).label("Target"));
+    let instrument = dialog.add_field(
+        Select::new(instruments)
+            .label("Instrument")
+            .selected(all_instruments),
+    );
+    let dialog = dialog.on_submit(move |state, result| {
         use ClearOption::*;
         use ClearTarget::*;
-        let option = match result.choice("clear").unwrap_or(0) {
+        let option = match *result.get(clear) {
             0 => Block,
             1 => Track,
             2 => Pattern,
             _ => unreachable!(),
         };
-        let target = match result.choice("target").unwrap_or(0) {
+        let target = match *result.get(target) {
             0 => All,
             1 => Note,
             2 => Velocity,
             3 => Command,
             _ => unreachable!(),
         };
-        let instrument = result
-            .choice("instrument")
+        let instrument = Some(*result.get(instrument))
             .filter(|&choice| choice != all_instruments)
             .map(|i| i as u8);
         state.request_clear(option, target, instrument);
@@ -175,20 +149,12 @@ pub fn open_clear_dialog(state: &mut AppState) {
 }
 
 pub fn open_remap_dialog(state: &mut AppState) {
-    let dialog = Dialog::new(
-        "Remap",
-        vec![
-            Select::new("kind", vec!["Instruments", "Pitches"])
-                .label("Remap")
-                .boxed(),
-        ],
-    )
-    .focus_first()
-    .on_submit(|state, result| {
-        match result.choice("kind") {
-            Some(0) => open_remap_instruments_dialog(state),
-            Some(_) => open_remap_pitches_dialog(state),
-            None => {}
+    let mut dialog = Dialog::new("Remap");
+    let kind = dialog.add_field(Select::new(vec!["Instruments", "Pitches"]).label("Remap"));
+    let dialog = dialog.focus_first().on_submit(move |state, result| {
+        match *result.get(kind) {
+            0 => open_remap_instruments_dialog(state),
+            _ => open_remap_pitches_dialog(state),
         }
         return Ok(());
     });
@@ -206,7 +172,7 @@ pub fn open_info_dialog(state: &mut AppState) {
         .map_or("Not saved yet".to_owned(), |name| {
             name.to_string_lossy().into_owned()
         });
-    let name = TextPrompt::new("name", "Name").initial(project.name.as_deref().unwrap_or_default());
+    let name = TextPrompt::new("Name").initial(project.name.as_deref().unwrap_or_default());
     let lines = [
         format!("File: {file}"),
         format!("Size: {}", file_size(stats.file_size)),
@@ -227,19 +193,16 @@ pub fn open_info_dialog(state: &mut AppState) {
         ),
         format!("Effects: {}", stats.effects),
     ];
-    let mut components = vec![name.boxed() as Box<dyn DialogComponent>];
-    components.extend(
-        lines
-            .into_iter()
-            .map(|line| Label::new(line).boxed() as Box<dyn DialogComponent>),
-    );
-    let dialog = Dialog::new("Info", components)
+    let mut dialog = Dialog::new("Info");
+    let name = dialog.add_field(name);
+    for line in lines {
+        dialog = dialog.with(Label::new(line));
+    }
+    let dialog = dialog
         .close_on_esc()
         .focus_first()
-        .on_update(|state, fields| {
-            if let Some(name) = fields.text("name") {
-                set_project_name(state, name);
-            }
+        .on_update(move |state, fields| {
+            set_project_name(state, fields.get(name));
             return Ok(());
         });
     state.open_dialog(dialog);
@@ -249,53 +212,50 @@ pub fn open_info_dialog(state: &mut AppState) {
 pub fn open_instrument_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
     let settings = &state.project().instruments[instrument as usize];
-    let dialog = Dialog::new(
-        format!("Instrument {:1X}", instrument),
-        vec![
-            TextPrompt::new("name", "Name")
-                .initial(&settings.name)
-                .boxed(),
-            labelled(
-                NumberBox::new("volume", "Volume", 2)
-                    .show_range()
-                    .value(settings.volume as i32),
-                ValueLabel::Percent,
-            )
-            .boxed(),
-            NumberBox::new("pitch_wheel_range", "Bend range (semitones)", 2)
+    let mut dialog = Dialog::new(format!("Instrument {:1X}", instrument));
+    let fields = InstrumentFields {
+        name: dialog.add_field(TextPrompt::new("Name").initial(&settings.name)),
+        volume: dialog.add_field(labelled(
+            NumberBox::new("Volume", 2)
                 .show_range()
-                .value(settings.pitch_wheel_range as i32)
-                .boxed(),
-            Select::new("default_cc", cc_names(state))
+                .value(settings.volume as i32),
+            ValueLabel::Percent,
+        )),
+        bend_range: dialog.add_field(
+            NumberBox::new("Bend range (semitones)", 2)
+                .show_range()
+                .value(settings.pitch_wheel_range as i32),
+        ),
+        default_cc: dialog.add_field(
+            Select::new(cc_names(state))
                 .label("Default CC")
-                .selected(settings.default_cc as usize)
-                .boxed(),
-            labelled(
-                NumberBox::new("transpose", "Transpose (semitones)", 2)
-                    .show_range()
-                    .range(i8::MIN as i32, i8::MAX as i32)
-                    .value(settings.transpose as i32),
-                ValueLabel::Semitones,
-            )
-            .boxed(),
-            Buttons::new("effects", vec!["Effects"]).boxed(),
-        ],
-    )
-    .width(60)
-    .hide_behind_child()
-    .close_on_esc()
-    .focus_first()
-    .on_update(move |state, fields| {
-        apply_instrument(state, instrument, fields);
-        if fields.changed() == "effects" {
-            open_effects_dialog(state);
-        }
-        return Ok(());
-    })
-    .on_submit(move |state, result| {
-        apply_instrument(state, instrument, &result);
-        return Ok(());
-    });
+                .selected(settings.default_cc as usize),
+        ),
+        transpose: dialog.add_field(labelled(
+            NumberBox::new("Transpose (semitones)", 2)
+                .show_range()
+                .range(i8::MIN as i32, i8::MAX as i32)
+                .value(settings.transpose as i32),
+            ValueLabel::Semitones,
+        )),
+    };
+    let effects = dialog.add_field(Buttons::new(vec!["Effects"]));
+    let dialog = dialog
+        .width(60)
+        .hide_behind_child()
+        .close_on_esc()
+        .focus_first()
+        .on_update(move |state, dialog| {
+            fields.apply(state, instrument, dialog);
+            if dialog.changed(effects) {
+                open_effects_dialog(state);
+            }
+            return Ok(());
+        })
+        .on_submit(move |state, result| {
+            fields.apply(state, instrument, &result);
+            return Ok(());
+        });
     state.open_dialog(dialog);
 }
 
@@ -343,12 +303,12 @@ pub fn open_about_dialog(state: &mut AppState) {
             glyphs::pick("\u{a9}", "(c)")
         ),
     ];
-    let mut components: Vec<Box<dyn DialogComponent>> = lines
-        .into_iter()
-        .map(|line| Label::new(line).centered().boxed() as Box<dyn DialogComponent>)
-        .collect();
-    components.push(Link::new(REPOSITORY_URL).boxed());
-    let dialog = Dialog::new("About", components)
+    let mut dialog = Dialog::new("About");
+    for line in lines {
+        dialog = dialog.with(Label::new(line).centered());
+    }
+    let dialog = dialog
+        .with(Link::new(REPOSITORY_URL))
         .level(InfoLevel::Success)
         .close_on_esc();
     state.open_dialog(dialog);
@@ -356,37 +316,36 @@ pub fn open_about_dialog(state: &mut AppState) {
 
 /// Changes are made right away, so Esc closes it like Enter.
 pub fn open_global_dialog(state: &mut AppState) {
-    let dialog = Dialog::new(
-        "Global",
-        vec![
-            labelled(
-                NumberBox::new("velocity", "Velocity", 2)
-                    .show_range()
-                    .value(state.project().global_velocity as i32),
-                ValueLabel::Percent,
-            )
-            .boxed(),
-            labelled(
-                NumberBox::new("transpose", "Transpose (semitones)", 2)
-                    .show_range()
-                    .range(i8::MIN as i32, i8::MAX as i32)
-                    .value(state.project().transpose as i32),
-                ValueLabel::Semitones,
-            )
-            .boxed(),
-        ],
-    )
-    .width(60)
-    .close_on_esc()
-    .focus_first()
-    .on_update(|state, fields| {
-        apply_globals(state, fields);
-        return Ok(());
-    })
-    .on_submit(|state, result| {
-        apply_globals(state, &result);
-        return Ok(());
-    });
+    let mut dialog = Dialog::new("Global");
+    let velocity = dialog.add_field(labelled(
+        NumberBox::new("Velocity", 2)
+            .show_range()
+            .value(state.project().global_velocity as i32),
+        ValueLabel::Percent,
+    ));
+    let transpose = dialog.add_field(labelled(
+        NumberBox::new("Transpose (semitones)", 2)
+            .show_range()
+            .range(i8::MIN as i32, i8::MAX as i32)
+            .value(state.project().transpose as i32),
+        ValueLabel::Semitones,
+    ));
+    let apply = move |state: &mut AppState, result: &DialogResult| {
+        state.set_global_velocity(*result.get(velocity) as u8);
+        state.set_transpose(*result.get(transpose) as i8);
+    };
+    let dialog = dialog
+        .width(60)
+        .close_on_esc()
+        .focus_first()
+        .on_update(move |state, fields| {
+            apply(state, fields);
+            return Ok(());
+        })
+        .on_submit(move |state, result| {
+            apply(state, &result);
+            return Ok(());
+        });
     state.open_dialog(dialog);
 }
 
@@ -395,31 +354,25 @@ pub fn open_global_dialog(state: &mut AppState) {
 /// one's.
 fn open_remap_instruments_dialog(state: &mut AppState) {
     let instrument = state.active_instrument as usize;
-    let dialog = Dialog::new(
-        "Remap instruments",
-        vec![
-            Select::new("scope", REMAP_SCOPES.to_vec())
-                .label("Selection")
-                .boxed(),
-            Select::new("from", instrument_names(state))
-                .label("From")
-                .selected(instrument)
-                .boxed(),
-            Select::new("to", instrument_names(state))
-                .label("To")
-                .selected(instrument)
-                .boxed(),
-            Checkbox::new("swap", "Copy their settings").boxed(),
-        ],
-    )
-    .focus_first()
-    .on_submit(|state, result| {
-        let from = result.choice("from").unwrap_or(0) as u8;
-        let to = result.choice("to").unwrap_or(0) as u8;
+    let mut dialog = Dialog::new("Remap instruments");
+    let scope = dialog.add_field(Select::new(REMAP_SCOPES.to_vec()).label("Selection"));
+    let from = dialog.add_field(
+        Select::new(instrument_names(state))
+            .label("From")
+            .selected(instrument),
+    );
+    let to = dialog.add_field(
+        Select::new(instrument_names(state))
+            .label("To")
+            .selected(instrument),
+    );
+    let swap = dialog.add_field(Checkbox::new("Copy their settings"));
+    let dialog = dialog.focus_first().on_submit(move |state, result| {
+        let from = *result.get(from) as u8;
+        let to = *result.get(to) as u8;
         if from != to {
             let remap = Remap::Instrument { from, to };
-            let swap = result.bool("swap").unwrap_or(false);
-            state.request_remap(remap_scope(&result), remap, swap);
+            state.request_remap(remap_scope(*result.get(scope)), remap, *result.get(swap));
         }
         return Ok(());
     });
@@ -433,35 +386,30 @@ fn open_remap_pitches_dialog(state: &mut AppState) {
     let mut instruments = instrument_names(state);
     let all_instruments = instruments.len();
     instruments.push("All".to_owned());
-    let dialog = Dialog::new(
-        "Remap pitches",
-        vec![
-            Select::new("scope", REMAP_SCOPES.to_vec())
-                .label("Selection")
-                .boxed(),
-            Select::new("from", pitches.clone())
-                .label("From")
-                .selected(middle_c)
-                .page_step(SEMITONES_PER_OCTAVE as usize)
-                .boxed(),
-            Select::new("to", pitches)
-                .label("To")
-                .selected(middle_c)
-                .page_step(SEMITONES_PER_OCTAVE as usize)
-                .boxed(),
-            Select::new("instrument", instruments)
-                .label("Instrument")
-                .selected(all_instruments)
-                .boxed(),
-        ],
-    )
-    .focus_first()
-    .on_submit(move |state, result| {
-        let pitch = |id| NotePitch(NotePitch::MIN + result.choice(id).unwrap_or(0) as u8);
-        let (from, to) = (pitch("from"), pitch("to"));
+    let mut dialog = Dialog::new("Remap pitches");
+    let scope = dialog.add_field(Select::new(REMAP_SCOPES.to_vec()).label("Selection"));
+    let from = dialog.add_field(
+        Select::new(pitches.clone())
+            .label("From")
+            .selected(middle_c)
+            .page_step(SEMITONES_PER_OCTAVE as usize),
+    );
+    let to = dialog.add_field(
+        Select::new(pitches)
+            .label("To")
+            .selected(middle_c)
+            .page_step(SEMITONES_PER_OCTAVE as usize),
+    );
+    let instrument = dialog.add_field(
+        Select::new(instruments)
+            .label("Instrument")
+            .selected(all_instruments),
+    );
+    let dialog = dialog.focus_first().on_submit(move |state, result| {
+        let pitch = |field| NotePitch(NotePitch::MIN + *result.get(field) as u8);
+        let (from, to) = (pitch(from), pitch(to));
         if from != to {
-            let instrument = result
-                .choice("instrument")
+            let instrument = Some(*result.get(instrument))
                 .filter(|&choice| choice != all_instruments)
                 .map(|i| i as u8);
             let remap = Remap::Pitch {
@@ -469,15 +417,15 @@ fn open_remap_pitches_dialog(state: &mut AppState) {
                 to,
                 instrument,
             };
-            state.request_remap(remap_scope(&result), remap, false);
+            state.request_remap(remap_scope(*result.get(scope)), remap, false);
         }
         return Ok(());
     });
     state.open_dialog(dialog);
 }
 
-fn remap_scope(result: &DialogResult) -> RemapScope {
-    return match result.choice("scope").unwrap_or(0) {
+fn remap_scope(choice: usize) -> RemapScope {
+    return match choice {
         0 => RemapScope::Block,
         1 => RemapScope::Track,
         2 => RemapScope::Pattern,
@@ -530,28 +478,30 @@ fn file_size(bytes: usize) -> String {
     };
 }
 
-fn apply_instrument(state: &mut AppState, instrument: u8, result: &DialogResult) {
-    if let Some(name) = result.text("name") {
-        state.project_mut().instruments[instrument as usize].name = name.into();
-    }
-    if let Some(volume) = result.number("volume") {
-        state.set_global_volume(instrument, volume as u8);
-    }
-    if let Some(range) = result.number("pitch_wheel_range") {
-        state.set_bend_range(instrument, range as u8);
-    }
-    if let Some(control) = result.choice("default_cc") {
-        state.set_default_cc(instrument, control as u8);
-    }
-    if let Some(transpose) = result.number("transpose") {
-        state.set_instrument_transpose(instrument, transpose as i8);
+#[derive(Clone, Copy)]
+struct InstrumentFields {
+    name: Field<String>,
+    volume: Field<i32>,
+    bend_range: Field<i32>,
+    default_cc: Field<usize>,
+    transpose: Field<i32>,
+}
+
+impl InstrumentFields {
+    fn apply(&self, state: &mut AppState, instrument: u8, result: &DialogResult) {
+        state.project_mut().instruments[instrument as usize].name = result.get(self.name).clone();
+        state.set_global_volume(instrument, *result.get(self.volume) as u8);
+        state.set_bend_range(instrument, *result.get(self.bend_range) as u8);
+        state.set_default_cc(instrument, *result.get(self.default_cc) as u8);
+        state.set_instrument_transpose(instrument, *result.get(self.transpose) as i8);
     }
 }
+
 /// The active instrument's effects, in the order notes go through them. Changes are made
 /// right away, so Esc closes it like Enter.
 fn open_effects_dialog(state: &mut AppState) {
     let instrument = state.active_instrument;
-    let list = List::new("effects", effect_names(state, instrument))
+    let list = List::new(effect_names(state, instrument))
         .items_from(move |state| effect_names(state, instrument))
         .checkboxes(effects_enabled(state, instrument))
         .checks_from(move |state| effects_enabled(state, instrument))
@@ -559,26 +509,25 @@ fn open_effects_dialog(state: &mut AppState) {
         .add_button("Add effect")
         .removable(true)
         .reorderable(true);
-    let dialog = Dialog::new(
-        format!("Instrument {:1X} effects", instrument),
-        vec![list.boxed()],
-    )
-    .hide_behind_child()
-    .close_on_esc()
-    .focus_first()
-    .on_update(move |state, fields| {
-        match fields.list_event("effects") {
-            Some(ListEvent::Open(effect)) => open_effect_dialog(state, instrument, effect),
-            Some(ListEvent::Add) => open_add_effect_dialog(state, instrument),
-            Some(ListEvent::Remove(effect)) => state.remove_effect(instrument, effect),
-            Some(ListEvent::Move { from, to }) => state.move_effect(instrument, from, to),
-            Some(ListEvent::Check { item, checked }) => {
-                state.set_effect_enabled(instrument, item, checked)
+    let mut dialog = Dialog::new(format!("Instrument {:1X} effects", instrument));
+    let list = dialog.add_field(list);
+    let dialog = dialog
+        .hide_behind_child()
+        .close_on_esc()
+        .focus_first()
+        .on_update(move |state, fields| {
+            match fields.get(list).event() {
+                Some(ListEvent::Open(effect)) => open_effect_dialog(state, instrument, effect),
+                Some(ListEvent::Add) => open_add_effect_dialog(state, instrument),
+                Some(ListEvent::Remove(effect)) => state.remove_effect(instrument, effect),
+                Some(ListEvent::Move { from, to }) => state.move_effect(instrument, from, to),
+                Some(ListEvent::Check { item, checked }) => {
+                    state.set_effect_enabled(instrument, item, checked)
+                }
+                None => {}
             }
-            None => {}
-        }
-        return Ok(());
-    });
+            return Ok(());
+        });
     state.open_dialog(dialog);
 }
 
@@ -600,16 +549,10 @@ fn effects_enabled(state: &AppState, instrument: u8) -> Vec<bool> {
 
 fn open_add_effect_dialog(state: &mut AppState, instrument: u8) {
     let kinds = EffectKind::iter().map(|kind| kind.name()).collect();
-    let dialog = Dialog::new(
-        "Add effect",
-        vec![Select::new("kind", kinds).label("Effect").boxed()],
-    )
-    .focus_first()
-    .on_submit(move |state, result| {
-        if let Some(kind) = result
-            .choice("kind")
-            .and_then(|i| EffectKind::iter().nth(i))
-        {
+    let mut dialog = Dialog::new("Add effect");
+    let kind = dialog.add_field(Select::new(kinds).label("Effect"));
+    let dialog = dialog.focus_first().on_submit(move |state, result| {
+        if let Some(kind) = EffectKind::iter().nth(*result.get(kind)) {
             state.add_effect(instrument, kind);
         }
         return Ok(());
@@ -633,27 +576,23 @@ fn open_effect_dialog(state: &mut AppState, instrument: u8, effect: usize) {
         .enumerate()
         .map(|(index, param)| settings.values.get(index).copied().unwrap_or(param.default))
         .collect();
-    let mut fields: Vec<Box<dyn DialogComponent>> = params
+    let mut dialog = Dialog::new(format!("{} {:X}", settings.kind.name(), effect));
+    let fields: Vec<ParamField> = params
         .iter()
         .zip(&values)
-        .map(|(param, value)| param_field(state, param, *value))
+        .map(|(param, value)| param_input(state, param, *value).add_to(&mut dialog))
         .collect();
-    fields.push(Buttons::new(CC_MAPPING_ID, vec!["CC mapping"]).boxed());
-    let dialog = Dialog::new(format!("{} {:X}", settings.kind.name(), effect), fields)
+    let cc_mapping = dialog.add_field(Buttons::new(vec!["CC mapping"]));
+    let dialog = dialog
         .hide_behind_child()
         .close_on_esc()
-        .on_update(move |state, fields| {
-            if fields.changed() == CC_MAPPING_ID {
+        .on_update(move |state, dialog| {
+            if dialog.changed(cc_mapping) {
                 open_cc_mapping_dialog(state, instrument, effect);
                 return Ok(());
             }
-            let changed = params
-                .iter()
-                .position(|param| param.name == fields.changed());
-            if let Some(index) = changed
-                && let Some(value) = param_value(&params[index], fields)
-            {
-                state.set_effect_param(instrument, effect, index, value);
+            if let Some(index) = fields.iter().position(|field| field.changed(dialog)) {
+                state.set_effect_param(instrument, effect, index, fields[index].read(dialog));
             }
             return Ok(());
         });
@@ -671,30 +610,27 @@ fn open_cc_mapping_dialog(state: &mut AppState, instrument: u8, effect: usize) {
         return;
     };
     let params = effect_params(settings.kind);
-    let fields = params
+    let title = format!("{} {:X} CC mapping", settings.kind.name(), effect);
+    let mut dialog = Dialog::new(title);
+    let fields: Vec<Field<usize>> = params
         .iter()
         .enumerate()
         .map(|(index, param)| {
             let selected = settings.param_cc(index).map_or(0, |cc| cc as usize + 1);
-            Select::new(param.name, cc_options(state))
-                .label(param.name)
-                .selected(selected)
-                .typed_from(1)
-                .boxed() as Box<dyn DialogComponent>
+            dialog.add_field(
+                Select::new(cc_options(state))
+                    .label(param.name)
+                    .selected(selected)
+                    .typed_from(1),
+            )
         })
         .collect();
-    let title = format!("{} {:X} CC mapping", settings.kind.name(), effect);
-    let dialog = Dialog::new(title, fields)
+    let dialog = dialog
         .close_on_esc()
         .focus_first()
-        .on_update(move |state, fields| {
-            let changed = params
-                .iter()
-                .position(|param| param.name == fields.changed());
-            if let Some(index) = changed
-                && let Some(choice) = fields.choice(params[index].name)
-            {
-                let cc = choice.checked_sub(1).map(|cc| cc as u8);
+        .on_update(move |state, dialog| {
+            if let Some(index) = fields.iter().position(|field| dialog.changed(*field)) {
+                let cc = dialog.get(fields[index]).checked_sub(1).map(|cc| cc as u8);
                 state.set_effect_param_cc(instrument, effect, index, cc);
             }
             return Ok(());
@@ -732,15 +668,57 @@ fn truncate(text: &str, width: usize) -> String {
     return format!("{kept}{}", glyphs::pick("\u{2026}", "."));
 }
 
-fn param_field(state: &AppState, param: &Param, value: u8) -> Box<dyn DialogComponent> {
+enum ParamInput {
+    Number(NumberBox),
+    Toggle(Checkbox),
+    Choice(Select),
+}
+
+impl ParamInput {
+    fn add_to(self, dialog: &mut Dialog) -> ParamField {
+        return match self {
+            ParamInput::Number(number) => ParamField::Number(dialog.add_field(number)),
+            ParamInput::Toggle(checkbox) => ParamField::Toggle(dialog.add_field(checkbox)),
+            ParamInput::Choice(select) => ParamField::Choice(dialog.add_field(select)),
+        };
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ParamField {
+    /// Signed numbers too; `as u8` wraps them like they're stored.
+    Number(Field<i32>),
+    Toggle(Field<bool>),
+    Choice(Field<usize>),
+}
+
+impl ParamField {
+    fn read(&self, result: &DialogResult) -> u8 {
+        return match *self {
+            ParamField::Number(field) => *result.get(field) as u8,
+            ParamField::Toggle(field) => *result.get(field) as u8,
+            ParamField::Choice(field) => *result.get(field) as u8,
+        };
+    }
+
+    fn changed(&self, fields: &DialogFields) -> bool {
+        return match *self {
+            ParamField::Number(field) => fields.changed(field),
+            ParamField::Toggle(field) => fields.changed(field),
+            ParamField::Choice(field) => fields.changed(field),
+        };
+    }
+}
+
+fn param_input(state: &AppState, param: &Param, value: u8) -> ParamInput {
     return match param.kind {
         ParamKind::Number { min, max } => {
             let digits = if max > 0xF { 2 } else { 1 };
-            let number = NumberBox::new(param.name, param.name, digits)
+            let number = NumberBox::new(param.name, digits)
                 .show_range()
                 .range(min as i32, max as i32)
                 .value(value as i32);
-            labelled(number, param.label).boxed()
+            ParamInput::Number(labelled(number, param.label))
         }
         ParamKind::SignedNumber { min, max } => {
             let digits = if min.unsigned_abs().max(max.unsigned_abs()) > 0xF {
@@ -748,30 +726,31 @@ fn param_field(state: &AppState, param: &Param, value: u8) -> Box<dyn DialogComp
             } else {
                 1
             };
-            let number = NumberBox::new(param.name, param.name, digits)
+            let number = NumberBox::new(param.name, digits)
                 .show_range()
                 .range(min as i32, max as i32)
                 .value(value as i8 as i32);
-            labelled(number, param.label).boxed()
+            ParamInput::Number(labelled(number, param.label))
         }
-        ParamKind::Toggle => Checkbox::new(param.name, param.name)
-            .checked(value != 0)
-            .boxed(),
-        ParamKind::Choice(names) => Select::new(param.name, names.to_vec())
-            .label(param.name)
-            .selected(value as usize)
-            .boxed(),
-        ParamKind::Cc => Select::new(param.name, cc_names(state))
-            .label(param.name)
-            .selected(value as usize)
-            .boxed(),
+        ParamKind::Toggle => ParamInput::Toggle(Checkbox::new(param.name).checked(value != 0)),
+        ParamKind::Choice(names) => ParamInput::Choice(
+            Select::new(names.to_vec())
+                .label(param.name)
+                .selected(value as usize),
+        ),
+        ParamKind::Cc => ParamInput::Choice(
+            Select::new(cc_names(state))
+                .label(param.name)
+                .selected(value as usize),
+        ),
         ParamKind::Pitch => {
             let pitches = (0..=PITCH_MAX).map(|pitch| NotePitch(pitch).to_string());
-            Select::new(param.name, pitches.collect())
-                .label(param.name)
-                .selected(value as usize)
-                .page_step(SEMITONES_PER_OCTAVE as usize)
-                .boxed()
+            ParamInput::Choice(
+                Select::new(pitches.collect())
+                    .label(param.name)
+                    .selected(value as usize)
+                    .page_step(SEMITONES_PER_OCTAVE as usize),
+            )
         }
     };
 }
@@ -783,17 +762,6 @@ fn labelled(number: NumberBox, label: ValueLabel) -> NumberBox {
     return number.value_label(move |value| label.text(value));
 }
 
-fn param_value(param: &Param, result: &DialogResult) -> Option<u8> {
-    return match param.kind {
-        ParamKind::Number { .. } => result.number(param.name).map(|n| n as u8),
-        ParamKind::SignedNumber { .. } => result.number(param.name).map(|n| n as i8 as u8),
-        ParamKind::Toggle => result.bool(param.name).map(|on| on as u8),
-        ParamKind::Choice(_) | ParamKind::Pitch | ParamKind::Cc => {
-            result.choice(param.name).map(|i| i as u8)
-        }
-    };
-}
-
 pub fn open_metronome_dialog(state: &mut AppState) {
     let metronome = state.project().metronome;
     let modes: Vec<&str> = MetronomeMode::iter().map(|mode| mode.name()).collect();
@@ -803,57 +771,52 @@ pub fn open_metronome_dialog(state: &mut AppState) {
     let channels = (0..instrument_names(state).len() as u8)
         .map(|channel| metronome.sends_to(channel))
         .collect();
-    let velocity = |id, label, value: u8| {
-        return NumberBox::new(id, label, 2)
+    let velocity = |label, value: u8| {
+        return NumberBox::new(label, 2)
             .show_range()
             .range(0, VELOCITY_MAX as i32)
-            .value(value as i32)
-            .boxed();
+            .value(value as i32);
     };
-    let dialog = Dialog::new(
-        "Metronome",
-        vec![
-            Select::new("mode", modes)
-                .label("Play")
-                .selected(mode)
-                .boxed(),
-            Select::new("channels", instrument_names(state))
+    let mut dialog = Dialog::new("Metronome");
+    let fields = MetronomeFields {
+        mode: dialog.add_field(Select::new(modes).label("Play").selected(mode)),
+        channels: dialog.add_field(
+            Select::new(instrument_names(state))
                 .label("Channels")
-                .checkboxes(channels)
-                .boxed(),
-            Select::new("accent_note", pitch_names())
+                .checkboxes(channels),
+        ),
+        accent_note: dialog.add_field(
+            Select::new(pitch_names())
                 .label("Accent note")
                 .selected(pitch_index(metronome.accent_note))
-                .page_step(SEMITONES_PER_OCTAVE as usize)
-                .boxed(),
-            velocity(
-                "accent_velocity",
-                "Accent velocity",
-                metronome.accent_velocity,
-            ),
-            Select::new("beat_note", pitch_names())
+                .page_step(SEMITONES_PER_OCTAVE as usize),
+        ),
+        accent_velocity: dialog.add_field(velocity("Accent velocity", metronome.accent_velocity)),
+        beat_note: dialog.add_field(
+            Select::new(pitch_names())
                 .label("Beat note")
                 .selected(pitch_index(metronome.beat_note))
-                .page_step(SEMITONES_PER_OCTAVE as usize)
-                .boxed(),
-            velocity("beat_velocity", "Beat velocity", metronome.beat_velocity),
-            NumberBox::new("beats_per_bar", "Beats per bar", 2)
+                .page_step(SEMITONES_PER_OCTAVE as usize),
+        ),
+        beat_velocity: dialog.add_field(velocity("Beat velocity", metronome.beat_velocity)),
+        beats_per_bar: dialog.add_field(
+            NumberBox::new("Beats per bar", 2)
                 .show_range()
                 .range(1, 0x10)
-                .value(metronome.beats_per_bar as i32)
-                .boxed(),
-        ],
-    )
-    .width(60)
-    .close_on_esc()
-    .on_update(|state, fields| {
-        apply_metronome(state, fields);
-        return Ok(());
-    })
-    .on_submit(|state, result| {
-        apply_metronome(state, &result);
-        return Ok(());
-    });
+                .value(metronome.beats_per_bar as i32),
+        ),
+    };
+    let dialog = dialog
+        .width(60)
+        .close_on_esc()
+        .on_update(move |state, dialog| {
+            fields.apply(state, dialog);
+            return Ok(());
+        })
+        .on_submit(move |state, result| {
+            fields.apply(state, &result);
+            return Ok(());
+        });
     state.open_dialog(dialog);
 }
 
@@ -867,37 +830,36 @@ fn pitch_index(pitch: u8) -> usize {
     return pitch.clamp(NotePitch::MIN, NotePitch::MAX) as usize - NotePitch::MIN as usize;
 }
 
-fn apply_metronome(state: &mut AppState, result: &DialogResult) {
-    let mut metronome = state.project().metronome;
-    if let Some(mode) = result
-        .choice("mode")
-        .and_then(|i| MetronomeMode::iter().nth(i))
-    {
-        metronome.mode = mode;
-    }
-    if let Some(checks) = result.checks("channels") {
-        for (channel, on) in checks.into_iter().enumerate() {
-            metronome.set_channel(channel as u8, on);
-        }
-    }
-    let pitch = |id| result.choice(id).map(|i| NotePitch::MIN + i as u8);
-    let number = |id| result.number(id).map(|n| n as u8);
-    metronome.accent_note = pitch("accent_note").unwrap_or(metronome.accent_note);
-    metronome.beat_note = pitch("beat_note").unwrap_or(metronome.beat_note);
-    metronome.accent_velocity = number("accent_velocity").unwrap_or(metronome.accent_velocity);
-    metronome.beat_velocity = number("beat_velocity").unwrap_or(metronome.beat_velocity);
-    metronome.beats_per_bar = number("beats_per_bar").unwrap_or(metronome.beats_per_bar);
-    if metronome != state.project().metronome {
-        state.set_metronome(metronome);
-    }
+#[derive(Clone, Copy)]
+struct MetronomeFields {
+    mode: Field<usize>,
+    channels: Field<Vec<bool>>,
+    accent_note: Field<usize>,
+    accent_velocity: Field<i32>,
+    beat_note: Field<usize>,
+    beat_velocity: Field<i32>,
+    beats_per_bar: Field<i32>,
 }
 
-fn apply_globals(state: &mut AppState, result: &DialogResult) {
-    if let Some(velocity) = result.number("velocity") {
-        state.set_global_velocity(velocity as u8);
-    }
-    if let Some(transpose) = result.number("transpose") {
-        state.set_transpose(transpose as i8);
+impl MetronomeFields {
+    fn apply(&self, state: &mut AppState, result: &DialogResult) {
+        let mut metronome = state.project().metronome;
+        if let Some(mode) = MetronomeMode::iter().nth(*result.get(self.mode)) {
+            metronome.mode = mode;
+        }
+        for (channel, on) in result.get(self.channels).iter().enumerate() {
+            metronome.set_channel(channel as u8, *on);
+        }
+        let pitch = |field| NotePitch::MIN + *result.get(field) as u8;
+        let number = |field| *result.get(field) as u8;
+        metronome.accent_note = pitch(self.accent_note);
+        metronome.beat_note = pitch(self.beat_note);
+        metronome.accent_velocity = number(self.accent_velocity);
+        metronome.beat_velocity = number(self.beat_velocity);
+        metronome.beats_per_bar = number(self.beats_per_bar);
+        if metronome != state.project().metronome {
+            state.set_metronome(metronome);
+        }
     }
 }
 
@@ -911,7 +873,10 @@ mod tests {
     use crate::{
         data::project::Project,
         tui::{
-            framework::{dialog::DialogValue, widget::MtrakWidget},
+            framework::{
+                dialog::{DialogComponent, DialogInput},
+                widget::MtrakWidget,
+            },
             theme::Theme,
         },
     };
@@ -920,11 +885,12 @@ mod tests {
     fn edit(param: Param, value: u8, keys: &[KeyCode]) -> Vec<u8> {
         let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
         let seen = Rc::new(RefCell::new(Vec::new()));
-        let field = param_field(&state, &param, value);
-        let mut dialog = Dialog::new("", vec![field]).focus_first().on_update({
+        let mut dialog = Dialog::new("");
+        let field = param_input(&state, &param, value).add_to(&mut dialog);
+        let mut dialog = dialog.focus_first().on_update({
             let seen = seen.clone();
             move |_, fields| {
-                seen.borrow_mut().extend(param_value(&param, fields));
+                seen.borrow_mut().push(field.read(fields));
                 return Ok(());
             }
         });
@@ -970,11 +936,10 @@ mod tests {
             label: ValueLabel::None,
         };
         let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
-        let field = param_field(&state, &param, 60);
-        let Some((_, DialogValue::Choice(choice))) = field.value() else {
+        let ParamInput::Choice(select) = param_input(&state, &param, 60) else {
             panic!("a pitch is a choice");
         };
-        assert_eq!(choice, 60);
+        assert_eq!(select.value(), 60);
     }
 
     #[test]
@@ -982,16 +947,9 @@ mod tests {
         let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
         for kind in EffectKind::iter() {
             for param in effect_params(kind) {
-                let field = param_field(&state, param, param.default);
-                let (id, value) = field.value().unwrap();
-                assert_eq!(id, param.name);
-                let read = match (param.kind, value) {
-                    (ParamKind::SignedNumber { .. }, DialogValue::Number(n)) => n as i8 as u8,
-                    (_, DialogValue::Number(n)) => n as u8,
-                    (_, DialogValue::Choice(i)) => i as u8,
-                    (_, DialogValue::Bool(b)) => b as u8,
-                    (_, value) => panic!("{} has an unexpected field: {value:?}", param.name),
-                };
+                let mut dialog = Dialog::new("");
+                let field = param_input(&state, param, param.default).add_to(&mut dialog);
+                let read = field.read(&dialog.result());
                 assert_eq!(read, param.default, "{} {}", kind.name(), param.name);
             }
         }
@@ -1017,13 +975,18 @@ mod tests {
     }
 
     /// How a field draws with values in hex or decimal and ranges on or off.
-    fn rendered(field: &mut Box<dyn DialogComponent>, hex: bool, ranges: bool) -> String {
+    fn rendered(field: &mut ParamInput, hex: bool, ranges: bool) -> String {
         let mut state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
         state.config.hex_values = hex;
         state.config.show_value_ranges = ranges;
         let area = ratatui::layout::Rect::new(0, 0, 60, 1);
         let mut buf = ratatui::buffer::Buffer::empty(area);
-        field.render(&state, area, &mut buf);
+        let component: &mut dyn DialogComponent = match field {
+            ParamInput::Number(number) => number,
+            ParamInput::Toggle(checkbox) => checkbox,
+            ParamInput::Choice(select) => select,
+        };
+        component.render(&state, area, &mut buf);
         let line: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
         return line.trim_end().to_owned();
     }
@@ -1032,7 +995,7 @@ mod tests {
     fn labelled_params_follow_the_hex_and_range_settings() {
         let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
         let feedback = effect_params(EffectKind::Echo)[1];
-        let mut field = param_field(&state, &feedback, 0x80);
+        let mut field = param_input(&state, &feedback, 0x80);
         let all = [
             (true, true, "80", "(00-FF)"),
             (true, false, "80", ""),
@@ -1049,7 +1012,7 @@ mod tests {
             );
         }
         let step = effect_params(EffectKind::Arp)[0];
-        let mut field = param_field(&state, &step, -12i8 as u8);
+        let mut field = param_input(&state, &step, -12i8 as u8);
         for (hex, ranges, value) in [(true, true, "-0C"), (false, false, "-012")] {
             let line = rendered(&mut field, hex, ranges);
             assert!(line.contains(value) && line.ends_with("-oct"), "{line:?}");
@@ -1069,7 +1032,7 @@ mod tests {
             vec![0x7F]
         );
         let state = AppState::new(Project::empty(), Theme::monochrome()).unwrap();
-        let mut field = param_field(&state, &effect_params(EffectKind::Lfo)[5], 74);
+        let mut field = param_input(&state, &effect_params(EffectKind::Lfo)[5], 74);
         assert!(rendered(&mut field, true, true).contains("4A Cutoff"));
     }
 

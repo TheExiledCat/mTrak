@@ -7,7 +7,7 @@ use ratatui::{
     widgets::Widget,
 };
 
-use super::{DialogComponent, DialogValue, NumberBox, TextPrompt, label_spans};
+use super::{DialogComponent, DialogInput, NumberBox, TextPrompt, label_spans};
 use crate::tui::{
     app::AppState,
     framework::{keymap::KeyHint, widget::MtrakWidget},
@@ -21,7 +21,6 @@ const CHANNEL_WIDTH: u16 = 9;
 /// An RGB color: a number box per channel on one line and a hex field below them, kept in step
 /// with each other. Tab moves through the four fields.
 pub struct ColorPicker {
-    id: &'static str,
     color: Color,
     channels: [NumberBox; 3],
     hex: TextPrompt,
@@ -30,16 +29,15 @@ pub struct ColorPicker {
 }
 
 impl ColorPicker {
-    pub fn new(id: &'static str) -> Self {
+    pub fn new() -> Self {
         let mut picker = Self {
-            id,
             color: Color::Rgb(0, 0, 0),
             channels: [
-                NumberBox::new("", "", 2).steps(),
-                NumberBox::new("", "", 2).steps(),
-                NumberBox::new("", "", 2).steps(),
+                NumberBox::new("", 2).steps(),
+                NumberBox::new("", 2).steps(),
+                NumberBox::new("", 2).steps(),
             ],
-            hex: TextPrompt::new("", ""),
+            hex: TextPrompt::new(""),
             part: 0,
             focused: false,
         };
@@ -174,14 +172,17 @@ impl DialogComponent for ColorPicker {
     fn focus_subcomponent(&mut self, index: usize) {
         self.set_part(index.min(HEX_PART));
     }
-    fn value(&self) -> Option<(&'static str, DialogValue)> {
-        return Some((self.id, DialogValue::Color(self.color)));
+}
+
+impl DialogInput for ColorPicker {
+    type Value = Color;
+
+    fn value(&self) -> Color {
+        return self.color;
     }
-    fn set_value(&mut self, value: DialogValue) {
-        if let DialogValue::Color(color) = value {
-            self.color = color;
-            self.sync_fields();
-        }
+    fn set_value(&mut self, color: Color) {
+        self.color = color;
+        self.sync_fields();
     }
 }
 
@@ -272,7 +273,7 @@ mod tests {
     #[test]
     fn channels_update_the_hex_field() {
         let mut state = state();
-        let mut picker = ColorPicker::new("c").color(Color::Rgb(0x10, 0x20, 0x30));
+        let mut picker = ColorPicker::new().color(Color::Rgb(0x10, 0x20, 0x30));
         picker.set_focused(true);
         press(&mut picker, &mut state, KeyCode::Up);
         picker.focus_subcomponent(1);
@@ -284,7 +285,7 @@ mod tests {
     #[test]
     fn typing_a_full_hex_value_updates_the_channels() {
         let mut state = state();
-        let mut picker = ColorPicker::new("c");
+        let mut picker = ColorPicker::new();
         picker.set_focused(true);
         picker.focus_subcomponent(HEX_PART);
         for _ in 0..7 {
@@ -300,7 +301,7 @@ mod tests {
     #[test]
     fn a_half_typed_hex_value_is_dropped_on_leaving() {
         let mut state = state();
-        let mut picker = ColorPicker::new("c").color(Color::Rgb(1, 2, 3));
+        let mut picker = ColorPicker::new().color(Color::Rgb(1, 2, 3));
         picker.set_focused(true);
         picker.focus_subcomponent(HEX_PART);
         press(&mut picker, &mut state, KeyCode::Backspace);
@@ -311,15 +312,11 @@ mod tests {
 
     #[test]
     fn tab_walks_the_fields_before_leaving() {
-        use crate::tui::framework::{core_extensions::Boxed, dialog::Checkbox};
+        use crate::tui::framework::dialog::Checkbox;
 
-        let mut dialog = Dialog::new(
-            "",
-            vec![
-                ColorPicker::new("c").boxed(),
-                Checkbox::new("x", "X").boxed(),
-            ],
-        );
+        let mut dialog = Dialog::new("");
+        dialog.add_field(ColorPicker::new());
+        dialog.add_field(Checkbox::new("X"));
         for expected in [
             (Some(0), 0),
             (Some(0), 1),

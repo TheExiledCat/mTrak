@@ -8,12 +8,9 @@ use crate::{
     tui::{
         app::AppState,
         files,
-        framework::{
-            core_extensions::Boxed,
-            dialog::{
-                Buttons, Checkbox, ColorPicker, Dialog, DialogResult, DialogValue, Indent, Label,
-                Select, TextPrompt,
-            },
+        framework::dialog::{
+            Buttons, Checkbox, ColorPicker, Dialog, DialogResult, Field, Indent, Label, Press,
+            Select, TextPrompt,
         },
         theme::{Palette, Theme},
     },
@@ -64,164 +61,223 @@ pub fn open_config_dialog(state: &mut AppState) {
         theme: state.theme.clone(),
         config: state.config.clone(),
     };
-    let dialog = Dialog::new(
-        "Config",
-        vec![
-            Select::new("theme", names)
-                .label("Theme")
-                .selected(current)
-                .boxed(),
-            Select::new("color", color_names)
-                .label("Color")
-                .max_visible(11)
-                .boxed(),
-            ColorPicker::new("rgb").color(first_color).indent(1).boxed(),
-            Buttons::new("reset", vec!["Reset color", "Reset all"])
-                .indent(1)
-                .boxed(),
-            TextPrompt::new("name", "Save theme as")
-                .allowed(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                .boxed(),
-            Label::new("").boxed(),
-            Select::new("midi_in", in_names)
-                .label("Default MIDI in")
-                .selected(in_selected)
-                .boxed(),
-            Select::new("midi_out", out_names)
-                .label("Default MIDI out")
-                .selected(out_selected)
-                .boxed(),
-            Checkbox::new("ascii", "ASCII mode")
-                .checked(state.config.ascii_mode)
-                .boxed(),
-            Checkbox::new("update", "Check for updates")
-                .checked(state.config.update_check)
-                .boxed(),
-            Checkbox::new("hex_values", "Values are hex")
-                .checked(state.config.hex_values)
-                .boxed(),
-            Checkbox::new("value_ranges", "Show value ranges")
-                .checked(state.config.show_value_ranges)
-                .boxed(),
-            Label::new("Pattern editor").boxed(),
-            Select::new("line_numbers", line_number_names)
-                .label("Line numbers")
-                .selected(current_line_numbers)
-                .indent(1)
-                .boxed(),
-            Checkbox::new("hex", "Hex line numbers")
-                .checked(state.config.hex_line_numbers)
-                .indent(1)
-                .boxed(),
-            Checkbox::new("dashes", "Show dashes")
-                .checked(state.config.show_dashes)
-                .indent(1)
-                .boxed(),
-            Checkbox::new("track_numbers", "Track numbers")
-                .checked(state.config.track_numbers)
-                .indent(1)
-                .boxed(),
-            Label::new("").boxed(),
-            Buttons::new("open_folder", vec!["Open config folder"]).boxed(),
-            Checkbox::new("save", "Save to config.toml")
-                .checked(true)
-                .boxed(),
-        ],
-    )
-    .width(64)
-    .on_update({
-        let themes = themes.clone();
-        let edit = edit.clone();
-        let original = original.clone();
-        let ports = ports.clone();
-        move |state, fields| {
-            if fields.changed() == "open_folder" {
-                let folder = files::get_config_directory_root()
-                    .ok_or(MTrakError::MissingDirectory("config"))?;
-                return files::open_in_file_manager(&folder);
-            }
-            let config = settings(fields, state.config.theme.clone(), &ports, &state.config);
-            state.apply_config(config);
-            let mut edit = edit.borrow_mut();
-            let color = fields.choice("color").unwrap_or(0);
-            match (fields.changed(), fields.pressed("reset")) {
-                ("theme", _) => {
-                    let index = fields.choice("theme").unwrap_or(0);
+    let mut dialog = Dialog::new("Config");
+    let theme = dialog.add_field(Select::new(names).label("Theme").selected(current));
+    let color = dialog.add_field(Select::new(color_names).label("Color").max_visible(11));
+    let rgb = dialog.add_field(ColorPicker::new().color(first_color).indent(1));
+    let reset = dialog.add_field(Buttons::new(vec!["Reset color", "Reset all"]).indent(1));
+    let name = dialog.add_field(
+        TextPrompt::new("Save theme as")
+            .allowed(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+    );
+    let mut dialog = dialog.with(Label::new(""));
+    let midi_in = dialog.add_field(
+        Select::new(in_names)
+            .label("Default MIDI in")
+            .selected(in_selected),
+    );
+    let midi_out = dialog.add_field(
+        Select::new(out_names)
+            .label("Default MIDI out")
+            .selected(out_selected),
+    );
+    let config = &state.config;
+    let ascii = dialog.add_field(Checkbox::new("ASCII mode").checked(config.ascii_mode));
+    let update = dialog.add_field(Checkbox::new("Check for updates").checked(config.update_check));
+    let hex_values = dialog.add_field(Checkbox::new("Values are hex").checked(config.hex_values));
+    let value_ranges =
+        dialog.add_field(Checkbox::new("Show value ranges").checked(config.show_value_ranges));
+    let mut dialog = dialog.with(Label::new("Pattern editor"));
+    let line_numbers = dialog.add_field(
+        Select::new(line_number_names)
+            .label("Line numbers")
+            .selected(current_line_numbers)
+            .indent(1),
+    );
+    let hex = dialog.add_field(
+        Checkbox::new("Hex line numbers")
+            .checked(config.hex_line_numbers)
+            .indent(1),
+    );
+    let dashes = dialog.add_field(
+        Checkbox::new("Show dashes")
+            .checked(config.show_dashes)
+            .indent(1),
+    );
+    let track_numbers = dialog.add_field(
+        Checkbox::new("Track numbers")
+            .checked(config.track_numbers)
+            .indent(1),
+    );
+    let mut dialog = dialog.with(Label::new(""));
+    let open_folder = dialog.add_field(Buttons::new(vec!["Open config folder"]));
+    let save = dialog.add_field(Checkbox::new("Save to config.toml").checked(true));
+    let fields = ConfigFields {
+        theme,
+        color,
+        rgb,
+        reset,
+        name,
+        midi_in,
+        midi_out,
+        ascii,
+        update,
+        hex_values,
+        value_ranges,
+        line_numbers,
+        hex,
+        dashes,
+        track_numbers,
+        open_folder,
+        save,
+    };
+    let dialog = dialog
+        .width(64)
+        .on_update({
+            let themes = themes.clone();
+            let edit = edit.clone();
+            let original = original.clone();
+            let ports = ports.clone();
+            move |state, dialog| {
+                if dialog.changed(fields.open_folder) {
+                    let folder = files::get_config_directory_root()
+                        .ok_or(MTrakError::MissingDirectory("config"))?;
+                    return files::open_in_file_manager(&folder);
+                }
+                let config =
+                    fields.settings(dialog, state.config.theme.clone(), &ports, &state.config);
+                state.apply_config(config);
+                let mut edit = edit.borrow_mut();
+                let color = *dialog.get(fields.color);
+                if dialog.changed(fields.theme) {
+                    let index = *dialog.get(fields.theme);
                     *edit = PaletteEdit::new(index, &themes[index]);
-                }
-                ("color", _) => {}
-                ("rgb", _) => {
-                    if let Some(rgb) = fields.color("rgb") {
-                        *edit.palette.entries()[color].2 = rgb;
+                } else if dialog.changed(fields.rgb) {
+                    *edit.palette.entries()[color].2 = *dialog.get(fields.rgb);
+                } else if dialog.changed(fields.reset) {
+                    match dialog.get(fields.reset).pressed() {
+                        Some(RESET_COLOR) => {
+                            let base = *edit.base.entries()[color].2;
+                            *edit.palette.entries()[color].2 = base;
+                        }
+                        Some(RESET_ALL) => edit.palette = edit.base.clone(),
+                        _ => return Ok(()),
                     }
+                } else if !dialog.changed(fields.color) {
+                    return Ok(());
                 }
-                ("reset", Some(RESET_COLOR)) => {
-                    let base = *edit.base.entries()[color].2;
-                    *edit.palette.entries()[color].2 = base;
+                dialog.set(fields.rgb, edit.color(color));
+                let is_builtin = !matches!(themes[edit.source], ThemeSetting::Named(_));
+                let name = dialog.get(fields.name).clone();
+                if is_builtin && edit.edited() && name.is_empty() {
+                    dialog.set(fields.name, CUSTOM_THEME.to_owned());
+                } else if !edit.edited() && name == CUSTOM_THEME {
+                    dialog.set(fields.name, String::new());
                 }
-                ("reset", Some(RESET_ALL)) => edit.palette = edit.base.clone(),
-                _ => return Ok(()),
+                state.theme = if edit.edited() {
+                    Theme::from_palette(&edit.palette)
+                } else {
+                    Theme::from_setting(&themes[edit.source])
+                        .unwrap_or_else(|_| original.theme.clone())
+                };
+                return Ok(());
             }
-            fields.set("rgb", DialogValue::Color(edit.color(color)));
-            let is_builtin = !matches!(themes[edit.source], ThemeSetting::Named(_));
-            let name = fields.text("name").unwrap_or_default().to_owned();
-            if is_builtin && edit.edited() && name.is_empty() {
-                fields.set("name", DialogValue::Text(CUSTOM_THEME.to_owned()));
-            } else if !edit.edited() && name == CUSTOM_THEME {
-                fields.set("name", DialogValue::Text(String::new()));
+        })
+        .on_submit({
+            let original = original.clone();
+            move |state, result| {
+                let saved = fields.save(state, &result, &themes, &edit.borrow(), &ports);
+                if saved.is_err() {
+                    original.restore(state);
+                }
+                return saved;
             }
-            state.theme = if edit.edited() {
-                Theme::from_palette(&edit.palette)
-            } else {
-                Theme::from_setting(&themes[edit.source]).unwrap_or_else(|_| original.theme.clone())
-            };
-            return Ok(());
-        }
-    })
-    .on_submit({
-        let original = original.clone();
-        move |state, result| {
-            let saved = save_settings(state, &result, &themes, &edit.borrow(), &ports);
-            if saved.is_err() {
-                original.restore(state);
-            }
-            return saved;
-        }
-    })
-    .on_cancel(move |state| original.restore(state));
+        })
+        .on_cancel(move |state| original.restore(state));
     state.open_dialog(dialog);
 }
 
-/// Saves the edited theme if there is one, then switches to the settings in the dialog and
-/// writes them to config.toml if that's ticked.
-fn save_settings(
-    state: &mut AppState,
-    result: &DialogResult,
-    themes: &[ThemeSetting],
-    edit: &PaletteEdit,
-    ports: &Ports,
-) -> Result<()> {
-    let mut theme = themes[result.choice("theme").unwrap_or(0)].clone();
-    let name = result.text("name").unwrap_or_default().trim();
-    if !name.is_empty() {
-        if !config::is_theme_name(name) {
-            return Err(MTrakError::InvalidConfig(format!(
-                "{name} is the name of a built-in theme, so the theme can't be saved \
+#[derive(Clone, Copy)]
+struct ConfigFields {
+    theme: Field<usize>,
+    color: Field<usize>,
+    rgb: Field<Color>,
+    reset: Field<Press>,
+    name: Field<String>,
+    midi_in: Field<usize>,
+    midi_out: Field<usize>,
+    ascii: Field<bool>,
+    update: Field<bool>,
+    hex_values: Field<bool>,
+    value_ranges: Field<bool>,
+    line_numbers: Field<usize>,
+    hex: Field<bool>,
+    dashes: Field<bool>,
+    track_numbers: Field<bool>,
+    open_folder: Field<Press>,
+    save: Field<bool>,
+}
+
+impl ConfigFields {
+    /// Saves the edited theme first, so a bad theme name stops the rest.
+    fn save(
+        &self,
+        state: &mut AppState,
+        result: &DialogResult,
+        themes: &[ThemeSetting],
+        edit: &PaletteEdit,
+        ports: &Ports,
+    ) -> Result<()> {
+        let mut theme = themes[*result.get(self.theme)].clone();
+        let name = result.get(self.name).trim();
+        if !name.is_empty() {
+            if !config::is_theme_name(name) {
+                return Err(MTrakError::InvalidConfig(format!(
+                    "{name} is the name of a built-in theme, so the theme can't be saved \
                      under it"
-            )));
+                )));
+            }
+            edit.palette.save(&files::get_named_theme_path(name)?)?;
+            theme = ThemeSetting::Named(name.to_owned());
+        } else if edit.edited() {
+            let name = match &theme {
+                ThemeSetting::Named(name) => name.clone(),
+                _ => CUSTOM_THEME.to_owned(),
+            };
+            edit.palette.save(&files::get_named_theme_path(&name)?)?;
+            theme = ThemeSetting::Named(name);
         }
-        edit.palette.save(&files::get_named_theme_path(name)?)?;
-        theme = ThemeSetting::Named(name.to_owned());
-    } else if edit.edited() {
-        let name = match &theme {
-            ThemeSetting::Named(name) => name.clone(),
-            _ => CUSTOM_THEME.to_owned(),
-        };
-        edit.palette.save(&files::get_named_theme_path(&name)?)?;
-        theme = ThemeSetting::Named(name);
+        let config = self.settings(result, theme, ports, &state.config);
+        return apply_config(state, config, *result.get(self.save));
     }
-    let config = settings(result, theme, ports, &state.config);
-    return apply_config(state, config, result.bool("save").unwrap_or(false));
+
+    /// Settings the dialog doesn't show are kept from `current`.
+    fn settings(
+        &self,
+        result: &DialogResult,
+        theme: ThemeSetting,
+        ports: &Ports,
+        current: &Config,
+    ) -> Config {
+        let defaults = Config::default();
+        let line_numbers = LineNumbers::ALL
+            .get(*result.get(self.line_numbers))
+            .copied();
+        return Config {
+            theme,
+            ascii_mode: *result.get(self.ascii),
+            update_check: *result.get(self.update),
+            midi_input: ports.input[*result.get(self.midi_in)].clone(),
+            midi_output: ports.output[*result.get(self.midi_out)].clone(),
+            soft_thru: current.soft_thru,
+            hex_values: *result.get(self.hex_values),
+            show_value_ranges: *result.get(self.value_ranges),
+            hex_line_numbers: *result.get(self.hex),
+            show_dashes: *result.get(self.dashes),
+            track_numbers: *result.get(self.track_numbers),
+            line_numbers: line_numbers.unwrap_or(defaults.line_numbers),
+        };
+    }
 }
 
 /// The ports the default port lists stand for.
@@ -242,37 +298,6 @@ impl Original {
         state.theme = self.theme.clone();
         state.apply_config(self.config.clone());
     }
-}
-
-/// The settings in the dialog, with `theme`. Settings the dialog doesn't show stay as they are
-/// in `current`.
-fn settings(result: &DialogResult, theme: ThemeSetting, ports: &Ports, current: &Config) -> Config {
-    let defaults = Config::default();
-    let line_numbers = result
-        .choice("line_numbers")
-        .and_then(|i| LineNumbers::ALL.get(i).copied());
-    return Config {
-        theme,
-        ascii_mode: result.bool("ascii").unwrap_or(defaults.ascii_mode),
-        update_check: result.bool("update").unwrap_or(defaults.update_check),
-        midi_input: result
-            .choice("midi_in")
-            .and_then(|i| ports.input[i].clone()),
-        midi_output: result
-            .choice("midi_out")
-            .and_then(|i| ports.output[i].clone()),
-        soft_thru: current.soft_thru,
-        hex_values: result.bool("hex_values").unwrap_or(defaults.hex_values),
-        show_value_ranges: result
-            .bool("value_ranges")
-            .unwrap_or(defaults.show_value_ranges),
-        hex_line_numbers: result.bool("hex").unwrap_or(defaults.hex_line_numbers),
-        show_dashes: result.bool("dashes").unwrap_or(defaults.show_dashes),
-        track_numbers: result
-            .bool("track_numbers")
-            .unwrap_or(defaults.track_numbers),
-        line_numbers: line_numbers.unwrap_or(defaults.line_numbers),
-    };
 }
 
 /// The palette being edited, and the theme it started from.

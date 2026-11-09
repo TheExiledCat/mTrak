@@ -18,7 +18,6 @@ use crate::{
     tui::{
         app::AppState,
         framework::{
-            core_extensions::Boxed,
             dialog::{Dialog, InfoLevel, Select, TextPrompt},
             keymap::{Action, HelpSection, Key, KeyActions, Keymap},
             widget::MtrakWidget,
@@ -181,21 +180,14 @@ impl FileBrowser {
                     .map(|e| extension_label(e).to_owned())
                     .collect();
                 let pending = self.pending_input.clone();
-                let dialog = Dialog::new(
-                    "Save file",
-                    vec![
-                        TextPrompt::new("name", "Name").boxed(),
-                        Select::new("extension", options)
-                            .label("Extension")
-                            .max_visible(4)
-                            .boxed(),
-                    ],
-                )
-                .focus_first()
-                .on_submit(move |_, result| {
+                let mut dialog = Dialog::new("Save file");
+                let name = dialog.add_field(TextPrompt::new("Name"));
+                let extension =
+                    dialog.add_field(Select::new(options).label("Extension").max_visible(4));
+                let dialog = dialog.focus_first().on_submit(move |_, result| {
                     pending.replace(Some(PendingInput::FileName {
-                        name: result.text("name").unwrap_or_default().to_owned(),
-                        extension: result.choice("extension").unwrap_or(0),
+                        name: result.get(name).clone(),
+                        extension: *result.get(extension),
                     }));
                     return Ok(());
                 });
@@ -261,13 +253,12 @@ impl FileBrowser {
     }
     fn request_new_directory(&self, state: &mut AppState) {
         let pending = self.pending_input.clone();
-        let dialog = Dialog::text_field("New directory", String::new(), "name").on_submit(
-            move |_, result| {
-                let name = result.text("name").unwrap_or_default().to_owned();
-                pending.replace(Some(PendingInput::NewDirectory(name)));
-                return Ok(());
-            },
-        );
+        let (dialog, name) = Dialog::text_field("New directory", String::new());
+        let dialog = dialog.on_submit(move |_, result| {
+            let name = result.get(name).clone();
+            pending.replace(Some(PendingInput::NewDirectory(name)));
+            return Ok(());
+        });
         state.open_dialog(dialog);
     }
     fn create_directory(&mut self, name: &str) -> Result<()> {

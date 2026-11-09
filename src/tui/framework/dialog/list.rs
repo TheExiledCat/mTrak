@@ -11,7 +11,7 @@ use crate::{
     tui::{
         app::AppState,
         framework::{
-            dialog::{DialogComponent, DialogValue},
+            dialog::{DialogComponent, DialogInput},
             keymap::{Action, HelpEntry, Key, KeyActions, KeyHint, Keymap},
             widget::MtrakWidget,
         },
@@ -22,7 +22,7 @@ use crate::{
 type ItemSource = Box<dyn Fn(&AppState) -> Vec<String>>;
 type CheckSource = Box<dyn Fn(&AppState) -> Vec<bool>>;
 
-/// What was last done in a list, read in `on_update` with `DialogResult::list_event`.
+/// What was last done in a list, read in `on_update` with `ListChange::event`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ListEvent {
     /// Space on an item.
@@ -61,7 +61,6 @@ impl Action for ListAction {}
 /// line with the app state, e.g. after a dialog opened from it changed the items, give it
 /// `items_from`.
 pub struct List {
-    id: &'static str,
     items: Vec<String>,
     source: Option<ItemSource>,
     checks: Option<Vec<bool>>,
@@ -82,9 +81,8 @@ pub struct List {
 }
 
 impl List {
-    pub fn new(id: &'static str, items: Vec<impl Into<String>>) -> Self {
+    pub fn new(items: Vec<impl Into<String>>) -> Self {
         let mut list = Self {
-            id,
             items: items.into_iter().map(|item| item.into()).collect(),
             source: None,
             checks: None,
@@ -161,7 +159,7 @@ impl List {
 
     /// Every key a list can have, for the shortcuts screen and keybinds.toml.
     pub fn help_entries() -> Vec<HelpEntry> {
-        let list = List::new("", Vec::<String>::new())
+        let list = List::new(Vec::<String>::new())
             .add_button("")
             .removable(true)
             .reorderable(true)
@@ -384,15 +382,32 @@ impl DialogComponent for List {
         self.focused = focused;
         self.clamp_selection();
     }
-    fn value(&self) -> Option<(&'static str, DialogValue)> {
-        return Some((
-            self.id,
-            DialogValue::List {
-                event: self.last,
-                count: self.events,
-            },
-        ));
+}
+
+/// `count` goes up with every event, so the same event twice still counts as a change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ListChange {
+    pub last: Option<ListEvent>,
+    pub count: u32,
+}
+
+impl ListChange {
+    pub fn event(&self) -> Option<ListEvent> {
+        return self.last.filter(|_| self.count > 0);
     }
+}
+
+// setting it does nothing
+impl DialogInput for List {
+    type Value = ListChange;
+
+    fn value(&self) -> ListChange {
+        return ListChange {
+            last: self.last,
+            count: self.events,
+        };
+    }
+    fn set_value(&mut self, _change: ListChange) {}
 }
 
 #[cfg(test)]
@@ -400,7 +415,7 @@ mod tests {
     use super::*;
 
     fn list(items: &[&str]) -> List {
-        return List::new("list", items.to_vec());
+        return List::new(items.to_vec());
     }
 
     #[test]
@@ -524,7 +539,7 @@ mod tests {
     #[test]
     fn indices_are_hex_and_padded() {
         let items: Vec<String> = (0..17).map(|i| i.to_string()).collect();
-        let list = List::new("list", items).show_index(true);
+        let list = List::new(items).show_index(true);
         assert_eq!(list.row_text(0), " 0 0");
         assert_eq!(list.row_text(16), "10 16");
     }
@@ -532,7 +547,7 @@ mod tests {
     #[test]
     fn height_is_capped_at_max_visible() {
         let items: Vec<String> = (0..20).map(|i| i.to_string()).collect();
-        assert_eq!(List::new("list", items).max_visible(5).get_height(), 5);
-        assert_eq!(List::new("list", Vec::<String>::new()).get_height(), 1);
+        assert_eq!(List::new(items).max_visible(5).get_height(), 5);
+        assert_eq!(List::new(Vec::<String>::new()).get_height(), 1);
     }
 }
