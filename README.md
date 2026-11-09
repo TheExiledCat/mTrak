@@ -13,241 +13,43 @@ Join us on the TrackerCatz Discord server.
 
 ## Features
 
-- Windows, Mac and Linux
-- Full TUI with total keyboard control for mouseless usage
-- No menu diving
-- Pattern editor with 8 tracks per pattern, FT2-style keyboard note entry and navigation
-- Linear fill: `Alt+F` ramps the volumes, or command values, between the ones above and
-  below the cursor
-- Song sequence with per-pattern repeats
-- Song, pattern and block loop playback, live recording into the playing pattern, and a
-  metronome
-- MIDI output on all 16 channels, with one instrument per channel and instrument configuration
-- Midi input for note data, clock sync and start/stop
-  (see [docs/SYNC.md](docs/SYNC.md))
-- Command column for MIDI and playback commands, using FT2 syntax where applicable
-  (see [docs/COMMANDS.md](docs/COMMANDS.md))
-- Live MIDI effects on each instrument: arpeggiator, chords, a velocity EQ, an echo, an LFO,
-  an envelope, swing, a randomizer, a scale, note to CC and probability, with every setting
-  changeable from pattern CC commands
-  (see [docs/EFFECTS.md](docs/EFFECTS.md))
-- Per-channel activity meters, channel muting and a MIDI event monitor
-- Built-in file browser for opening and saving projects
-- Context-aware key hints and a built in shortcuts screen
-- FT2 color theme on truecolor terminals, a 16-color theme on Windows consoles and macOS
-  terminals without truecolor, a monochrome fallback, and custom colors from a theme file
-- ASCII mode for terminals or fonts without Unicode box drawing and symbols
+- An FT2-style pattern editor in the terminal, run entirely from the keyboard, on Windows, macOS
+  and Linux
+- MIDI out on all 16 channels, one instrument each, with its own patch, transpose and bend range
+- Pattern commands for CCs, slides, pitch bends, chords, retrigs, delays and song flow, in FT2's
+  syntax where it has one
+- Live MIDI effects on every instrument, like an arpeggiator, chords, echo and an LFO
+- Live recording, MIDI input and clock sync, and a metronome
+- MIDI file export for taking a song into a DAW
+- Rebindable keys, themes, and an ASCII mode for any terminal
 
-## Installation
+## Quick start
 
-### From a release
-
-Download the binary for your platform from the
-[releases page](https://github.com/TheExiledCat/mTrak/releases) and put it somewhere on
-your `PATH` or run it directly.
-
-### From source
-
-You need a recent stable Rust toolchain (install it with [rustup](https://rustup.rs)).
-On Linux you also need the ALSA development headers, e.g. `libasound2-dev` on
-Debian/Ubuntu or `alsa-lib-devel` on Fedora.
-
-```sh
-cargo install --git https://github.com/TheExiledCat/mTrak
-```
-
-Or from a local clone:
-
-```sh
-git clone https://github.com/TheExiledCat/mTrak
-cd mTrak
-cargo install --path .
-```
-
-**Note**: v0.1.3 to v0.1.5 could be flagged by some antivirus software (especially Windows
-Defender) as a false positive because of how the self updater replaced the executable. v0.1.6
-changes how updates are installed on Windows to avoid this, but the release binaries are not
-signed yet, so warnings can still show up. Once the project gets enough adoption, I will apply
-for signing credentials. Until then, building from source with `cargo install` avoids the
-issue.
-
-## Usage
+Download mTrak for your platform from the
+[releases page](https://github.com/TheExiledCat/mTrak/releases), or build it with
+`cargo install --git https://github.com/TheExiledCat/mTrak` (see
+[docs/INSTALL.md](docs/INSTALL.md)). Then:
 
 ```sh
 mtrak                  # start with an empty project
 mtrak song.mtrak       # open a project
 ```
 
-Pick a MIDI output port with `Ctrl+O`. mTrak makes no sound on its own, so connect it to a physical (or virtual) midi device to make music.
-You can also open projects from the built-in file browser with `Alt+O`.
+Pick a MIDI output with `Ctrl+O`, press `?` for every key and `/` for every pattern command.
 
-`Alt+M` exports the song as a MIDI file (`.mid`), to take it into a DAW. It's the song as it
-plays from its first sequence position, with every command, effect, transpose and volume
-applied, and ends where the song length in the Info dialog (`Ctrl+F`) does. The file has a
-track per instrument that plays something, starting with its bank and program, and the
-song's tempo changes.
+## Documentation
 
-### Keybindings
-
-Press `?` to see every key in mTrak, grouped by section. The footer only shows the most
-common ones. Keys can be rebound on that screen or in `keybinds.toml`, see
-[docs/CONFIG.md](docs/CONFIG.md#keybindings). If your terminal keeps some keys for itself,
-the [keybinds](keybinds) folder has premade overrides for Windows Terminal, GNOME Terminal,
-Konsole, macOS Terminal, tmux and VS Code.
-
-Press `/` to see every pattern command with a short description. The full guide is
-[docs/COMMANDS.md](docs/COMMANDS.md), which is also included in every release zip.
-
-### Playing and recording
-
-`Enter` plays the song from the current sequence position, `Ctrl+Space` the current pattern,
-and `Ctrl+B` loops the rows of the marked block; press it again to let the pattern play on
-past them. Playback always loops; `Space` stops it, and an `EF0` command in the pattern stops
-it when it's reached.
-
-`Esc` turns record mode on or off. In record mode, notes you play while the song plays, on the
-keyboard or a MIDI controller, are written into the cursor's track on the row closest to when
-you played them.
-
-`Ctrl+G` sets up the metronome: when it plays, the channels it clicks on, and the notes and
-velocities of the accent and the other beats.
-
-### Instruments
-
-`Ctrl+R` opens the active instrument's dialog: its name, volume, bend range, default CC and
-transpose, and the sound it picks on the synth. `Program`, `Bank MSB` and `Bank LSB` are sent
-as a program change and bank select (CC 0 and 32) when they change, when the MIDI output
-connects and every time playback starts, so a project always plays on the right patches.
-Leave one at `Off` to not send it.
-
-### Effects
-
-Each instrument can have a chain of live MIDI effects. Press `Ctrl+R` for the active
-instrument's dialog and choose `Effects` to add them. Each effect's `CC mapping` lets pattern
-commands change its settings while the song plays. The guide is
-[docs/EFFECTS.md](docs/EFFECTS.md), which is also included in every release zip.
-
-### Options
-
-| Option              | Description                                                                         |
-| ------------------- | ----------------------------------------------------------------------------------- |
-| `--color <theme>`   | Use this theme instead of the one in `config.toml`: `auto`, `mono`, `ansi16`, `full` or the name of a theme in the `themes` folder. `--theme` works too |
-| `--ascii-mode`      | Draw with ASCII characters only                                                     |
-| `--no-update-check` | Don't look for a new version this time                                              |
-
-Each overrides its setting in [config.toml](docs/CONFIG.md#configtoml) for one session.
-Setting `NO_COLOR` or `TERM=dumb` selects the monochrome theme when the theme is `auto`.
-
-## Configuration
-
-### Folders
-
-Projects are saved to an `mtrak` folder in your music folder by default, but you can save
-and open them from any folder. Global settings live in an `mtrak` folder in your config
-folder. Both are created on startup if they don't exist yet.
-
-| Platform | Projects                    | Config                                |
-| -------- | --------------------------- | ------------------------------------- |
-| Linux    | `~/Music/mtrak`             | `~/.config/mtrak`                     |
-| macOS    | `~/Music/mtrak`             | `~/Library/Application Support/mtrak` |
-| Windows  | `%USERPROFILE%\Music\mtrak` | `%LOCALAPPDATA%\mtrak`                |
-
-On Linux the music folder follows `XDG_MUSIC_DIR` and the config folder follows
-`XDG_CONFIG_HOME`, if they're set.
-
-Settings and themes are explained in [docs/CONFIG.md](docs/CONFIG.md), which is also
-included in every release zip. Press `Ctrl+P` to change them in the Config dialog.
-
-### Project files
-
-Projects saved with v0.6.0 or later open in every later version of mTrak: each project file
-records its format version, and when the format changes, newer versions upgrade older projects
-as they open them.
-
-Projects saved with v0.5.0 or earlier can't be opened. mTrak shows an error instead; from the
-file browser the current project stays open, and from the command line mTrak starts with an
-empty project.
-
-To read or write projects from other programs, see [docs/FILE_FORMAT.md](docs/FILE_FORMAT.md).
-
-## Roadmap
-
-Planned features, in no particular order:
-
-- [x] **File browser and global saving**
-- [X] **Undo system**
-- [ ] **MIDI file import/export**
-    - [X] export the song as a MIDI file
-    - [ ] import a MIDI file
-- [ ] **MIDI input**:
-    - [X] play notes into the pattern using a connected midi controller
-    - [X] trigger mtrak to start and stop playback, sync to midi controller
-    - [X] follow an external MIDI clock, with start, stop, continue and song position
-    - [X] separate ports for notes and clock
-    - [ ] Change sequence/pattern using Program Select In
-- [X] **MIDI clock out**: send clock and start/stop to sync external sequencers, drum machines and arpeggiators
-- [ ] **Multiple output ports**: map instruments to different MIDI devices, not just channels on one port
-- [X] **Program change and bank select per instrument**, so loading a project restores the right patches
-- [X] **Panic button** (`~`): all notes off and reset controllers, for stuck notes
-- [X] **Live record**:
-    - [X] play notes in while the song is playing, for beatmaking
-    - [X] send metronome to channel
-- [X] **Live edit**:
-    - [X] row lock edit: option to stop the cursor following the playback row, so you can edit a pattern while it plays (handy for loops)
-    - [X] block loop: loop the currently marked block
-- [X] **Block operations**:
-    - [X] select, copy, paste 
-    - [X] transpose across rows and tracks
-    - [X] clearing blocks
-- [x] **Prebuilt binaries** for Linux, Windows and macOS on every release
-- [ ] Selectable track counts other than 8
-- [ ] Polyphonic note entering (arming multiple tracks so chords can be entered)
-- [ ] **More commands**
-    - [X] Retrig (`R`, FT2's multi retrig) and retrig note (`E9`)
-    - [x] BPM and SPD change (`F`)
-    - [X] Note delay (`ED`) and early note delay (`E8`)
-    - [X] Note probability (`Y`)
-    - [X] Note Cut (`EC`)
-    - [X] Legato (overlap notes, `L`)
-    - [X] Pitch bend in semitones, using the instrument's bend range (`I`)
-    - [X] Shorthand commands for common CCs
-        - [X] Mod wheel (`W`)
-        - [X] Filter cutoff (`Z`)
-    - [X] FT2-style per-tick slides: pitch up/down (`1`/`2`) and their fine versions
-    - [X] Tone portamento (`3`), gliding the pitch to the next note
-    - [X] Vibrato (`4`), arpeggio (`0`), panning (`8`) and pattern loop (`E6`)
-    - [X] Chords (`Q`), and a table of 16 chords with strumming (`X`)
-    - [X] Song modification
-        - [X] Pattern break (`D`)
-        - [X] Jump song position (`B`)
-        - [X] Pattern delay (`EE`)
-        - [X] Stop playback (`EF`)
-        - [X] Set global velocity (`G`)
-        - [X] Set track velocity (`C`)
-        - [X] Glide global velocity (`H`)
-- [ ] **Autosave and crash recovery**
-- [x] **Custom themes**
-    - [x] theme files, with ports of popular color schemes
-    - [x] editing themes in the Config dialog, with a live preview
-- [ ] **Keyboard remapping**
-    - [x] rebinding keys on the keybindings screen and in `keybinds.toml`
-    - [ ] piano key layouts per keyboard (QWERTZ, AZERTY, ...)
-- [x] **Proper CLI argument parsing** and a global app config
-- [ ] **Instrument Live Midi Effects**
-    - [x] Auto arp
-    - [x] Midi EQ
-    - [x] Chord mode / Harmonizer
-    - [x] Delay (Echo)
-    - [X] Swing
-    - [X] Randomizer
-    - [X] Scale mode
-    - [X] Note to CC
-    - [X] Global Probability
-    - [x] CC LFO
-    - [ ] Potential custom plugin format scripting method (no VSTs though)
-- [ ] ...and more
-
-Have an idea? Feel free to open an issue.
+| Guide                                      | What's in it                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------- |
+| [Installing](docs/INSTALL.md)              | Releases, building from source                                      |
+| [Using mTrak](docs/GUIDE.md)               | Keys, playing and recording, instruments, export, files and options |
+| [Commands](docs/COMMANDS.md)               | Every pattern command                                               |
+| [Effects](docs/EFFECTS.md)                 | The live MIDI effects on instruments                                |
+| [Configuration](docs/CONFIG.md)            | Settings, themes and keybindings                                    |
+| [Sync](docs/SYNC.md)                       | MIDI input, clock in and out                                        |
+| [Project file format](docs/FILE_FORMAT.md) | Reading and writing `.mtrak` files from other programs              |
+| [Roadmap](docs/ROADMAP.md)                 | What's done and what's planned                                      |
+| [Changelog](docs/CHANGELOG.md)             | What changed in each release                                        |
 
 ## Contributing
 
