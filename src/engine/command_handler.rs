@@ -13,7 +13,7 @@ use crate::{
         note::{Note, NoteKind},
     },
     engine::pitch::{STEPS_PER_SEMITONE, TrackPitch},
-    tui::constants::TRACK_COUNT,
+    tui::constants::MAX_TRACKS,
 };
 
 /// What the engine found ahead of a command, for commands that depend on later rows.
@@ -202,7 +202,7 @@ impl TrackState {
 
 /// Keeps MIDI command state per track, so tracks sharing an instrument don't clash.
 pub struct MidiCommandHandler {
-    tracks: [TrackState; TRACK_COUNT as usize],
+    tracks: [TrackState; MAX_TRACKS as usize],
     /// Channels that were sent a pitch bend or pressure, so stopping can undo it.
     bent: [bool; MIDI_CHANNEL_COUNT],
     pressed: [bool; MIDI_CHANNEL_COUNT],
@@ -210,7 +210,7 @@ pub struct MidiCommandHandler {
     default_controls: [u8; MIDI_CHANNEL_COUNT],
     /// Each instrument's bend range in semitones, by channel.
     bend_ranges: [u8; MIDI_CHANNEL_COUNT],
-    pitches: [TrackPitch; TRACK_COUNT as usize],
+    pitches: [TrackPitch; MAX_TRACKS as usize],
     /// What `P` or `I` set, from the center. Pitch commands bend on top of it.
     base_bends: [i32; MIDI_CHANNEL_COUNT],
     sent_bends: [u16; MIDI_CHANNEL_COUNT],
@@ -229,7 +229,7 @@ impl MidiCommandHandler {
             pressed: [false; MIDI_CHANNEL_COUNT],
             default_controls: [0; MIDI_CHANNEL_COUNT],
             bend_ranges: [DEFAULT_PITCH_WHEEL_RANGE; MIDI_CHANNEL_COUNT],
-            pitches: [TrackPitch::default(); TRACK_COUNT as usize],
+            pitches: [TrackPitch::default(); MAX_TRACKS as usize],
             base_bends: [0; MIDI_CHANNEL_COUNT],
             sent_bends: [BEND_CENTER; MIDI_CHANNEL_COUNT],
         };
@@ -485,7 +485,7 @@ impl MidiCommandHandler {
         }
         self.bent = [false; MIDI_CHANNEL_COUNT];
         self.pressed = [false; MIDI_CHANNEL_COUNT];
-        self.pitches = [TrackPitch::default(); TRACK_COUNT as usize];
+        self.pitches = [TrackPitch::default(); MAX_TRACKS as usize];
         self.base_bends = [0; MIDI_CHANNEL_COUNT];
         self.sent_bends = [BEND_CENTER; MIDI_CHANNEL_COUNT];
     }
@@ -509,11 +509,11 @@ pub struct PlaybackCommandHandler {
     global_slide: Option<i16>,
     /// H00 repeats the last slide, like FT2's effect memory.
     global_slide_memory: i16,
-    track_velocities: [u8; TRACK_COUNT as usize],
+    track_velocities: [u8; MAX_TRACKS as usize],
     pattern: Option<usize>,
     row: usize,
     /// Loop start and loops left, per track like FT2's per channel.
-    loops: [(usize, u8); TRACK_COUNT as usize],
+    loops: [(usize, u8); MAX_TRACKS as usize],
     flow: RowFlow,
 }
 impl Default for PlaybackCommandHandler {
@@ -530,10 +530,10 @@ impl PlaybackCommandHandler {
             global_velocity: None,
             global_slide: None,
             global_slide_memory: 0,
-            track_velocities: [u8::MAX; TRACK_COUNT as usize],
+            track_velocities: [u8::MAX; MAX_TRACKS as usize],
             pattern: None,
             row: 0,
-            loops: [(0, 0); TRACK_COUNT as usize],
+            loops: [(0, 0); MAX_TRACKS as usize],
             flow: RowFlow::default(),
         };
     }
@@ -556,7 +556,7 @@ impl PlaybackCommandHandler {
 
     pub fn start_row(&mut self, pattern: usize, row: usize) {
         if self.pattern != Some(pattern) {
-            self.loops = [(0, 0); TRACK_COUNT as usize];
+            self.loops = [(0, 0); MAX_TRACKS as usize];
         }
         self.pattern = Some(pattern);
         self.row = row;
@@ -1006,7 +1006,7 @@ mod tests {
     #[test]
     fn out_of_range_track_sends_nothing() {
         let mut handler = MidiCommandHandler::new();
-        let track = TRACK_COUNT as usize;
+        let track = MAX_TRACKS as usize;
         assert!(handle(&mut handler, track, cc_note(MidiCommand::ChangeCC, 1, 0)).is_empty());
     }
 

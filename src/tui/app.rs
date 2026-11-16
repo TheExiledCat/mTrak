@@ -1072,14 +1072,16 @@ impl AppState {
         return changed;
     }
     pub fn next_pattern(&mut self) {
+        let track_count = self.active_pattern().track_count;
         self.active_pattern.0 = self.active_pattern.0.saturating_add(1);
-        self.ensure_pattern(self.active_pattern);
+        self.ensure_pattern(self.active_pattern, track_count);
         self.switch_playing_pattern();
     }
 
     pub fn prev_pattern(&mut self) {
+        let track_count = self.active_pattern().track_count;
         self.active_pattern.0 = self.active_pattern.0.saturating_sub(1);
-        self.ensure_pattern(self.active_pattern);
+        self.ensure_pattern(self.active_pattern, track_count);
         self.switch_playing_pattern();
     }
 
@@ -1111,7 +1113,8 @@ impl AppState {
                 row.decrease_pattern()
             }
         });
-        self.ensure_pattern(id);
+        let track_count = self.active_pattern().track_count;
+        self.ensure_pattern(id, track_count);
         self.active_pattern = id;
     }
     pub fn change_sequence_repeats(&mut self, index: usize, increase: bool) {
@@ -1634,10 +1637,12 @@ impl AppState {
         }
     }
 
-    fn ensure_pattern(&mut self, id: PatternId) {
+    /// A pattern that doesn't exist yet is made with `track_count` tracks, the count of the
+    /// pattern being left.
+    fn ensure_pattern(&mut self, id: PatternId, track_count: u8) {
         self.project_mut()
             .patterns
-            .create_pattern_id_if_not_exists(id);
+            .create_pattern_id_if_not_exists(id, track_count);
         self.changed_patterns.insert(id);
     }
     fn key_to_note_pitch(&self, key: char) -> Option<NotePitch> {
@@ -1692,8 +1697,8 @@ pub struct TrackCache {
 }
 
 struct TrackCacheRow {
-    notes: [Note; constants::TRACK_COUNT as usize],
-    tracks: [String; constants::TRACK_COUNT as usize],
+    notes: [Note; constants::MAX_TRACKS as usize],
+    tracks: [String; constants::MAX_TRACKS as usize],
 }
 impl TrackCacheRow {
     fn new(row: &PatternRow) -> Self {
@@ -1859,7 +1864,7 @@ mod tests {
             state
                 .project
                 .patterns
-                .create_pattern_id_if_not_exists(PatternId(id));
+                .create_pattern_id_if_not_exists(PatternId(id), 8);
             state.pattern_mut(PatternId(id)).set_event(0, 0, note);
         }
         state.active_pattern = PatternId(1);

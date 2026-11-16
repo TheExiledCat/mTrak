@@ -241,7 +241,7 @@ A dropped note's note off is dropped too.
 | Field           | Type             | Contents                                       |
 | --------------- | ---------------- | ---------------------------------------------- |
 | `row_count`     | int              | The number of rows, 1-256                      |
-| `track_count`   | int              | The number of tracks, always 8 for now         |
+| `track_count`   | int              | The number of tracks, 1 to 16 (8 by default)   |
 | `cells`         | binary           | Every cell, packed as described below          |
 | `channel_mutes` | array of 16 bools | Which MIDI channels are muted in this pattern |
 
