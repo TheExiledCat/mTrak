@@ -36,7 +36,7 @@ use crate::{
         notes::MIDI_CHANNEL_COUNT,
         voices::Voices,
     },
-    tui::constants::TRACK_COUNT,
+    tui::constants::MAX_TRACKS,
 };
 
 /// How long a metronome click lasts, a 1/16.
@@ -158,16 +158,16 @@ pub struct MtrakEngine {
     /// When the last pulse from the clock input arrived.
     last_external_pulse_at: Option<Instant>,
     voices: Voices,
-    scheduled_notes: [Option<ScheduledNote>; TRACK_COUNT as usize],
-    early_notes: [Option<EarlyNote>; TRACK_COUNT as usize],
+    scheduled_notes: [Option<ScheduledNote>; MAX_TRACKS as usize],
+    early_notes: [Option<EarlyNote>; MAX_TRACKS as usize],
     /// The next row's notes that were already started early, per track.
-    started_early: [Option<Note>; TRACK_COUNT as usize],
+    started_early: [Option<Note>; MAX_TRACKS as usize],
     /// The last note each track played, which a retrig without a note of its own repeats.
-    last_notes: [Option<Note>; TRACK_COUNT as usize],
+    last_notes: [Option<Note>; MAX_TRACKS as usize],
     /// Ticks since each track's last note, like FT2's retrig counter.
-    retrig_counters: [u32; TRACK_COUNT as usize],
+    retrig_counters: [u32; MAX_TRACKS as usize],
     /// Each track's last retrig interval and velocity change, like FT2's effect memory.
-    retrig_memory: [(u8, u8); TRACK_COUNT as usize],
+    retrig_memory: [(u8, u8); MAX_TRACKS as usize],
     /// Cells of the next row whose note was just recorded live, and already heard.
     recorded_ahead: Vec<(PatternId, usize, usize)>,
     /// Ticks since the row started, counting on through a delayed row's repeats.
@@ -224,12 +224,12 @@ impl MtrakEngine {
             external_period: pulse_duration(DEFAULT_BPM),
             last_external_pulse_at: None,
             voices: Voices::new(),
-            scheduled_notes: [None; TRACK_COUNT as usize],
-            early_notes: [None; TRACK_COUNT as usize],
-            started_early: [None; TRACK_COUNT as usize],
-            last_notes: [None; TRACK_COUNT as usize],
-            retrig_counters: [0; TRACK_COUNT as usize],
-            retrig_memory: [(0, 0); TRACK_COUNT as usize],
+            scheduled_notes: [None; MAX_TRACKS as usize],
+            early_notes: [None; MAX_TRACKS as usize],
+            started_early: [None; MAX_TRACKS as usize],
+            last_notes: [None; MAX_TRACKS as usize],
+            retrig_counters: [0; MAX_TRACKS as usize],
+            retrig_memory: [(0, 0); MAX_TRACKS as usize],
             recorded_ahead: Vec::new(),
             row_tick: 0,
 
@@ -694,7 +694,7 @@ impl MtrakEngine {
 
     /// Replans the early notes for the row a jump goes to.
     fn reschedule_early_notes(&mut self) {
-        self.early_notes = [None; TRACK_COUNT as usize];
+        self.early_notes = [None; MAX_TRACKS as usize];
         self.schedule_early_notes();
     }
 
@@ -1041,12 +1041,12 @@ impl MtrakEngine {
     /// messages that undo what commands left set on the synth. These go out even on muted
     /// channels, like the all sound off on stop, so a synth is never left bent.
     fn reset_commands(&mut self) -> Vec<Message> {
-        self.scheduled_notes = [None; TRACK_COUNT as usize];
-        self.early_notes = [None; TRACK_COUNT as usize];
-        self.started_early = [None; TRACK_COUNT as usize];
-        self.last_notes = [None; TRACK_COUNT as usize];
-        self.retrig_counters = [0; TRACK_COUNT as usize];
-        self.retrig_memory = [(0, 0); TRACK_COUNT as usize];
+        self.scheduled_notes = [None; MAX_TRACKS as usize];
+        self.early_notes = [None; MAX_TRACKS as usize];
+        self.started_early = [None; MAX_TRACKS as usize];
+        self.last_notes = [None; MAX_TRACKS as usize];
+        self.retrig_counters = [0; MAX_TRACKS as usize];
+        self.retrig_memory = [(0, 0); MAX_TRACKS as usize];
         self.recorded_ahead.clear();
         self.row_delay = 0;
         self.row_tick = 0;
@@ -1124,8 +1124,8 @@ impl MtrakEngine {
         self.voices.tick(&mut out);
         out.extend(audible(row_tick, &mutes));
         // notes still waiting were scheduled past the end of the row, so they never play
-        self.scheduled_notes = [None; TRACK_COUNT as usize];
-        self.early_notes = [None; TRACK_COUNT as usize];
+        self.scheduled_notes = [None; MAX_TRACKS as usize];
+        self.early_notes = [None; MAX_TRACKS as usize];
         let started_early = std::mem::take(&mut self.started_early);
         let here = (self.position.pattern, self.position.row);
         let recorded_ahead: Vec<usize> = std::mem::take(&mut self.recorded_ahead)

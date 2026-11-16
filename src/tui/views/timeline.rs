@@ -81,6 +81,8 @@ pub enum TimelineAction {
     RowDown,
     PrevTrack,
     NextTrack,
+    /// When the terminal is too narrow for every track, jumps between the first and last tracks.
+    TogglePage,
     PrevColumn,
     NextColumn,
     ToggleEdit,
@@ -174,6 +176,7 @@ fn movement_keys(keymap: Keymap<TimelineAction>) -> Keymap<TimelineAction> {
         .bind(Key::plain(KeyCode::Left), PrevColumn, "COL")
         .bind(Key::plain(KeyCode::Right), NextColumn, "COL")
         .bind(Key::plain(KeyCode::Tab), NextTrack, "TRCK")
+        .bind(Key::alt('/'), TogglePage, "PAGE")
         .bind(
             Key::new(KeyCode::Tab, KeyModifiers::SHIFT),
             PrevTrack,
@@ -398,8 +401,21 @@ fn track_jump(key: &KeyEvent) -> Option<u8> {
     let KeyCode::Char(c) = key.code else {
         return None;
     };
-    let index = constants::TRACK_JUMP_KEYS.iter().position(|&k| k == c)? as u8;
-    return (index < constants::TRACK_COUNT).then_some(index);
+    return Some(constants::TRACK_JUMP_KEYS.iter().position(|&k| k == c)? as u8);
+}
+
+/// The first track to draw so the cursor is on screen and as many of the `capacity` tracks fit as
+/// possible, moving `start` as little as it can.
+fn window_start(track_count: u8, capacity: u8, cursor: u8, start: u8) -> u8 {
+    let capacity = capacity.clamp(1, track_count.max(1));
+    let start = start.min(track_count.saturating_sub(capacity));
+    if cursor < start {
+        return cursor;
+    }
+    if cursor >= start + capacity {
+        return cursor + 1 - capacity;
+    }
+    return start;
 }
 
 fn wrap_step(index: u8, step: i32, count: u16) -> u8 {
@@ -448,6 +464,9 @@ pub struct TimeLineView {
     row_index: u8,
     column_index: u8,
     track_index: u8,
+    /// The first track on screen and how many fit, as of the last render.
+    view_start: u8,
+    capacity: u8,
     is_editing: bool,
     block_anchor: Option<(PatternId, u8, u8)>,
     normal_keys: Keymap<TimelineAction>,
@@ -460,6 +479,8 @@ impl TimeLineView {
             track_cache: TrackCache::new(),
             row_index: 0,
             track_index: 0,
+            view_start: 0,
+            capacity: constants::MAX_TRACKS,
             column_index: 0,
             is_editing: false,
             block_anchor: None,
@@ -586,19 +607,36 @@ impl KeyActions for TimeLineView {
                 self.row_index = wrap_step(self.row_index, 1, row_count);
             }
             TimelineAction::PrevTrack => {
-                self.track_index = wrap_step(self.track_index, -1, constants::TRACK_COUNT as u16);
+                let count = state.active_pattern().track_count;
+                self.track_index = wrap_step(self.track_index, -1, count as u16);
                 self.column_index = 0;
             }
             TimelineAction::NextTrack => {
-                self.track_index = wrap_step(self.track_index, 1, constants::TRACK_COUNT as u16);
+                let count = state.active_pattern().track_count;
+                self.track_index = wrap_step(self.track_index, 1, count as u16);
                 self.column_index = 0;
+            }
+            TimelineAction::TogglePage => {
+                let count = state.active_pattern().track_count;
+                let capacity = self.capacity.min(count);
+                if capacity < count {
+                    let offset = self.track_index.saturating_sub(self.view_start);
+                    self.view_start = if self.view_start == 0 {
+                        count - capacity
+                    } else {
+                        0
+                    };
+                    self.track_index = (self.view_start + offset).min(count - 1);
+                } else {
+                    state.notify("ALL TRACKS SHOWN");
+                }
             }
             TimelineAction::PrevColumn => {
                 if self.column_index > 0 {
                     self.column_index -= 1;
                 } else {
-                    self.track_index =
-                        wrap_step(self.track_index, -1, constants::TRACK_COUNT as u16);
+                    let count = state.active_pattern().track_count;
+                    self.track_index = wrap_step(self.track_index, -1, count as u16);
                     self.column_index = constants::TRACK_COLUMN_COUNT - 1;
                 }
             }
@@ -606,8 +644,8 @@ impl KeyActions for TimeLineView {
                 if self.column_index + 1 < constants::TRACK_COLUMN_COUNT {
                     self.column_index += 1;
                 } else {
-                    self.track_index =
-                        wrap_step(self.track_index, 1, constants::TRACK_COUNT as u16);
+                    let count = state.active_pattern().track_count;
+                    self.track_index = wrap_step(self.track_index, 1, count as u16);
                     self.column_index = 0;
                 }
             }
@@ -825,6 +863,7 @@ impl KeyActions for TimeLineView {
         return match action {
             RowUp => "Move up a row",
             RowDown => "Move down a row",
+            TogglePage => "Show the other half of the tracks",
             PrevTrack => "Previous track",
             NextTrack => "Next track",
             PrevColumn => "Move left a column",
@@ -1323,8 +1362,10 @@ impl MtrakWidget for TimeLineView {
         let Event::Key(key) = event else {
             return false;
         };
-        if let Some(track) = track_jump(key) {
-            self.track_index = track;
+        if let Some(nth) = track_jump(key) {
+            let count = state.active_pattern().track_count;
+            let last_shown = (self.view_start + self.capacity).min(count) - 1;
+            self.track_index = (self.view_start + nth).min(last_shown);
             return true;
         }
         if let KeyCode::F(mut f) = key.code
@@ -1378,7 +1419,7 @@ impl MtrakWidget for TimeLineView {
         sections.push(
             HelpSection::new("Pattern editor")
                 .entries(normal)
-                .entry(format!("{alt}Q-I"), "Jump to track 1-8")
+                .entry(format!("{alt}Q-I"), "Jump to track 1-8 of the page")
                 .entry("Fn1-8", "Set octave")
                 .entry("Z-, / Q-I", "Play a note on the current track"),
         );
@@ -1410,13 +1451,28 @@ impl MtrakWidget for TimeLineView {
             .unwrap();
         self.track_cache.sync(state.active_pattern, pattern);
         self.row_index = self.row_index.min(pattern.last_row());
+        self.track_index = self.track_index.min(pattern.track_count - 1);
         buf.set_style(area, state.theme.surface);
         let top_bottom = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
         self.render_mode_indicator(state, top_bottom[0], buf);
 
         let track_width = constants::TRACK_WIDTH as u16;
         // neighbouring tracks overlap by one column so they share a single border
-        let tracks_width = (track_width - 1) * pattern.track_count as u16 + 1;
+        let numbers_width = if state.config.line_numbers == LineNumbers::None {
+            0
+        } else {
+            2 * LINE_NUMBERS_WIDTH
+        };
+        let fitting = top_bottom[1].width.saturating_sub(2 + numbers_width + 1) / (track_width - 1);
+        self.capacity = (fitting as u8).clamp(1, pattern.track_count);
+        self.view_start = window_start(
+            pattern.track_count,
+            self.capacity,
+            self.track_index,
+            self.view_start,
+        );
+        let visible = self.view_start..self.view_start + self.capacity;
+        let tracks_width = (track_width - 1) * visible.len() as u16 + 1;
         // mirror the line numbers on the other side so the tracks stay centered, unless
         // there are none
         let spacer_width = top_bottom[1]
@@ -1443,7 +1499,7 @@ impl MtrakWidget for TimeLineView {
         .horizontal_margin(1)
         .split(top_bottom[1]);
         let track_areas =
-            Layout::horizontal((0..pattern.track_count).map(|_| Constraint::Length(track_width)))
+            Layout::horizontal(visible.clone().map(|_| Constraint::Length(track_width)))
                 .spacing(-1)
                 .split(layout[2]);
         let rows_top = layout[0].y + rows_top_offset(state);
@@ -1455,12 +1511,12 @@ impl MtrakWidget for TimeLineView {
         if sides.on_right() {
             self.render_line_numbers(state, pattern.row_count(), rows_height, layout[3], buf);
         }
-        for track_index in 0..pattern.track_count as usize {
+        for (area_index, track_index) in visible.enumerate() {
             self.render_track(
                 state,
-                track_index as u8,
+                track_index,
                 rows_height,
-                track_areas[track_index],
+                track_areas[area_index],
                 buf,
             );
         }
@@ -1730,5 +1786,30 @@ mod tests {
             track_jump(&KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
             None
         );
+    }
+
+    #[test]
+    fn the_window_scrolls_only_as_far_as_the_cursor_needs() {
+        assert_eq!(window_start(16, 16, 15, 0), 0);
+        assert_eq!(window_start(16, 8, 3, 0), 0);
+        assert_eq!(window_start(16, 8, 8, 0), 1);
+        assert_eq!(window_start(16, 8, 15, 1), 8);
+        assert_eq!(window_start(16, 8, 2, 8), 2);
+        assert_eq!(window_start(10, 8, 5, 6), 2);
+    }
+
+    #[test]
+    fn the_page_key_jumps_between_the_ends_when_the_tracks_dont_fit() {
+        let (mut state, mut view) = editor();
+        state.edit_pattern(|_, pattern| pattern.set_track_count(16));
+        view.capacity = 8;
+        let toggle = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::ALT);
+        assert!(view.handle_event(&mut state, &Event::Key(toggle)));
+        assert_eq!((view.view_start, view.track_index), (8, 8));
+        assert!(view.handle_event(&mut state, &Event::Key(toggle)));
+        assert_eq!((view.view_start, view.track_index), (0, 0));
+        view.capacity = 16;
+        view.handle_event(&mut state, &Event::Key(toggle));
+        assert_eq!(view.view_start, 0);
     }
 }

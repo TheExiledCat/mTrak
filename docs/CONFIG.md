@@ -114,7 +114,7 @@ delete its file and start mTrak again.
 ## Keybindings
 
 Every key that does something on its own can be rebound, apart from the piano keys, the octave
-keys (`F1`-`F8`), the hex digits typed into the pattern, `Alt+Q`-`I` to jump to a track and
+keys (`F1`-`F8`), the hex digits typed into the pattern, `Alt+Q`-`I` to jump to a track of the page and
 `Alt+1`-`9` for the channel grid.
 
 ### On the keybindings screen

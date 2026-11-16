@@ -4,7 +4,7 @@ use num::FromPrimitive;
 use crate::{
     data::midi::{MIDI_CHANNEL_MAX, scale_velocity},
     engine::notes::{Countdown, HeldNotes, MIDI_CHANNEL_COUNT, PITCH_COUNT},
-    tui::constants::TRACK_COUNT,
+    tui::constants::MAX_TRACKS,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -33,9 +33,9 @@ struct Strummed {
 
 /// Tracks which note each track is playing, so note offs reach the right channel and pitch.
 pub struct Voices {
-    tracks: [Option<Voice>; TRACK_COUNT as usize],
+    tracks: [Option<Voice>; MAX_TRACKS as usize],
     /// Chord notes, released along with the track's note.
-    chords: [Vec<Voice>; TRACK_COUNT as usize],
+    chords: [Vec<Voice>; MAX_TRACKS as usize],
     lingering: Countdown<Lingering>,
     strummed: Countdown<Strummed>,
     held: HeldNotes,
@@ -54,7 +54,7 @@ impl Default for Voices {
 impl Voices {
     pub fn new() -> Self {
         return Self {
-            tracks: [None; TRACK_COUNT as usize],
+            tracks: [None; MAX_TRACKS as usize],
             chords: std::array::from_fn(|_| Vec::new()),
             lingering: Countdown::new(),
             strummed: Countdown::new(),

@@ -13,7 +13,7 @@ use crate::{
         pattern::{Pattern, PatternId, PatternStore},
     },
     error::{MTrakError, Result},
-    tui::constants::TRACK_COUNT,
+    tui::constants::MAX_TRACKS,
 };
 /// A project file starts with these bytes, then the format version as a little-endian u16,
 /// then the payload's length in bytes as a little-endian u32, then the payload itself: the
@@ -234,7 +234,7 @@ impl Project {
             };
             let mut next = None;
             // loop start and loops left per track, like the engine
-            let mut loops = [(0, 0u8); TRACK_COUNT as usize];
+            let mut loops = [(0, 0u8); MAX_TRACKS as usize];
             let mut row_index = first_row;
             while let Some(row) = pattern.rows.get(row_index) {
                 let (mut jump, mut break_row, mut delay, mut stop) = (None, None, 0, false);
@@ -410,7 +410,7 @@ mod tests {
         first.channel_mutes[2] = true;
         project
             .patterns
-            .create_pattern_id_if_not_exists(PatternId(1));
+            .create_pattern_id_if_not_exists(PatternId(1), 8);
         let second = project
             .patterns
             .get_pattern_by_id_mut(PatternId(1))
@@ -484,7 +484,7 @@ mod tests {
         let mut project = Project::empty();
         project
             .patterns
-            .create_pattern_id_if_not_exists(PatternId(3));
+            .create_pattern_id_if_not_exists(PatternId(3), 8);
         let note = Note::new(NoteKind::On(NotePitch(60)), None, None, Default::default());
         let pattern = project
             .patterns
@@ -507,7 +507,7 @@ mod tests {
         project.insert_sequence(1, PatternId(1));
         project
             .patterns
-            .create_pattern_id_if_not_exists(PatternId(1));
+            .create_pattern_id_if_not_exists(PatternId(1), 8);
         for id in 0..2 {
             let pattern = project
                 .patterns
@@ -564,7 +564,7 @@ mod tests {
         };
         project
             .patterns
-            .create_pattern_id_if_not_exists(PatternId(1));
+            .create_pattern_id_if_not_exists(PatternId(1), 8);
         let first = project
             .patterns
             .get_pattern_by_id_mut(PatternId(0))

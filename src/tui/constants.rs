@@ -1,6 +1,9 @@
 use ratatui::crossterm::event::KeyCode;
 pub const EXIT_KEY: KeyCode = KeyCode::Char('q');
-pub const TRACK_COUNT: u8 = 8;
+/// The most tracks a pattern can have.
+pub const MAX_TRACKS: u8 = 16;
+/// The track count of a new project.
+pub const DEFAULT_TRACK_COUNT: u8 = 8;
 pub const EMPTY_NOTE: &str = "---|-|--|000";
 pub const NOTE_OFF_KEY: char = '`';
 /// A track in the pattern editor: its left border and the note string, the right border being

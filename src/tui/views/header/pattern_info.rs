@@ -15,6 +15,7 @@ use crate::{
     error::Result,
     tui::{
         app::AppState,
+        constants,
         framework::{
             keymap::{Action, Key, KeyActions, Keymap},
             widget::{Collapsible, MtrakWidget},
@@ -40,6 +41,8 @@ impl PatternInfo {
             .bind(Key::char('['), LineAddDown, "ADD DN")
             .bind(Key::alt('-'), PatternShrink, "SRNK")
             .bind(Key::alt('='), PatternExpand, "EXPD")
+            .bind(Key::alt('<'), TrackCountDown, "TRK DN")
+            .bind(Key::alt('>'), TrackCountUp, "TRK UP")
             .bind(
                 Key::new(KeyCode::Left, KeyModifiers::CONTROL),
                 PatternDown,
@@ -89,6 +92,11 @@ impl PatternInfo {
                 label: "LEN",
                 value: format!("{:02X}", state.active_pattern().row_count()),
                 keys: self.keys(PatternLengthDown, PatternLengthUp),
+            },
+            InfoRow {
+                label: "TRK",
+                value: format!("{:02X}", state.active_pattern().track_count),
+                keys: self.keys(TrackCountDown, TrackCountUp),
             },
         ];
     }
@@ -217,6 +225,20 @@ impl Collapsible for PatternInfo {
     }
 }
 
+/// Resizes the open pattern. Patterns made after this one start with the same track count.
+fn change_track_count(state: &mut AppState, increase: bool) {
+    let count = state.active_pattern().track_count;
+    let new = if increase {
+        count.saturating_add(1).min(constants::MAX_TRACKS)
+    } else {
+        count.saturating_sub(1).max(1)
+    };
+    if new == count {
+        return;
+    }
+    state.edit_pattern(|_, pattern| pattern.set_track_count(new));
+}
+
 struct InfoRow {
     label: &'static str,
     value: String,
@@ -257,6 +279,9 @@ pub enum PatternInfoAction {
 
     PatternShrink,
     PatternExpand,
+
+    TrackCountUp,
+    TrackCountDown,
 }
 
 impl Action for PatternInfoAction {}
@@ -280,6 +305,8 @@ impl KeyActions for PatternInfo {
             PatternInfoAction::PatternDown => state.prev_pattern(),
             PatternInfoAction::PatternLengthUp => state.change_length(true),
             PatternInfoAction::PatternLengthDown => state.change_length(false),
+            PatternInfoAction::TrackCountUp => change_track_count(state, true),
+            PatternInfoAction::TrackCountDown => change_track_count(state, false),
             PatternInfoAction::PatternShrink => self.shrink_pattern(state),
             PatternInfoAction::PatternExpand => {
                 if !state.edit_pattern(|_, pattern| pattern.expand()) {
@@ -302,6 +329,8 @@ impl KeyActions for PatternInfo {
             PatternInfoAction::PatternDown => "Previous pattern",
             PatternInfoAction::PatternLengthUp => "Make the pattern a row longer",
             PatternInfoAction::PatternLengthDown => "Make the pattern a row shorter",
+            PatternInfoAction::TrackCountUp => "Add a track to the pattern",
+            PatternInfoAction::TrackCountDown => "Remove the last track of the pattern",
             PatternInfoAction::PatternShrink => "Halve the pattern by removing every odd row",
             PatternInfoAction::PatternExpand => {
                 "Double the pattern by inserting a blank row after each row"

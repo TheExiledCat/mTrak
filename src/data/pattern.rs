@@ -14,6 +14,7 @@ use crate::{
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PatternId(pub u8);
 pub const MAX_ROWS: u16 = 0x100;
+const DEFAULT_ROW_COUNT: u16 = 64;
 
 /// The error for a saved pattern that can't be read.
 pub fn invalid_pattern(what: String) -> MTrakError {
@@ -96,16 +97,10 @@ pub struct Pattern {
 pub struct PatternRow {
     pub tracks: Vec<Note>,
 }
-impl Default for PatternRow {
-    fn default() -> Self {
-        return Self::new();
-    }
-}
-
 impl PatternRow {
-    pub fn new() -> Self {
+    pub fn new(track_count: u8) -> Self {
         return Self {
-            tracks: std::iter::repeat_n(Note::empty(), constants::TRACK_COUNT as usize).collect(),
+            tracks: std::iter::repeat_n(Note::empty(), track_count as usize).collect(),
         };
     }
     pub fn with_tracks(track_cells: Vec<Note>) -> Self {
@@ -117,11 +112,27 @@ impl PatternRow {
 
 impl Pattern {
     pub fn new(row_count: u16) -> Self {
+        return Self::with_track_count(row_count, constants::DEFAULT_TRACK_COUNT);
+    }
+
+    pub fn with_track_count(row_count: u16, track_count: u8) -> Self {
+        let track_count = track_count.clamp(1, constants::MAX_TRACKS);
         return Pattern {
-            track_count: constants::TRACK_COUNT,
-            rows: (0..row_count).map(|_| PatternRow::new()).collect(),
+            track_count,
+            rows: (0..row_count)
+                .map(|_| PatternRow::new(track_count))
+                .collect(),
             channel_mutes: [false; MIDI_CHANNEL_MAX as usize + 1],
         };
+    }
+
+    /// Adds empty tracks or drops the last ones, clamped to 1 to `MAX_TRACKS`.
+    pub fn set_track_count(&mut self, track_count: u8) {
+        let track_count = track_count.clamp(1, constants::MAX_TRACKS);
+        for row in &mut self.rows {
+            row.tracks.resize(track_count as usize, Note::empty());
+        }
+        self.track_count = track_count;
     }
 
     pub fn row_count(&self) -> u16 {
@@ -198,12 +209,15 @@ impl Pattern {
 
     /// checks if 2 patterns are equal, that is, they have the same length and notes
     pub fn same_content(&self, other: &Pattern) -> bool {
-        return self.rows.len() == other.rows.len() && same_cells(&self.rows, &other.rows);
+        return self.track_count == other.track_count
+            && self.rows.len() == other.rows.len()
+            && same_cells(&self.rows, &other.rows);
     }
 
     // swaps this pattern's length and notes with another pattern's
     pub fn swap_content(&mut self, other: &mut Pattern) {
         std::mem::swap(&mut self.rows, &mut other.rows);
+        std::mem::swap(&mut self.track_count, &mut other.track_count);
     }
     pub fn swap_block(&mut self, block: Block, rows: &mut Vec<PatternRow>) {
         let current = self.read_block(block);
@@ -390,7 +404,7 @@ impl Pattern {
             return;
         }
         self.rows.pop();
-        self.rows.insert(row, PatternRow::new());
+        self.rows.insert(row, PatternRow::new(self.track_count));
     }
 
     /// Removes the event at `row` in `track`, pulling the rest of the track up one row.
@@ -412,7 +426,7 @@ impl Pattern {
             return;
         }
         self.rows.remove(row);
-        self.rows.push(PatternRow::new());
+        self.rows.push(PatternRow::new(self.track_count));
     }
 
     pub fn increase_length(&mut self) {
@@ -421,7 +435,9 @@ impl Pattern {
 
     pub fn set_length(&mut self, row_count: u16) {
         let row_count = row_count.clamp(1, MAX_ROWS);
-        self.rows.resize_with(row_count as usize, PatternRow::new);
+        let track_count = self.track_count;
+        self.rows
+            .resize_with(row_count as usize, || PatternRow::new(track_count));
     }
 
     pub fn decrease_length(&mut self) -> Vec<PatternRow> {
@@ -450,7 +466,7 @@ impl Pattern {
         let mut rows = Vec::with_capacity(self.rows.len() * 2);
         for row in self.rows.drain(..) {
             rows.push(row);
-            rows.push(PatternRow::new());
+            rows.push(PatternRow::new(self.track_count));
         }
         self.rows = rows;
         return true;
@@ -485,7 +501,7 @@ impl TryFrom<SavedPattern> for Pattern {
     type Error = MTrakError;
 
     fn try_from(saved: SavedPattern) -> Result<Self> {
-        if saved.track_count != constants::TRACK_COUNT {
+        if !(1..=constants::MAX_TRACKS).contains(&saved.track_count) {
             return Err(invalid_pattern(format!("{} tracks", saved.track_count)));
         }
         if !(1..=MAX_ROWS).contains(&saved.row_count) {
@@ -526,7 +542,7 @@ impl<'de> Deserialize<'de> for Pattern {
 
 impl Default for Pattern {
     fn default() -> Self {
-        return Self::new(64);
+        return Self::new(DEFAULT_ROW_COUNT);
     }
 }
 /// The patterns are shared with the engine, which gets a reference to each change instead of a
@@ -554,10 +570,13 @@ impl PatternStore {
     pub fn get_pattern_by_id_mut(&mut self, id: PatternId) -> Option<&mut Pattern> {
         return self.patterns.get_mut(id.0 as usize).map(Arc::make_mut);
     }
-    pub fn create_pattern_id_if_not_exists(&mut self, pattern: PatternId) {
+    /// Fills in any missing patterns up to `pattern`, each with `track_count` tracks.
+    pub fn create_pattern_id_if_not_exists(&mut self, pattern: PatternId, track_count: u8) {
         let pattern = pattern.0 as usize;
         if pattern >= self.patterns.len() {
-            self.patterns.resize_with(pattern + 1, Default::default);
+            self.patterns.resize_with(pattern + 1, || {
+                Arc::new(Pattern::with_track_count(DEFAULT_ROW_COUNT, track_count))
+            });
         }
     }
 }
@@ -636,7 +655,7 @@ mod tests {
         let pattern = Pattern::new(16);
         assert_eq!(pattern.rows.len(), 16);
         assert!(pattern.rows.iter().all(|row| {
-            row.tracks.len() == constants::TRACK_COUNT as usize
+            row.tracks.len() == constants::DEFAULT_TRACK_COUNT as usize
                 && row.tracks.iter().all(|n| *n == Note::empty())
         }));
     }
@@ -652,9 +671,12 @@ mod tests {
     fn out_of_range_events_are_ignored() {
         let mut pattern = Pattern::new(4);
         pattern.set_event(4, 0, note());
-        pattern.set_event(0, constants::TRACK_COUNT as usize, note());
+        pattern.set_event(0, constants::DEFAULT_TRACK_COUNT as usize, note());
         assert_eq!(pattern.get_event(4, 0), None);
-        assert_eq!(pattern.get_event(0, constants::TRACK_COUNT as usize), None);
+        assert_eq!(
+            pattern.get_event(0, constants::DEFAULT_TRACK_COUNT as usize),
+            None
+        );
     }
 
     #[test]
@@ -822,9 +844,9 @@ mod tests {
     #[test]
     fn store_creates_missing_patterns_up_to_id() {
         let mut store = PatternStore::new(vec![]);
-        store.create_pattern_id_if_not_exists(PatternId(3));
+        store.create_pattern_id_if_not_exists(PatternId(3), 8);
         assert_eq!(store.get_patterns().len(), 4);
-        store.create_pattern_id_if_not_exists(PatternId(1));
+        store.create_pattern_id_if_not_exists(PatternId(1), 8);
         assert_eq!(store.get_patterns().len(), 4);
     }
 
@@ -1021,5 +1043,54 @@ mod tests {
         pattern.swap_block(block, &mut rows);
         assert_eq!(pattern.get_event(1, 1), Some(&Note::empty()));
         assert_eq!(rows[1].tracks, vec![note(); 2]);
+    }
+
+    #[test]
+    fn resizing_the_tracks_keeps_the_rest_and_new_rows_match() {
+        let mut pattern = Pattern::new(4);
+        pattern.set_event(
+            1,
+            2,
+            Note::new(NoteKind::Off, None, None, Default::default()),
+        );
+        pattern.set_track_count(12);
+        assert!(pattern.rows.iter().all(|row| row.tracks.len() == 12));
+        assert_eq!(pattern.get_event(1, 2).unwrap().kind, NoteKind::Off);
+        pattern.insert_line(0);
+        pattern.set_length(8);
+        assert!(pattern.rows.iter().all(|row| row.tracks.len() == 12));
+        pattern.set_track_count(3);
+        assert!(pattern.rows.iter().all(|row| row.tracks.len() == 3));
+        pattern.set_track_count(0);
+        assert_eq!(pattern.track_count, 1);
+        pattern.set_track_count(99);
+        assert_eq!(pattern.track_count, constants::MAX_TRACKS);
+    }
+
+    #[test]
+    fn new_patterns_take_the_given_track_count() {
+        let mut store = PatternStore::new(vec![Pattern::new(4)]);
+        store.create_pattern_id_if_not_exists(PatternId(2), 12);
+        assert_eq!(
+            store.get_pattern_by_id(PatternId(0)).unwrap().track_count,
+            8
+        );
+        assert_eq!(
+            store.get_pattern_by_id(PatternId(2)).unwrap().track_count,
+            12
+        );
+    }
+
+    #[test]
+    fn a_pattern_with_another_track_count_survives_saving() {
+        let mut pattern = Pattern::with_track_count(3, 16);
+        pattern.set_event(
+            2,
+            15,
+            Note::new(NoteKind::Off, None, None, Default::default()),
+        );
+        let loaded = Pattern::try_from(SavedPattern::from(&pattern)).unwrap();
+        assert_eq!(loaded.track_count, 16);
+        assert_eq!(loaded.get_event(2, 15).unwrap().kind, NoteKind::Off);
     }
 }
